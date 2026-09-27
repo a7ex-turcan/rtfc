@@ -167,7 +167,7 @@ public class AutoAnswerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_answer_nobody_is_home_for_is_parked_with_the_draft()
+    public async Task An_answer_nobody_is_home_for_waits_in_the_outbox()
     {
         await BecomeContactsAsync();
         AlexAnswersSashaAutomatically();
@@ -185,15 +185,31 @@ public class AutoAnswerTests : IAsyncLifetime
             await Task.Delay(20, Ct);
         }
 
-        await _sasha.Node.StopAsync(); // Sasha leaves while the answer is being written
+        await _sasha.Node.SetAwayAsync(true, Ct); // Sasha leaves while the answer is being written
         gate.SetResult();
         await answered.WaitAsync(Wait, Ct);
 
-        Assert.Equal(1, _alex.Node.Status().Global.Parked);
-        var parked = Assert.Single(_alex.Node.ListInbox(InboxState.Parked));
-        Assert.Equal(sent.MessageId, parked.Id);
-        Assert.Contains("not home", parked.Note);
+        Assert.Equal(0, _alex.Node.Status().Global.Parked);
+        Assert.Equal(1, _alex.Node.Status().Global.Pending);
+        var done = Assert.Single(_alex.Node.ListInbox(null));
+        Assert.Equal(InboxState.AutoDone, done.State);
+        Assert.Contains("waits in the outbox", done.Note);
+        Assert.Equal(SentState.Queued, done.ReplyState);
         Assert.Equal("Late answer.", _alex.Node.Open(sent.MessageId!)!.Draft);
+        Assert.Equal(MessageOrigin.Auto, Assert.Single(_alex.Node.Open(sent.MessageId!)!.YourReplies!).Origin);
+
+        // She comes back: the automatic answer arrives, still marked automatic.
+        await _sasha.Node.SetAwayAsync(false, Ct);
+        _alex.Node.KickOutbox();
+        var deadline = DateTimeOffset.UtcNow + Wait;
+        while (_sasha.Node.ListInbox(InboxState.Parked).Length == 0 && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(50, Ct);
+        }
+
+        var arrived = Assert.Single(_sasha.Node.ListInbox(InboxState.Parked));
+        Assert.Equal(MessageOrigin.Auto, arrived.Origin);
+        Assert.Equal("Late answer.", _sasha.Node.Open(arrived.Id)!.Body);
     }
 
     [Fact]

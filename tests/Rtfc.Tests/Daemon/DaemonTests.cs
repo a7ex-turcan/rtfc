@@ -35,7 +35,14 @@ public class DaemonTests
         var invite = await client.InviteAsync(Ct);
         Assert.StartsWith("rtfc1_", invite.Token);
         Assert.Equal(AcceptStatus.Invalid, (await client.AcceptAsync("nonsense", Ct)).Status);
-        Assert.Equal(SendStatus.Rejected, (await client.SendAsync("nobody", "hi", Ct)).Status);
+        Assert.Equal(SendStatus.Rejected, (await client.SendAsync("nobody", "hi", leave: false, Ct)).Status);
+        Assert.False(await client.DismissAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", Ct));
+        Assert.Empty(await client.OutboxAsync(Ct));
+        Assert.Equal(ManagementStatus.Ok, (await client.AwayAsync(true, Ct)).Status);
+        Assert.True((await client.TryStatusAsync(Ct))!.Away);
+        Assert.Equal(ManagementStatus.Ok, (await client.AwayAsync(false, Ct)).Status);
+        Assert.Equal(ManagementStatus.NotAContact, (await client.RenameAsync("nobody", "x", Ct)).Status);
+        Assert.Equal(ManagementStatus.NotAContact, (await client.ReceiptsAsync("nobody", true, Ct)).Status);
         Assert.Equal(SendStatus.Rejected, (await client.ReplyAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "hi", Ct)).Status);
 
         // Management goes through the socket too; it is the CLI's path, never a tool's.

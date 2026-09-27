@@ -17,8 +17,9 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.2.0, Phase 2.** Two people on one LAN exchange messages between their Claude
-Code sessions, and a scoped, read-only Claude can answer a contact for you. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
+**Status: 0.3.0, Phases 1, 2 and 4.** Two people on one LAN exchange messages between
+their Claude Code sessions, a scoped, read-only Claude can answer a contact for you, and
+replies to someone who has gone wait until they are back. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
 [`docs/spec.md`](docs/spec.md) for the design.
 
 ---
@@ -100,11 +101,12 @@ claude --plugin-dir /path/to/rtfc/plugin
 
 The plugin adds:
 
-- An MCP server, `rtfc mcp`, with five tools: `contacts`, `send`, `inbox_list`,
-  `inbox_open`, `inbox_reply`.
+- An MCP server, `rtfc mcp`, with six tools: `contacts`, `send`, `inbox_list`,
+  `inbox_open`, `inbox_reply`, `inbox_dismiss`.
 - A SessionStart hook, `rtfc daemon ensure`, that starts the daemon when a session opens.
 - Slash commands: `/rtfc:init`, `/rtfc:invite`, `/rtfc:accept <token>`, `/rtfc:contacts`,
-  `/rtfc:inbox`.
+  `/rtfc:inbox`, `/rtfc:auto`, `/rtfc:remove`, `/rtfc:block`, `/rtfc:away`, `/rtfc:rename`,
+  `/rtfc:receipts`.
 
 ### 4. Show parked messages in the status line
 
@@ -114,9 +116,10 @@ Add to `~/.claude/settings.json`:
 { "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }
 ```
 
-You'll see `📨 1 · sasha` when something is waiting, and nothing otherwise. If you already
-have a status line script, call `rtfc statusline` from it and append its output;
-`refreshInterval` (seconds) keeps the counter current while you're idle.
+You'll see `📨 1 · sasha` when something is waiting, `📤 2` when replies wait in your
+outbox, `💤 away` when you are away, and nothing otherwise. If you already have a status
+line script, call `rtfc statusline` from it and append its output; `refreshInterval`
+(seconds) keeps the counter current while you're idle.
 
 ### 5. Become contacts
 
@@ -140,8 +143,21 @@ have no session open, they're told nobody's home and the token stays valid for l
 - **Who's home:** `/rtfc:contacts`.
 
 Messages are delivered only while the other person has Claude Code open. If they don't,
-you're told `nobody_home` right away and nothing is queued. In this release the same
-applies to replies: answer while the sender is home, or send it later.
+you're told `nobody_home` right away and nothing is queued, unless you say *"leave it for
+her"*: then it waits in your outbox for up to a week and goes the moment she is back.
+
+**Replies are different.** A parked message may be answered hours later, when the sender
+has long closed Claude Code, so a reply to someone who isn't home always waits in the
+outbox and is delivered when they are next home. Your copy of their message tells you what
+became of your reply: `queued`, `delivered`, and `read` if they have receipts on. If a
+reply expires undelivered after a week, you get a notice in your inbox with its text.
+
+- **Receipts:** opening a message tells the sender it was read. Per contact:
+  `rtfc receipts sasha off`.
+- **Away:** `rtfc away on` stops listening, so contacts see nobody home while you can still
+  send and your outbox still delivers. `rtfc away off` when you're back.
+- **Outbox:** `rtfc outbox` shows what waits. `rtfc rename sasha sash` changes what you
+  call someone; only you see it.
 
 ### 7. Let your Claude answer for you
 
@@ -202,7 +218,9 @@ her, from either side. Neither needs her cooperation.
 - **The daemon.** One `rtfcd` per machine owns your keys, the database, the listener on
   port 47821 and a local API on `~/.claude/rtfc/rtfcd.sock`. Every open Claude Code
   session holds a lease on it; thirty seconds after the last one closes, the daemon exits.
-  That's what "home" means: Claude Code is open on that machine.
+  That's what "home" means: Claude Code is open on that machine. The outbox is delivered
+  by that daemon too, so a queued reply leaves your machine only while you have a session
+  open and the other side is home at the same time.
 - **Identity is keys, not addresses.** Contacts are pinned by their person CA. Hostnames
   and IPs are only hints for where to try; the TLS handshake is the only proof of who
   answered.
@@ -241,7 +259,8 @@ nobody can reach you.
   "port": 47821,
   "hintHosts": ["alex-laptop.local", "10.0.0.5"],
   "claudePath": "/usr/local/bin/claude",
-  "autoAnswer": { "perContactPerHour": 10, "globalPerHour": 30, "inboundPerDevicePerHour": 120, "timeoutSeconds": 180, "maxBudgetUsd": 0.5 }
+  "autoAnswer": { "perContactPerHour": 10, "globalPerHour": 30, "inboundPerDevicePerHour": 120, "timeoutSeconds": 180, "maxBudgetUsd": 0.5 },
+  "outbox": { "expiryHours": 168, "pumpIntervalSeconds": 30, "retentionDays": 30 }
 }
 ```
 
@@ -264,13 +283,14 @@ they never touch your real one.
 | The status line never changes | `refreshInterval` set? `rtfc statusline` prints nothing when nothing is parked; try `cat ~/.claude/rtfc/status.json`. |
 | A message shows an odd `</contact_message​>` inside | Someone tried to close the untrusted wrapper from inside a message. It was defused; treat the message with suspicion. |
 | Auto-answer never answers | `rtfc inbox` shows the note: scope missing, limit reached, or the run failed. `rtfcd.log` has the details. Is `claude` on the daemon's `PATH`? Set `claudePath` in `config.json` otherwise. A message from an automatic reply, or a thread two replies deep, is parked on purpose. |
+| A queued reply never arrives | Both of you need Claude Code open at the same time for a moment: your daemon delivers, theirs receives. `rtfc outbox` shows attempts; after a week it expires with a notice. |
 
 ### Limitations
 
 - One device per person. Multi-device comes in Phase 5.
-- Replies, including automatic ones, need the sender to be home. The outbox that delivers
-  them later is Phase 4; until then an undelivered automatic answer parks with its draft.
-- No read receipts, no `away`, no dismiss (Phase 4).
+- The outbox is delivered only while your daemon runs, that is, while you have a Claude
+  Code session open. A login-item daemon that delivers all day is an open question (spec
+  §18).
 - Auto-answer's `Grep` can search any file in the scope, including ones `Read` is denied.
   Keep secrets out of scopes.
 - LAN only, or any network where the hosts in your hints are reachable. Tailscale-style
@@ -286,7 +306,7 @@ they never touch your real one.
 | 1 ✅ | Two people exchange messages |
 | 2 ✅ | Auto-answer: a scoped, read-only, headless Claude answers a contact for you. `remove`, `block`. |
 | 3 | Beyond the office: VPN and Tailscale addresses as hints |
-| 4 | Async: the reply outbox, read receipts, `away`, `rename`, dismiss, retention |
+| 4 ✅ | Async: the reply outbox, read receipts, `away`, `rename`, dismiss, retention |
 | 5 | Multi-device: one person, several machines |
 | 6 | A self-hosted relay, for people with no shared network |
 | 7 | Auto-answer inside a live session, via Claude Code channels |

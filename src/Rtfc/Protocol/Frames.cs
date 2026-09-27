@@ -11,6 +11,7 @@ public static class FrameType
     public const string AcceptAck = "accept_ack";
     public const string Message = "message";
     public const string Ack = "ack";
+    public const string Receipt = "receipt";
     public const string Error = "error";
     public const string Bye = "bye";
 }
@@ -67,6 +68,9 @@ public static class AckStatus
 /// <summary>Sent only after the message is committed, so "delivered" means durable (spec §7.2).</summary>
 public sealed record AckFrame(string Id, string Status, string? Reason = null) : Frame(FrameType.Ack);
 
+/// <summary>"I read your message" (spec §7.3), optional per contact. Acknowledged like a message so the outbox can deliver it later.</summary>
+public sealed record ReceiptFrame(string Id, string MessageId, string ReadAt, Address From, Address To) : Frame(FrameType.Receipt);
+
 public sealed record ErrorFrame(string Code, string Message) : Frame(FrameType.Error);
 
 public sealed record ByeFrame() : Frame(FrameType.Bye);
@@ -83,6 +87,7 @@ public sealed record UnknownFrame(string Type) : Frame(Type);
 [JsonSerializable(typeof(AcceptAckFrame))]
 [JsonSerializable(typeof(MessageFrame))]
 [JsonSerializable(typeof(AckFrame))]
+[JsonSerializable(typeof(ReceiptFrame))]
 [JsonSerializable(typeof(ErrorFrame))]
 [JsonSerializable(typeof(ByeFrame))]
 public sealed partial class ProtocolJson : JsonSerializerContext;
@@ -96,6 +101,7 @@ public static class Frames
         AcceptAckFrame f => JsonSerializer.SerializeToUtf8Bytes(f, ProtocolJson.Default.AcceptAckFrame),
         MessageFrame f => JsonSerializer.SerializeToUtf8Bytes(f, ProtocolJson.Default.MessageFrame),
         AckFrame f => JsonSerializer.SerializeToUtf8Bytes(f, ProtocolJson.Default.AckFrame),
+        ReceiptFrame f => JsonSerializer.SerializeToUtf8Bytes(f, ProtocolJson.Default.ReceiptFrame),
         ErrorFrame f => JsonSerializer.SerializeToUtf8Bytes(f, ProtocolJson.Default.ErrorFrame),
         ByeFrame f => JsonSerializer.SerializeToUtf8Bytes(f, ProtocolJson.Default.ByeFrame),
         _ => throw new ArgumentException($"Cannot send a frame of type '{frame.Type}'.", nameof(frame)),
@@ -124,6 +130,7 @@ public static class Frames
             FrameType.AcceptAck => JsonSerializer.Deserialize(json.Span, ProtocolJson.Default.AcceptAckFrame),
             FrameType.Message => JsonSerializer.Deserialize(json.Span, ProtocolJson.Default.MessageFrame),
             FrameType.Ack => JsonSerializer.Deserialize(json.Span, ProtocolJson.Default.AckFrame),
+            FrameType.Receipt => JsonSerializer.Deserialize(json.Span, ProtocolJson.Default.ReceiptFrame),
             FrameType.Error => JsonSerializer.Deserialize(json.Span, ProtocolJson.Default.ErrorFrame),
             FrameType.Bye => JsonSerializer.Deserialize(json.Span, ProtocolJson.Default.ByeFrame),
             _ => new UnknownFrame(type),

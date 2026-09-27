@@ -57,7 +57,10 @@ public sealed class TestNode : IAsyncDisposable
     public FakeClaudeRunner Claude { get; }
     public RtfcHome Home => _temp.Home;
 
-    public static async Task<TestNode> StartAsync(string handle, string device, AutoAnswerConfig? autoAnswer = null)
+    /// <summary>Tests want the pump to run often and entries to live long unless a test says otherwise.</summary>
+    public static readonly OutboxSettings DefaultOutbox = new(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(500), TimeSpan.FromDays(30));
+
+    public static async Task<TestNode> StartAsync(string handle, string device, AutoAnswerConfig? autoAnswer = null, OutboxSettings? outbox = null)
     {
         var temp = new TempHome();
         var self = IdentityStore.Create(temp.Home, handle, device, DateTimeOffset.UtcNow);
@@ -65,7 +68,7 @@ public sealed class TestNode : IAsyncDisposable
         var transport = new TcpTransport(0, connectTimeout: TimeSpan.FromSeconds(2));
         var claude = new FakeClaudeRunner();
         var node = new Node(
-            temp.Home, self, db, transport, new NodeOptions(["127.0.0.1"], autoAnswer ?? new AutoAnswerConfig()), claude,
+            temp.Home, self, db, transport, new NodeOptions(["127.0.0.1"], autoAnswer ?? new AutoAnswerConfig(), outbox ?? DefaultOutbox), claude,
             TimeProvider.System, NullLogger.Instance);
         await node.StartAsync(TestContext.Current.CancellationToken);
         return new TestNode(temp, node, db, transport, claude);

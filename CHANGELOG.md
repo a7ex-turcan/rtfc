@@ -20,8 +20,43 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3: VPN and Tailscale addresses as more `tcp:` hints, so it
-works with someone at home.
+Phase 4, async: a reply written hours later reaches a sender who has since closed Claude
+Code, as soon as they are next home.
+
+### Added
+
+- **The outbox.** A reply to someone who is not home no longer fails: it waits in the
+  outbox and is delivered when they are next home, for up to seven days. The result is
+  `queued`, the original message says so, and the status line shows `📤 1`. One pump
+  delivers everything that waits, every 30 seconds and the moment a contact connects to
+  you. An automatic answer whose recipient left before it was ready waits the same way.
+  If it expires, you get a notice in your inbox with the text, so nothing is lost quietly.
+- **"Leave it for her."** `send` takes `leave: true`; when nobody is home the message
+  waits in the outbox instead of being refused. Only when you ask for it: a plain send is
+  still never queued.
+- **Read receipts.** Opening a message tells the sender's device it was read, if receipts
+  are on for that contact (they are by default; `rtfc receipts <contact> off`, or
+  `/rtfc:receipts`). Your copy of the question shows what became of your reply: queued,
+  delivered, read, or expired, with the time. Receipts travel through the outbox too, so
+  a sender who has gone learns later.
+- **`rtfc away on|off`** (`/rtfc:away`). Away means nothing listens, so contacts see nobody
+  home, while you can still send and your outbox still delivers. The status line shows
+  `💤 away`. It survives a daemon restart.
+- **`rtfc rename <contact> <handle>`** (`/rtfc:rename`), a local nickname only.
+- **`inbox_dismiss`**, the sixth MCP tool, and `rtfc inbox dismiss <id>`: clear a message
+  or a notice without answering it.
+- **`rtfc outbox`** lists what still waits, with attempts and expiry.
+- **Retention.** Answered, dismissed and auto-answered messages are pruned after 30 days,
+  finished outbox entries after a day. `config.json` takes an `outbox` object
+  (`expiryHours`, `pumpIntervalSeconds`, `retentionDays`).
+
+### Changed
+
+- The database is schema version 3: a `sent` table records what left this device, so
+  receipts and expiries have something to update; the inbox `note` column serves every
+  kind of message; and `notice` is a new inbox kind for rtfc's own notes. An existing
+  file is migrated the first time the daemon opens it.
+- The daemon reuses one connection per device when it delivers a batch from the outbox.
 
 ## [0.2.0] - 2026-09-27
 

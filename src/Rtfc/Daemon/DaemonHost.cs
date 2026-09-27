@@ -59,7 +59,8 @@ public static class DaemonHost
         builder.Services.AddSingleton<ITransport>(transport);
         var claude = new ClaudeProcessRunner(config.ClaudePath ?? "claude");
         builder.Services.AddSingleton(sp => new Node(
-            home, self, db, transport, new NodeOptions(HintHosts.Resolve(config), config.AutoAnswer ?? new AutoAnswerConfig()), claude,
+            home, self, db, transport,
+            new NodeOptions(HintHosts.Resolve(config), config.AutoAnswer ?? new AutoAnswerConfig(), (config.Outbox ?? new OutboxConfig()).ToSettings()), claude,
             TimeProvider.System, sp.GetRequiredService<ILogger<Node>>()));
 
         var app = builder.Build();
@@ -106,7 +107,7 @@ public static class DaemonHost
     {
         app.MapGet(IpcRoutes.Status, IResult () => Results.Json(new DaemonStatus(
             EntryPoint.Version, Environment.ProcessId, node.Self.PersonId, node.Self.Handle, node.Self.DeviceId, node.Self.DeviceName,
-            (node.Transport as TcpTransport)?.Port ?? 0, node.AdvertisedHints(), leases.Count, options.IdleExit), IpcJson.Default.DaemonStatus));
+            (node.Transport as TcpTransport)?.Port ?? 0, node.AdvertisedHints(), leases.Count, options.IdleExit, node.IsAway), IpcJson.Default.DaemonStatus));
 
         // Held open for as long as the caller keeps the connection: that is the lease.
         app.MapGet(IpcRoutes.Lease, async Task (HttpContext context) =>
@@ -139,7 +140,7 @@ public static class DaemonHost
                 return Results.Json(new IpcError("A JSON body with 'to' and 'text' is required."), IpcJson.Default.IpcError, statusCode: 400);
             }
 
-            return Results.Json(await node.SendAsync(request.To, request.Text, context.RequestAborted), IpcJson.Default.SendResult);
+            return Results.Json(await node.SendAsync(request.To, request.Text, request.Leave, context.RequestAborted), IpcJson.Default.SendResult);
         });
 
         app.MapGet(IpcRoutes.Inbox, IResult (HttpContext context) =>
@@ -162,6 +163,46 @@ public static class DaemonHost
             }
 
             return Results.Json(await node.ReplyAsync(id, request.Text, context.RequestAborted), IpcJson.Default.SendResult);
+        });
+
+        app.MapPost(IpcRoutes.Inbox + "/{id}/dismiss", IResult (string id) =>
+            node.Dismiss(id)
+                ? Results.StatusCode(204)
+                : Results.Json(new IpcError($"No message with id '{id}'."), IpcJson.Default.IpcError, statusCode: 404));
+
+        app.MapGet(IpcRoutes.Outbox, IResult () => Results.Json(node.ListOutbox(), IpcJson.Default.OutboxViewArray));
+
+        app.MapPost(IpcRoutes.Away, async Task<IResult> (HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.ToggleRequest, context.RequestAborted);
+            if (request is null)
+            {
+                return Results.Json(new IpcError("A JSON body with 'on' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(await node.SetAwayAsync(request.On, context.RequestAborted), IpcJson.Default.ManagementResult);
+        });
+
+        app.MapPost(IpcRoutes.Contacts + "/{handle}/rename", async Task<IResult> (string handle, HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.RenameRequest, context.RequestAborted);
+            if (request is null)
+            {
+                return Results.Json(new IpcError("A JSON body with 'handle' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(node.Rename(handle, request.Handle), IpcJson.Default.ManagementResult);
+        });
+
+        app.MapPost(IpcRoutes.Contacts + "/{handle}/receipts", async Task<IResult> (string handle, HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.ToggleRequest, context.RequestAborted);
+            if (request is null)
+            {
+                return Results.Json(new IpcError("A JSON body with 'on' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(node.SetReceipts(handle, request.On), IpcJson.Default.ManagementResult);
         });
 
         app.MapPost(IpcRoutes.Invite, IResult () => Results.Json(node.CreateInvite(), IpcJson.Default.InviteResult));

@@ -14,6 +14,7 @@ public static class SendStatus
     public const string DeviceOffline = "device_offline";
     public const string Rejected = "rejected";
     public const string Failed = "failed";
+    public const string Queued = "queued";
 }
 
 public sealed record SendResult(
@@ -24,7 +25,8 @@ public sealed record SendResult(
     string? Person = null,
     string? Requested = null,
     string[]? Online = null,
-    string? Reason = null)
+    string? Reason = null,
+    DateTimeOffset? ExpiresAt = null)
 {
     public static SendResult Rejected(string reason) => new(SendStatus.Rejected, Reason: reason);
 }
@@ -38,8 +40,30 @@ public sealed record ContactView(
     string Status,
     string InboundMode,
     string? AutoScope,
+    bool ReadReceipts,
+    int Pending,
     DateTimeOffset? AcceptedAt,
     DeviceView[] Devices);
+
+/// <summary>Something you sent, as far as this device knows: queued, delivered, read, or expired.</summary>
+public sealed record SentSummary(
+    string Id,
+    string State,
+    string Origin,
+    DateTimeOffset SentAt,
+    DateTimeOffset? DeliveredAt,
+    DateTimeOffset? ReadAt,
+    DateTimeOffset? ExpiresAt);
+
+public sealed record OutboxView(
+    string Id,
+    string Kind,
+    string To,
+    string State,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset ExpiresAt,
+    int Attempts,
+    string Preview);
 
 public sealed record InboxSummary(
     string Id,
@@ -50,7 +74,9 @@ public sealed record InboxSummary(
     DateTimeOffset ReceivedAt,
     string? ReplyTo,
     string Origin,
-    string? Note = null);
+    string? Note = null,
+    string? ReplyState = null,
+    string Kind = "person");
 
 public sealed record InboxOpened(
     string Id,
@@ -66,7 +92,9 @@ public sealed record InboxOpened(
     int Hop,
     string Body,
     string? Note = null,
-    string? Draft = null);
+    string? Draft = null,
+    SentSummary[]? YourReplies = null,
+    string Kind = "person");
 
 public sealed record InviteResult(string Token, DateTimeOffset ExpiresAt, string[] Hints);
 
@@ -88,7 +116,7 @@ public sealed record AcceptResult(
     string? Fingerprint = null,
     string? Reason = null);
 
-public sealed record StatusGlobal(int Parked, string[] From);
+public sealed record StatusGlobal(int Parked, string[] From, int Pending = 0);
 
 public sealed record ProjectStatus(int Reviews, int Tickets, int PendingSubscriptions);
 
@@ -116,8 +144,17 @@ public sealed record AutoAnswerConfig(
     int TimeoutSeconds = 180,
     double MaxBudgetUsd = 0.5);
 
+/// <summary>The outbox (spec §7.2) and retention (spec §13), in units people write in config files.</summary>
+public sealed record OutboxConfig(int ExpiryHours = 168, int PumpIntervalSeconds = 30, int RetentionDays = 30)
+{
+    public OutboxSettings ToSettings() => new(TimeSpan.FromHours(ExpiryHours), TimeSpan.FromSeconds(PumpIntervalSeconds), TimeSpan.FromDays(RetentionDays));
+}
+
+/// <summary>The same, as the node consumes it.</summary>
+public sealed record OutboxSettings(TimeSpan Expiry, TimeSpan PumpInterval, TimeSpan Retention);
+
 /// <summary>Per-device settings in <c>config.json</c>. <c>ClaudePath</c> defaults to <c>claude</c> on PATH.</summary>
-public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null)
+public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null, OutboxConfig? Outbox = null)
 {
     public static RtfcConfig Default => new(Net.TcpTransport.DefaultPort, null);
 }
@@ -132,6 +169,7 @@ public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePat
 [JsonSerializable(typeof(InboxSummary))]
 [JsonSerializable(typeof(InboxSummary[]))]
 [JsonSerializable(typeof(InboxOpened))]
+[JsonSerializable(typeof(OutboxView[]))]
 [JsonSerializable(typeof(InviteResult))]
 [JsonSerializable(typeof(AcceptResult))]
 [JsonSerializable(typeof(ManagementResult))]

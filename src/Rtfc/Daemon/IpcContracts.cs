@@ -16,15 +16,20 @@ public static class IpcRoutes
     public const string Inbox = "/v1/inbox";
     public const string Invite = "/v1/invite";
     public const string Accept = "/v1/accept";
+    public const string Outbox = "/v1/outbox";
+    public const string Away = "/v1/away";
     public const string Shutdown = "/v1/shutdown";
 
     public static string InboxOpen(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/open";
     public static string InboxReply(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/reply";
+    public static string InboxDismiss(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/dismiss";
 
     // Management (spec §9.3). On the user-only socket, reached by the CLI; never an MCP tool.
     public static string ContactAuto(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/auto";
     public static string ContactRemove(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/remove";
     public static string ContactBlock(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/block";
+    public static string ContactRename(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/rename";
+    public static string ContactReceipts(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/receipts";
 }
 
 public sealed record DaemonStatus(
@@ -37,9 +42,14 @@ public sealed record DaemonStatus(
     int Port,
     string[] Hints,
     int Leases,
-    bool IdleExit);
+    bool IdleExit,
+    bool Away = false);
 
-public sealed record SendRequest(string To, string Text);
+public sealed record SendRequest(string To, string Text, bool Leave = false);
+
+public sealed record ToggleRequest(bool On);
+
+public sealed record RenameRequest(string Handle);
 
 public sealed record ReplyRequest(string Text);
 
@@ -58,7 +68,10 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(ReplyRequest))]
 [JsonSerializable(typeof(AcceptRequest))]
 [JsonSerializable(typeof(AutoRequest))]
+[JsonSerializable(typeof(ToggleRequest))]
+[JsonSerializable(typeof(RenameRequest))]
 [JsonSerializable(typeof(ManagementResult))]
+[JsonSerializable(typeof(OutboxView[]))]
 [JsonSerializable(typeof(IpcError))]
 [JsonSerializable(typeof(SendResult))]
 [JsonSerializable(typeof(ContactView[]))]

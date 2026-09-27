@@ -167,6 +167,104 @@ public static class Commands
         return 0;
     }
 
+    // ---- away / rename / receipts (spec §9.4) ----
+
+    public static async Task<int> AwayAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        if (args is not [("on" or "off") and var state])
+        {
+            ctx.Error.WriteLine("usage: rtfc away on|off");
+            return 2;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        await client.AwayAsync(state == "on", ctx.CancellationToken).ConfigureAwait(false);
+        ctx.Out.WriteLine(state == "on"
+            ? "Away: nothing listens, so contacts see nobody home. You can still send, and your outbox still delivers."
+            : "Back: listening again.");
+        return 0;
+    }
+
+    public static async Task<int> RenameAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        if (args is not [var handle, var newHandle])
+        {
+            ctx.Error.WriteLine("usage: rtfc rename <contact> <new-handle>");
+            return 2;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        var result = await client.RenameAsync(handle, newHandle, ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            ctx.Error.WriteLine($"rtfc rename: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine($"{handle} is now {result.Handle} to you. Only you see this name.");
+        return 0;
+    }
+
+    public static async Task<int> ReceiptsAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        if (args is not [var handle, ("on" or "off") and var state])
+        {
+            ctx.Error.WriteLine("usage: rtfc receipts <contact> on|off");
+            return 2;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        var result = await client.ReceiptsAsync(handle, state == "on", ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            ctx.Error.WriteLine($"rtfc receipts: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine(state == "on"
+            ? $"{result.Handle} is told when you read their messages."
+            : $"{result.Handle} is not told when you read their messages.");
+        return 0;
+    }
+
+    public static async Task<int> OutboxAsync(CommandContext ctx)
+    {
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        var entries = await client.OutboxAsync(ctx.CancellationToken).ConfigureAwait(false);
+        if (entries.Length == 0)
+        {
+            ctx.Out.WriteLine("The outbox is empty.");
+            return 0;
+        }
+
+        foreach (var e in entries)
+        {
+            ctx.Out.WriteLine($"{e.Id}  {e.Kind,-8} to {e.To,-16} tried {e.Attempts,3}x, until {Timestamps.Format(e.ExpiresAt)}: {e.Preview}");
+        }
+
+        return 0;
+    }
+
     // ---- contacts / inbox (read-only conveniences; the MCP tools are the real surface) ----
 
     public static async Task<int> ContactsAsync(CommandContext ctx)
@@ -188,7 +286,8 @@ public static class Commands
         {
             var devices = string.Join(", ", contact.Devices.Select(d => $"{d.Name} {(d.Online switch { true => "home", false => "away", null => "?" })}"));
             var mode = contact.AutoScope is null ? contact.InboundMode : $"{contact.InboundMode} ({contact.AutoScope})";
-            ctx.Out.WriteLine($"{contact.Handle,-16} {contact.Status,-8} {mode,-14} {devices}");
+            var extras = (contact.ReadReceipts ? "" : "  no receipts") + (contact.Pending > 0 ? $"  {contact.Pending} in outbox" : "");
+            ctx.Out.WriteLine($"{contact.Handle,-16} {contact.Status,-8} {mode,-14} {devices}{extras}");
         }
 
         return 0;
@@ -212,8 +311,31 @@ public static class Commands
                 return 1;
             }
 
-            ctx.Out.WriteLine($"From {opened.From}/{opened.FromDevice} at {Timestamps.Format(opened.ReceivedAt)} ({opened.State}):");
+            var from = opened.Kind == "notice" ? "rtfc" : $"{opened.From}/{opened.FromDevice}";
+            ctx.Out.WriteLine($"From {from} at {Timestamps.Format(opened.ReceivedAt)} ({opened.State}):");
             ctx.Out.WriteLine(opened.Body);
+            if (opened.Note is not null)
+            {
+                ctx.Out.WriteLine($"Note: {opened.Note}");
+            }
+
+            foreach (var reply in opened.YourReplies ?? [])
+            {
+                ctx.Out.WriteLine($"Your reply {reply.Id}: {reply.State}{(reply.ReadAt is null ? "" : $", read {Timestamps.Format(reply.ReadAt.Value)}")}");
+            }
+
+            return 0;
+        }
+
+        if (line.Positionals is ["dismiss", var dismissId])
+        {
+            if (!await client.DismissAsync(dismissId, ctx.CancellationToken).ConfigureAwait(false))
+            {
+                ctx.Error.WriteLine($"rtfc inbox: no message '{dismissId}'.");
+                return 1;
+            }
+
+            ctx.Out.WriteLine("Dismissed.");
             return 0;
         }
 
@@ -226,7 +348,9 @@ public static class Commands
 
         foreach (var m in messages)
         {
-            ctx.Out.WriteLine($"{m.Id}  {m.State,-11} {m.From}/{m.FromDevice}: {m.Preview}{(m.Note is null ? "" : $"  [{m.Note}]")}");
+            var from = m.Kind == "notice" ? "rtfc" : $"{m.From}/{m.FromDevice}";
+            var tail = (m.Note is null ? "" : $"  [{m.Note}]") + (m.ReplyState is null ? "" : $"  (your reply: {m.ReplyState})");
+            ctx.Out.WriteLine($"{m.Id}  {m.State,-11} {from}: {m.Preview}{tail}");
         }
 
         return 0;
@@ -307,13 +431,33 @@ public static class Commands
         }
 
         var status = StatusFile.Read(ctx.Home.StatusPath);
-        if (status is null || status.Global.Parked == 0)
+        if (status is null)
         {
             return 0;
         }
 
-        var from = status.Global.From.Length == 0 ? "" : " · " + string.Join(", ", status.Global.From);
-        ctx.Out.WriteLine($"📨 {status.Global.Parked.ToString(CultureInfo.InvariantCulture)}{from}");
+        var segments = new List<string>();
+        if (status.Away)
+        {
+            segments.Add("💤 away");
+        }
+
+        if (status.Global.Parked > 0)
+        {
+            var from = status.Global.From.Length == 0 ? "" : " · " + string.Join(", ", status.Global.From);
+            segments.Add($"📨 {status.Global.Parked.ToString(CultureInfo.InvariantCulture)}{from}");
+        }
+
+        if (status.Global.Pending > 0)
+        {
+            segments.Add($"📤 {status.Global.Pending.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (segments.Count > 0)
+        {
+            ctx.Out.WriteLine(string.Join("  ", segments));
+        }
+
         return 0;
     }
 

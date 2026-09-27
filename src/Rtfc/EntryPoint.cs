@@ -61,6 +61,14 @@ public static class EntryPoint
                     return await Commands.RemoveAsync(ctx, rest, block: false).ConfigureAwait(false);
                 case "block":
                     return await Commands.RemoveAsync(ctx, rest, block: true).ConfigureAwait(false);
+                case "away":
+                    return await Commands.AwayAsync(ctx, rest).ConfigureAwait(false);
+                case "rename":
+                    return await Commands.RenameAsync(ctx, rest).ConfigureAwait(false);
+                case "receipts":
+                    return await Commands.ReceiptsAsync(ctx, rest).ConfigureAwait(false);
+                case "outbox":
+                    return await Commands.OutboxAsync(ctx).ConfigureAwait(false);
                 case "contacts":
                     return await Commands.ContactsAsync(ctx).ConfigureAwait(false);
                 case "inbox":
@@ -105,10 +113,14 @@ public static class EntryPoint
           auto <contact> off|headless [--scope <dir>]
                                       let a read-only headless Claude answer them from one directory
           remove <contact>            stop talking to someone; block <contact> also refuses future invites
+          rename <contact> <handle>   what you call them; only you see it
+          receipts <contact> on|off   tell them when you read their messages (default on)
+          away on|off                 stop listening; contacts see nobody home, you can still send
 
         look:
           contacts                    contacts and whether they are home
-          inbox [--all] | inbox open <id>
+          inbox [--all] | inbox open <id> | inbox dismiss <id>
+          outbox                      what waits to be delivered
 
         plumbing:
           daemon run [--stay] | ensure | status | stop

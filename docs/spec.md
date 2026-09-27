@@ -356,7 +356,7 @@ These are the only things Claude can do on its own. Claude Code exposes them as 
 | Tool | Args | Returns / effect |
 |---|---|---|
 | `contacts` | – | contacts with per-device online state and inbound mode |
-| `send` | `to`, `text` | delivery result (§7.2); new messages only, never queued |
+| `send` | `to`, `text`, `leave?` | delivery result (§7.2); new messages only, never queued unless `leave` is true, which the user must have asked for ("leave it for her") |
 | `inbox_list` | `state?` (`parked` default, or `all`), `scope?` (`project` default, or `all`) | summaries of people messages plus this project's source items, with previews |
 | `inbox_open` | `id` | full message or source item (event history, URL, any `prepare` draft), wrapped as untrusted (§7.5); marks `read`; sends a receipt for people messages |
 | `inbox_reply` | `id`, `text` | people messages only: delivered, or queued in the outbox if the sender isn't home; marks `answered` |
@@ -521,7 +521,7 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 ## 11. Status bar
 
 - The daemon writes `~/.claude/rtfc/status.json` atomically (write temp file, then rename) whenever the inbox changes. Counts are split into global (people) and per project (sources):
-  `{ "global": { "parked": 1, "from": ["Sasha"] }, "projects": { "/src/payments-api": { "reviews": 2, "tickets": 3, "pending_subscriptions": 0 } }, "away": false }`
+  `{ "global": { "parked": 1, "from": ["Sasha"], "pending": 2 }, "projects": { "/src/payments-api": { "reviews": 2, "tickets": 3, "pending_subscriptions": 0 } }, "away": false }` (`pending` counts the outbox; the status line shows it as `📤 2`, and `away` as `💤 away`)
 - Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 1 · Sasha  🔀 2  🎫 3`, or nothing when there's nothing to show. Reading a file keeps it fast, since status lines run often.
 - Configure it once in `~/.claude/settings.json`:
   `{ "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }`
@@ -590,7 +590,7 @@ CREATE TABLE invites (
 CREATE TABLE inbox (
   id          TEXT NOT NULL,
   to_device   TEXT NOT NULL,
-  kind        TEXT NOT NULL,                      -- person | source
+  kind        TEXT NOT NULL,                      -- person | source | notice (a local note from rtfc itself, e.g. an expired reply)
   project_id  TEXT,                               -- NULL for person messages (global)
   -- person messages
   from_person TEXT,
@@ -604,8 +604,8 @@ CREATE TABLE inbox (
   entity_key  TEXT,                               -- "jira:PAY-123"
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
-  draft       TEXT,                               -- output of a `prepare` run, or an auto-answer that could not be delivered
-  auto_note   TEXT,                               -- why a message was not auto-answered, or how the attempt went (schema v2)
+  draft       TEXT,                               -- output of a `prepare` run, or the auto-answer that was sent
+  note        TEXT,                               -- a line for the human: why not auto-answered, what became of the reply (schema v2, renamed v3)
   auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message (schema v2)
   -- common
   thread      TEXT,
@@ -657,12 +657,28 @@ CREATE TABLE outbox (
   id          TEXT PRIMARY KEY,
   to_person   TEXT NOT NULL,
   to_device   TEXT,                               -- NULL = any active device
-  kind        TEXT NOT NULL,                      -- reply | receipt | handled | contact_sync | device_list
+  kind        TEXT NOT NULL,                      -- reply | message | receipt | handled | contact_sync | device_list
   envelope    TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   expires_at  TEXT NOT NULL,
   attempts    INTEGER NOT NULL DEFAULT 0,
   state       TEXT NOT NULL                       -- pending | delivered | expired
+);
+
+CREATE TABLE sent (                               -- what left this device (schema v3): receipts and expiries need something to update
+  id          TEXT PRIMARY KEY,
+  to_person   TEXT NOT NULL,
+  to_device   TEXT,                               -- NULL = whichever device took it
+  thread      TEXT,
+  reply_to    TEXT,                               -- the inbox message this answered, if any
+  origin      TEXT NOT NULL,                      -- human | auto
+  kind        TEXT NOT NULL,                      -- message | reply
+  body        TEXT NOT NULL,
+  sent_at     TEXT NOT NULL,
+  delivered_at TEXT,
+  read_at     TEXT,
+  expires_at  TEXT,                               -- while queued in the outbox
+  state       TEXT NOT NULL                       -- queued | delivered | read | expired
 );
 
 CREATE TABLE seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
@@ -677,7 +693,7 @@ A `meta` table holds `schema_version`; the daemon migrates older files on open.
 - `auto_running` rows are re-queued; the answer is regenerated once and the attempt is recorded (`auto_attempts`; two interrupted attempts make it `auto_failed`).
 - The outbox pump resumes, and handshakes trigger it whenever a peer comes online.
 
-**Retention:** prune `answered` and `dismissed` messages after 30 days. Expire outbox entries after 7 days, leaving a local notice.
+**Retention:** prune `answered`, `dismissed` and `auto_done` messages after 30 days, and finished outbox entries after a day. Expire outbox entries after 7 days, leaving a local notice (an inbox row of kind `notice`); receipts expire silently. The pump runs every 30 seconds with jitter and whenever a contact connects, and delivers a batch to one device over one session.
 
 ---
 

@@ -22,19 +22,20 @@ update the spec in the same change. Don't let the two drift apart.
 
 ## Status
 
-**Phases 1 and 2 work end to end** (§17). Phase 1: `rtfc init`, invite and accept over
+**Phases 1, 2 and 4 work end to end** (§17). Phase 1: `rtfc init`, invite and accept over
 mutual TLS, the daemon with its lease-based lifetime and Unix-socket IPC, `send` with
-nobody's-home, the parked inbox, the status line, and open and reply while the sender is
-home, all driven from the five MCP tools and the plugin's skills. Phase 2: `auto_headless`
-per contact (`Node.AutoAnswer.cs`, `ClaudeProcessRunner`), every guard of §7.4, and
-`remove`/`block`. `scripts/e2e.sh` runs the whole story on one machine with two daemons
-and a fake `claude`.
+nobody's-home, the parked inbox, the status line, and open and reply, all driven from the
+MCP tools and the plugin's skills. Phase 2: `auto_headless` per contact
+(`Node.AutoAnswer.cs`, `ClaudeProcessRunner`), every guard of §7.4, and `remove`/`block`.
+Phase 4: the outbox and its pump (`Node.Outbox.cs`), queued replies and "leave it for
+her", read receipts against a `sent` table, `away`, `rename`, `inbox_dismiss`, notices,
+retention. `scripts/e2e.sh` runs the whole story on one machine with two daemons and a
+fake `claude`.
 
-Not there yet, by design: read receipts, the reply outbox, `away`, `rename`, dismiss and
-retention (Phase 4); `auto_session` (Phase 7); fingerprint words (hex groups for now);
-session reuse between sends (one connection per delivery); a proper detach on Windows
-(`daemon run` calls `setsid` on Unix only). Next is **Phase 3**, VPN hints, then
-**Phase 4**, the outbox. Third-party sources come last (Phase 8).
+Not there yet, by design: `auto_session` (Phase 7); fingerprint words (hex groups for
+now); session reuse between live sends (the outbox pump does reuse one per device); a
+proper detach on Windows (`daemon run` calls `setsid` on Unix only). Next is **Phase 3**,
+VPN hints, then **Phase 5**, multi-device. Third-party sources come last (Phase 8).
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
 and the CLI-only management boundary all shipped in Phase 1. Update this section when a
@@ -120,8 +121,11 @@ device per person.
 ### 5. "Delivered" means durable (§7.2)
 
 The receiver acks only **after** the SQLite commit. New messages are **never** queued when
-nobody's home: the sender is told immediately. Only replies, receipts and sync frames go
-through the outbox. A resend with a known `id` gets `ack: duplicate`.
+nobody's home unless the user asked (`send` with `leave: true`): the sender is told
+immediately. Replies, receipts and explicitly left messages go through the outbox, which
+is the only place anything waits; a resend with a known `id` gets `ack: duplicate`, which
+the pump treats as delivered. Sequence numbers and the target device are assigned when an
+entry is delivered, not when it is queued, because they belong to the stream.
 
 ### 6. Leave the real `~/.claude/rtfc` alone
 

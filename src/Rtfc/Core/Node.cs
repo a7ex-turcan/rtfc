@@ -8,7 +8,7 @@ using Rtfc.Storage;
 
 namespace Rtfc.Core;
 
-public sealed record NodeOptions(IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer);
+public sealed record NodeOptions(IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer, OutboxSettings Outbox);
 
 /// <summary>
 /// Everything stateful on one device, minus the IPC surface (spec §3.1): the contact
@@ -54,8 +54,13 @@ public sealed partial class Node : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        await _transport.StartAsync(HandleInboundAsync, cancellationToken).ConfigureAwait(false);
+        if (!IsAway)
+        {
+            await _transport.StartAsync(HandleInboundAsync, cancellationToken).ConfigureAwait(false);
+        }
+
         StartAutoAnswering();
+        StartOutbox();
         WriteStatus();
         _logger.LogInformation("rtfcd listening as {Handle}/{Device} ({Person}) on port {Port}", Self.Handle, Self.DeviceName, Ids.Fingerprint(Self.PersonId), (_transport as TcpTransport)?.Port);
     }
@@ -65,6 +70,32 @@ public sealed partial class Node : IAsyncDisposable
         await _stopping.CancelAsync().ConfigureAwait(false);
         await _transport.StopAsync().ConfigureAwait(false);
         await StopAutoAnsweringAsync().ConfigureAwait(false);
+        await StopOutboxAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Away (spec §9.4): nothing listens, so contacts see nobody home, while everything outbound still works.</summary>
+    public bool IsAway => _db.GetMeta("away") == "1";
+
+    public async Task<ManagementResult> SetAwayAsync(bool away, CancellationToken cancellationToken)
+    {
+        if (away != IsAway)
+        {
+            _db.SetMeta("away", away ? "1" : "0");
+            if (away)
+            {
+                await _transport.StopAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await _transport.StartAsync(HandleInboundAsync, _stopping.Token).ConfigureAwait(false);
+                KickOutbox();
+            }
+
+            _logger.LogInformation("Away {State}", away ? "on" : "off");
+            WriteStatus();
+        }
+
+        return new ManagementResult(ManagementStatus.Ok);
     }
 
     /// <summary>The <c>tcp:</c> hints this device advertises in invite tokens and accept frames (spec §8.4).</summary>
@@ -234,6 +265,19 @@ public sealed partial class Node : IAsyncDisposable
 
     // ---- sending (spec §7.2) ----
 
+    /// <summary>Sends to a contact now. With <paramref name="leave"/>, a message nobody is home for waits in the outbox instead (spec §7.2, "leave it for her").</summary>
+    public async Task<SendResult> SendAsync(string to, string text, bool leave, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync(to, text, cancellationToken).ConfigureAwait(false);
+        if (result.Status != SendStatus.NobodyHome || !leave)
+        {
+            return result;
+        }
+
+        var contact = _db.FindContactByHandle(to.Trim())!;
+        return Queue(contact, deviceId: null, result.MessageId!, thread: result.MessageId!, replyTo: null, hop: 0, text, MessageOrigin.Human);
+    }
+
     public Task<SendResult> SendAsync(string to, string text, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -294,6 +338,14 @@ public sealed partial class Node : IAsyncDisposable
             }
         }
 
+        if (delivered.Count > 0)
+        {
+            var now = _clock.GetUtcNow();
+            _db.InsertSent(new SentRow(
+                id, contact.PersonId, deviceName is null ? null : targets[0].DeviceId, thread, replyTo, origin,
+                replyTo is null ? SentKind.Message : SentKind.Reply, text, now, DeliveredAt: now, ReadAt: null, ExpiresAt: null, SentState.Delivered));
+        }
+
         if (delivered.Count == targets.Count)
         {
             return new SendResult(SendStatus.Delivered, id, To: [.. delivered]);
@@ -317,27 +369,50 @@ public sealed partial class Node : IAsyncDisposable
                 Online: [.. online.Where(kv => kv.Value).Select(kv => $"{contact.Handle}/{kv.Key.Name}")]);
         }
 
-        return new SendResult(SendStatus.NobodyHome, Person: contact.Handle);
+        return new SendResult(SendStatus.NobodyHome, id, Person: contact.Handle);
+    }
+
+    /// <summary>An authenticated session to one of a contact's devices, or null when it is unreachable or someone else answered.</summary>
+    private async Task<PeerSession?> OpenSessionAsync(ContactRow contact, X509Certificate2 ca, DeviceRow device, CancellationToken cancellationToken)
+    {
+        var stream = await _transport.ConnectAsync(device.DeviceId, ParseHints(device.Endpoints), cancellationToken).ConfigureAwait(false);
+        if (stream is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var session = await PeerSession.ConnectAsync(stream, Self, [ca], DeviceListVersion, cancellationToken).ConfigureAwait(false);
+            if (session.Trust is SessionTrust.Authenticated trust && trust.PersonId == contact.PersonId && trust.DeviceId == device.DeviceId)
+            {
+                return session;
+            }
+
+            _logger.LogWarning("The device at {Hints} is not {Handle}/{Device}", string.Join(", ", device.Endpoints), contact.Handle, device.Name);
+            await session.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or System.Security.Authentication.AuthenticationException or ProtocolException or TimeoutException)
+        {
+            _logger.LogDebug(ex, "Handshake with {Handle}/{Device} failed", contact.Handle, device.Name);
+            return null;
+        }
     }
 
     /// <summary>Null on success, "unreachable" when no hint answered, otherwise a reason.</summary>
     private async Task<string?> DeliverToDeviceAsync(
         ContactRow contact, X509Certificate2 ca, DeviceRow device, string id, string thread, string? replyTo, int hop, string text, string origin, CancellationToken cancellationToken)
     {
-        var stream = await _transport.ConnectAsync(device.DeviceId, ParseHints(device.Endpoints), cancellationToken).ConfigureAwait(false);
-        if (stream is null)
+        var session = await OpenSessionAsync(contact, ca, device, cancellationToken).ConfigureAwait(false);
+        if (session is null)
         {
             return "unreachable";
         }
 
         try
         {
-            await using var session = await PeerSession.ConnectAsync(stream, Self, [ca], DeviceListVersion, cancellationToken).ConfigureAwait(false);
-            if (session.Trust is not SessionTrust.Authenticated { } trust || trust.PersonId != contact.PersonId || trust.DeviceId != device.DeviceId)
-            {
-                return "wrong_device_answered";
-            }
-
+            await using var _ = session;
             var seq = _db.NextSeqOut(device.DeviceId);
             var envelope = new MessageFrame(
                 HelloFrame.CurrentVersion, id,
@@ -381,6 +456,12 @@ public sealed partial class Node : IAsyncDisposable
 
         await using (session)
         {
+            if (session.Trust is SessionTrust.Authenticated)
+            {
+                // Someone we know is home: whatever waits for them can go now (spec §13, "handshakes trigger it").
+                KickOutbox();
+            }
+
             try
             {
                 while (await session.ReceiveAsync(cancellationToken).ConfigureAwait(false) is { } frame)
@@ -407,6 +488,9 @@ public sealed partial class Node : IAsyncDisposable
                     {
                         case MessageFrame message:
                             await session.SendAsync(Receive(trust, message), cancellationToken).ConfigureAwait(false);
+                            break;
+                        case ReceiptFrame receipt:
+                            await session.SendAsync(ReceiveReceipt(trust, receipt), cancellationToken).ConfigureAwait(false);
                             break;
                         case UnknownFrame unknown:
                             _logger.LogDebug("Ignoring a '{Type}' frame from {Person}", unknown.Type, Ids.Fingerprint(trust.PersonId));
@@ -497,11 +581,29 @@ public sealed partial class Node : IAsyncDisposable
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
         var messages = state == InboxState.Parked ? _db.ListMessages(null).Where(NeedsAttention) : _db.ListMessages(state);
         return [.. messages.Select(m => new InboxSummary(
-            m.Id, handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson)), DeviceName(m.FromDevice), m.State,
-            Preview(m.Body), m.ReceivedAt, m.ReplyTo, m.Origin, m.AutoNote))];
+            m.Id, FromLabel(m, handles), m.Kind == InboxKind.Notice ? "" : DeviceName(m.FromDevice), m.State,
+            Preview(m.Body), m.ReceivedAt, m.ReplyTo, m.Origin, m.Note,
+            m.Kind == InboxKind.Person ? _db.ListSentReplies(m.Id).LastOrDefault()?.State : null, m.Kind))];
     }
 
-    /// <summary>Marks a parked message read. Receipts arrive with Phase 4.</summary>
+    private static string FromLabel(InboxMessage m, Dictionary<string, string> handles) =>
+        m.Kind == InboxKind.Notice ? "rtfc" : handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson));
+
+    /// <summary>Marks a message dismissed without answering it (spec §9.2). False when there is no such message.</summary>
+    public bool Dismiss(string id)
+    {
+        if (_db.GetMessage(id) is null)
+        {
+            return false;
+        }
+
+        _db.SetMessageState(id, InboxState.Dismissed, Self.DeviceId, _clock.GetUtcNow());
+        WriteStatus();
+        InboxChanged?.Invoke();
+        return true;
+    }
+
+    /// <summary>Marks a parked message read and, if the contact gets receipts from us, queues one (spec §7.3).</summary>
     public InboxOpened? Open(string id)
     {
         var message = _db.GetMessage(id);
@@ -510,25 +612,35 @@ public sealed partial class Node : IAsyncDisposable
             return null;
         }
 
+        var contact = _db.GetContact(message.FromPerson);
         if (message.State == InboxState.Parked)
         {
             _db.SetMessageState(id, InboxState.Read, handledBy: null, _clock.GetUtcNow());
             message = message with { State = InboxState.Read };
+            if (message.Kind == InboxKind.Person && contact is { Status: ContactStatus.Active, ReadReceipts: true })
+            {
+                QueueReceipt(contact, message);
+            }
+
             WriteStatus();
             InboxChanged?.Invoke();
         }
 
-        var from = _db.GetContact(message.FromPerson)?.Handle ?? Ids.Fingerprint(message.FromPerson);
+        var from = message.Kind == InboxKind.Notice ? "rtfc" : contact?.Handle ?? Ids.Fingerprint(message.FromPerson);
+        var replies = message.Kind == InboxKind.Person
+            ? _db.ListSentReplies(message.Id).Select(r => new SentSummary(r.Id, r.State, r.Origin, r.SentAt, r.DeliveredAt, r.ReadAt, r.ExpiresAt)).ToArray()
+            : [];
         return new InboxOpened(
-            message.Id, from, DeviceName(message.FromDevice), message.FromPerson, message.State, message.ReceivedAt, message.SentAt,
-            message.Thread, message.ReplyTo, message.Origin, message.Hop, message.Body, message.AutoNote, message.Draft);
+            message.Id, from, message.Kind == InboxKind.Notice ? "" : DeviceName(message.FromDevice), message.FromPerson, message.State,
+            message.ReceivedAt, message.SentAt, message.Thread, message.ReplyTo, message.Origin, message.Hop, message.Body, message.Note,
+            message.Draft, replies.Length == 0 ? null : replies, message.Kind);
     }
 
-    /// <summary>Replies to the person who sent a message. Until the outbox lands (Phase 4), the sender must be home.</summary>
+    /// <summary>Replies to the person who sent a message: delivered now, or queued in the outbox if nobody is home (spec §7.2).</summary>
     public async Task<SendResult> ReplyAsync(string id, string text, CancellationToken cancellationToken)
     {
         var original = _db.GetMessage(id);
-        if (original is null)
+        if (original is null || original.Kind != InboxKind.Person)
         {
             return SendResult.Rejected("unknown_message");
         }
@@ -550,8 +662,15 @@ public sealed partial class Node : IAsyncDisposable
         }
 
         var replyId = Ulid.NewUlid(_clock.GetUtcNow());
-        var result = await DeliverAsync(contact, deviceName: null, replyId, original.Thread ?? original.Id, replyTo: id, original.Hop + 1, text, MessageOrigin.Human, cancellationToken).ConfigureAwait(false);
-        if (result.Status is SendStatus.Delivered or SendStatus.Partial)
+        var thread = original.Thread ?? original.Id;
+        var result = await DeliverAsync(contact, deviceName: null, replyId, thread, replyTo: id, original.Hop + 1, text, MessageOrigin.Human, cancellationToken).ConfigureAwait(false);
+        if (result.Status == SendStatus.NobodyHome)
+        {
+            result = Queue(contact, deviceId: null, replyId, thread, replyTo: id, original.Hop + 1, text, MessageOrigin.Human);
+            _db.SetMessageNote(id, $"Your reply waits in the outbox until {contact.Handle} is next home (until {Timestamps.Format(result.ExpiresAt!.Value)}).", _clock.GetUtcNow());
+        }
+
+        if (result.Status is SendStatus.Delivered or SendStatus.Partial or SendStatus.Queued)
         {
             _db.SetMessageState(id, InboxState.Answered, Self.DeviceId, _clock.GetUtcNow());
             WriteStatus();
@@ -603,6 +722,39 @@ public sealed partial class Node : IAsyncDisposable
         }
     }
 
+    /// <summary>Changes the local petname (spec §2). Identity is unaffected; the other side never learns.</summary>
+    public ManagementResult Rename(string handle, string newHandle)
+    {
+        var contact = _db.FindContactByHandle(handle.Trim());
+        if (contact is null)
+        {
+            return new ManagementResult(ManagementStatus.NotAContact, Reason: $"'{handle}' is not a contact.");
+        }
+
+        var sanitized = InviteToken.SanitizeHandle(newHandle, contact.PersonId);
+        var taken = _db.FindContactByHandle(sanitized);
+        if (taken is not null && taken.PersonId != contact.PersonId)
+        {
+            return new ManagementResult(ManagementStatus.Invalid, contact.Handle, $"'{sanitized}' already names another contact.");
+        }
+
+        _db.UpsertContact(contact with { Handle = sanitized, Rev = contact.Rev + 1 });
+        return new ManagementResult(ManagementStatus.Ok, sanitized);
+    }
+
+    /// <summary>Whether we tell this contact when we read their messages (spec §7.3).</summary>
+    public ManagementResult SetReceipts(string handle, bool on)
+    {
+        var contact = _db.FindContactByHandle(handle.Trim());
+        if (contact is null || contact.Status != ContactStatus.Active)
+        {
+            return new ManagementResult(ManagementStatus.NotAContact, Reason: $"'{handle}' is not an active contact.");
+        }
+
+        _db.UpsertContact(contact with { ReadReceipts = on, Rev = contact.Rev + 1 });
+        return new ManagementResult(ManagementStatus.Ok, contact.Handle);
+    }
+
     /// <summary>Removal is local and immediate (spec §5.2): the contact's CA leaves the trust store, so their next handshake is restricted.</summary>
     public ManagementResult Remove(string handle) => SetStatus(handle, ContactStatus.Removed);
 
@@ -634,7 +786,8 @@ public sealed partial class Node : IAsyncDisposable
                 ? await ProbeAsync(devices, cancellationToken).ConfigureAwait(false)
                 : [];
             views.Add(new ContactView(
-                contact.Handle, contact.PersonId, Ids.Fingerprint(contact.PersonId), contact.Status, contact.InboundMode, contact.AutoScope, contact.AcceptedAt,
+                contact.Handle, contact.PersonId, Ids.Fingerprint(contact.PersonId), contact.Status, contact.InboundMode, contact.AutoScope,
+                contact.ReadReceipts, _db.CountOutbox(OutboxState.Pending, contact.PersonId), contact.AcceptedAt,
                 [.. devices.Select(d => new DeviceView(d.Name, d.DeviceId, d.Status, online.TryGetValue(d, out var o) ? o : null, [.. d.Endpoints]))]));
         }
 
@@ -666,8 +819,8 @@ public sealed partial class Node : IAsyncDisposable
     {
         var parked = _db.ListMessages(null).Where(NeedsAttention).ToList();
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
-        var from = parked.Select(m => handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson))).Distinct().ToArray();
-        return new StatusSnapshot(new StatusGlobal(parked.Count, from), [], Away: false);
+        var from = parked.Select(m => FromLabel(m, handles)).Distinct().ToArray();
+        return new StatusSnapshot(new StatusGlobal(parked.Count, from, _db.CountOutbox(OutboxState.Pending)), [], IsAway);
     }
 
     private void WriteStatus()

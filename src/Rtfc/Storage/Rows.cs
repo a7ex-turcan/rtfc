@@ -24,6 +24,35 @@ public static class InboxKind
 {
     public const string Person = "person";
     public const string Source = "source";
+    public const string Notice = "notice";
+}
+
+public static class OutboxKind
+{
+    public const string Reply = "reply";
+    public const string Message = "message";
+    public const string Receipt = "receipt";
+}
+
+public static class OutboxState
+{
+    public const string Pending = "pending";
+    public const string Delivered = "delivered";
+    public const string Expired = "expired";
+}
+
+public static class SentKind
+{
+    public const string Message = "message";
+    public const string Reply = "reply";
+}
+
+public static class SentState
+{
+    public const string Queued = "queued";
+    public const string Delivered = "delivered";
+    public const string Read = "read";
+    public const string Expired = "expired";
 }
 
 public static class InboxState
@@ -107,5 +136,34 @@ public sealed record InboxMessage(
     string? HandledBy,
     DateTimeOffset? HandledAt,
     string? Draft = null,
-    string? AutoNote = null,
-    int AutoAttempts = 0);
+    string? Note = null,
+    int AutoAttempts = 0,
+    string Kind = InboxKind.Person);
+
+/// <summary>Something that must reach a peer later (spec §7.2). The envelope is the frame as it will be sent, minus the sequence number and device, which are filled at delivery.</summary>
+public sealed record OutboxRow(
+    string Id,
+    string ToPerson,
+    string? ToDevice,
+    string Kind,
+    string Envelope,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset ExpiresAt,
+    int Attempts,
+    string State);
+
+/// <summary>A message that left this device, so a receipt or an expiry has something to update.</summary>
+public sealed record SentRow(
+    string Id,
+    string ToPerson,
+    string? ToDevice,
+    string? Thread,
+    string? ReplyTo,
+    string Origin,
+    string Kind,
+    string Body,
+    DateTimeOffset SentAt,
+    DateTimeOffset? DeliveredAt,
+    DateTimeOffset? ReadAt,
+    DateTimeOffset? ExpiresAt,
+    string State);

@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS invites (
 CREATE TABLE IF NOT EXISTS inbox (
   id          TEXT NOT NULL,
   to_device   TEXT NOT NULL,
-  kind        TEXT NOT NULL,                      -- person | source
+  kind        TEXT NOT NULL,                      -- person | source | notice (a local note from rtfc itself, schema v3)
   project_id  TEXT,                               -- NULL for person messages (global)
   -- person messages
   from_person TEXT,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS inbox (
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
   draft       TEXT,                               -- output of a `prepare` run, or an auto-answer that could not be delivered
-  auto_note   TEXT,                               -- why a message was not auto-answered, or how the attempt went (v2)
+  note        TEXT,                               -- a line for the human: why it was not auto-answered, what happened to the reply (v2, renamed v3)
   auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message (v2)
   -- common
   thread      TEXT,
@@ -125,7 +125,23 @@ CREATE TABLE IF NOT EXISTS outbox (
   state       TEXT NOT NULL                       -- pending | delivered | expired
 );
 
+CREATE TABLE IF NOT EXISTS sent (                -- what left this device, so receipts and expiries have somewhere to land (schema v3)
+  id          TEXT PRIMARY KEY,
+  to_person   TEXT NOT NULL,
+  to_device   TEXT,                               -- NULL = whichever device took it
+  thread      TEXT,
+  reply_to    TEXT,                               -- the inbox message this answered, if any
+  origin      TEXT NOT NULL,                      -- human | auto
+  kind        TEXT NOT NULL,                      -- message | reply
+  body        TEXT NOT NULL,
+  sent_at     TEXT NOT NULL,
+  delivered_at TEXT,
+  read_at     TEXT,
+  expires_at  TEXT,                               -- while queued in the outbox
+  state       TEXT NOT NULL                       -- queued | delivered | read | expired
+);
+
 CREATE TABLE IF NOT EXISTS seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '3');

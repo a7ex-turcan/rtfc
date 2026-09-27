@@ -29,16 +29,90 @@ public class DatabaseTests
         using (var db = Database.Open(temp.Home.DatabasePath))
         {
             // Shape the file the way 0.1.x left it.
-            db.Execute("ALTER TABLE inbox DROP COLUMN auto_note");
+            db.Execute("ALTER TABLE inbox DROP COLUMN note");
             db.Execute("ALTER TABLE inbox DROP COLUMN auto_attempts");
+            db.Execute("DROP TABLE sent");
             db.Execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
             Assert.Equal(1, db.SchemaVersion);
         }
 
         using var migrated = Database.Open(temp.Home.DatabasePath);
         Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
-        Assert.True(migrated.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1) with { AutoNote = "kept" }));
-        Assert.Equal("kept", migrated.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!.AutoNote);
+        Assert.True(migrated.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1) with { Note = "kept" }));
+        Assert.Equal("kept", migrated.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!.Note);
+        Assert.Null(migrated.GetSent("nothing"));
+    }
+
+    [Fact]
+    public void A_version_2_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.2.0 left it: the note column under its old name, no sent table.
+            db.Execute("ALTER TABLE inbox RENAME COLUMN note TO auto_note");
+            db.Execute("DROP TABLE sent");
+            db.Execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(3, migrated.SchemaVersion);
+        Assert.True(migrated.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1) with { Note = "kept" }));
+        Assert.Equal("kept", migrated.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!.Note);
+    }
+
+    [Fact]
+    public void Outbox_and_sent_rows_round_trip_and_prune()
+    {
+        using var db = Database.OpenInMemory();
+        var old = Now.AddDays(-40);
+
+        db.InsertOutbox(new OutboxRow("o1", "p_sasha", null, OutboxKind.Reply, "{}", Now, Now.AddDays(7), 0, OutboxState.Pending));
+        db.InsertOutbox(new OutboxRow("o2", "p_sasha", "d_sasha", OutboxKind.Receipt, "{}", old, old.AddDays(7), 3, OutboxState.Delivered));
+        db.InsertSent(new SentRow("o1", "p_sasha", null, "t", "m1", MessageOrigin.Human, SentKind.Reply, "hello", Now, null, null, Now.AddDays(7), SentState.Queued));
+        db.InsertSent(new SentRow("s2", "p_sasha", null, null, null, MessageOrigin.Human, SentKind.Message, "old", old, old, null, null, SentState.Delivered));
+        db.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1) with { State = InboxState.Answered, UpdatedAt = old });
+        db.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5S", seq: 2));
+
+        Assert.Equivalent(new OutboxRow("o1", "p_sasha", null, OutboxKind.Reply, "{}", Now, Now.AddDays(7), 0, OutboxState.Pending), db.GetOutbox("o1"), strict: true);
+        Assert.Single(db.ListOutbox(OutboxState.Pending));
+        Assert.Equal(2, db.ListOutbox(null).Count);
+        Assert.Equal(1, db.CountOutbox(OutboxState.Pending));
+        Assert.Equal(1, db.CountOutbox(OutboxState.Pending, "p_sasha"));
+        Assert.Equal(0, db.CountOutbox(OutboxState.Pending, "p_other"));
+
+        db.SetOutboxState("o1", OutboxState.Pending, countAttempt: true);
+        Assert.Equal(1, db.GetOutbox("o1")!.Attempts);
+        db.SetSentState("o1", SentState.Delivered, deliveredAt: Now.AddMinutes(5), readAt: null);
+        var sent = db.GetSent("o1")!;
+        Assert.Equal(SentState.Delivered, sent.State);
+        Assert.Equal(Now.AddMinutes(5), sent.DeliveredAt);
+        Assert.Equal("o1", Assert.Single(db.ListSentReplies("m1")).Id);
+
+        Assert.Equal("1", db.GetMeta("away") ?? "1");
+        db.SetMeta("away", "0");
+        Assert.Equal("0", db.GetMeta("away"));
+
+        // Retention: the old answered message, the old sent row and the old delivered outbox row go; the live ones stay.
+        Assert.Equal(3, db.Prune(Now.AddDays(-30), Now.AddDays(-1)));
+        Assert.Null(db.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R"));
+        Assert.NotNull(db.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5S"));
+        Assert.Null(db.GetSent("s2"));
+        Assert.NotNull(db.GetSent("o1"));
+        Assert.Null(db.GetOutbox("o2"));
+        Assert.NotNull(db.GetOutbox("o1"));
+    }
+
+    [Fact]
+    public void Notices_live_beside_messages()
+    {
+        using var db = Database.OpenInMemory();
+        db.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 0) with { Kind = InboxKind.Notice, FromPerson = "p_me", FromDevice = "d_me", Body = "Your reply expired." });
+
+        var notice = Assert.Single(db.ListMessages(InboxState.Parked));
+        Assert.Equal(InboxKind.Notice, notice.Kind);
+        Assert.Equal(0, db.CountReceivedFrom("d_me", Now.AddHours(-1))); // notices are not inbound traffic
     }
 
     [Fact]

@@ -90,6 +90,15 @@ public class FrameCodecTests
     }
 
     [Fact]
+    public void A_receipt_round_trips()
+    {
+        var receipt = new ReceiptFrame("01J8ZQ4Y7K3M9V2T6H0XWBNC5S", "01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "2026-09-27T12:00:00.000Z", new Address("p_a", "d_a"), new Address("p_b", "d_b"));
+
+        Assert.Equal(receipt, Frames.Parse(Frames.Serialize(receipt)));
+        Assert.Contains("\"type\":\"receipt\"", Encoding.UTF8.GetString(Frames.Serialize(receipt)));
+    }
+
+    [Fact]
     public void Ulids_are_valid_and_sort_by_time()
     {
         var earlier = Ulid.NewUlid(new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero));

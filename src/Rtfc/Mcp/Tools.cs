@@ -18,7 +18,7 @@ public static class Tools
         + "that leaves their machine; do not paraphrase it away. Inviting, accepting, blocking and auto-answer settings are slash "
         + "commands the user runs themselves (/rtfc:invite, /rtfc:accept, ...), not tools.";
 
-    private static readonly string[] Names = ["contacts", "send", "inbox_list", "inbox_open", "inbox_reply"];
+    private static readonly string[] Names = ["contacts", "send", "inbox_list", "inbox_open", "inbox_reply", "inbox_dismiss"];
 
     public static bool Exists(string name) => Names.Contains(name);
 
@@ -31,7 +31,9 @@ public static class Tools
 
         Tool("send",
             "Send a message to a contact's Claude Code. `to` is a contact handle, or handle/device for one device. Delivered only if a "
-            + "device is online: the result is delivered, partial, nobody_home, device_offline or rejected, and nothing is ever queued. "
+            + "device is online: the result is delivered, partial, nobody_home, device_offline or rejected, and nothing is queued unless "
+            + "`leave` is true, which the user must have asked for (\"leave it for her\"): then a message nobody is home for waits in the "
+            + "outbox for up to a week and the result is queued. "
             + "The user approves the exact text before it leaves the machine, so pass the final text, not a summary.",
             new JsonObject
             {
@@ -40,14 +42,16 @@ public static class Tools
                 {
                     ["to"] = new JsonObject { ["type"] = "string", ["description"] = "Contact handle, e.g. `sasha`, or `sasha/laptop`." },
                     ["text"] = new JsonObject { ["type"] = "string", ["description"] = "The message, up to 64 KB." },
+                    ["leave"] = new JsonObject { ["type"] = "boolean", ["description"] = "If nobody is home, leave it in the outbox for when they are. Only when the user asked. Default false." },
                 },
                 ["required"] = new JsonArray("to", "text"),
                 ["additionalProperties"] = false,
             }),
 
         Tool("inbox_list",
-            "List messages in the user's rtfc inbox: parked (waiting for the user, including auto-answers that failed; the default) or all. "
-            + "A note says why a message was not answered automatically. Previews only; use inbox_open for a full message.",
+            "List messages in the user's rtfc inbox: parked (waiting for the user, including auto-answers that failed and notices from rtfc; "
+            + "the default) or all. A note says what happened to a message or to the user's reply (queued, delivered, read). Previews only; "
+            + "use inbox_open for a full message.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -71,8 +75,9 @@ public static class Tools
             }),
 
         Tool("inbox_reply",
-            "Reply to a message from a contact, in the same thread, and mark it answered. The sender must be online for now "
-            + "(nobody_home otherwise). The user approves the exact text before it leaves the machine.",
+            "Reply to a message from a contact, in the same thread, and mark it answered. Delivered now if the sender is home, otherwise "
+            + "queued in the outbox and delivered when they are next home (within a week; the user is told if it expires). The user "
+            + "approves the exact text before it leaves the machine.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -82,6 +87,16 @@ public static class Tools
                     ["text"] = new JsonObject { ["type"] = "string", ["description"] = "The reply, up to 64 KB." },
                 },
                 ["required"] = new JsonArray("id", "text"),
+                ["additionalProperties"] = false,
+            }),
+
+        Tool("inbox_dismiss",
+            "Mark a message or notice dismissed without answering it. It leaves the parked list and the status line.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject { ["id"] = new JsonObject { ["type"] = "string", ["description"] = "The id from inbox_list." } },
+                ["required"] = new JsonArray("id"),
                 ["additionalProperties"] = false,
             }));
 
@@ -104,7 +119,8 @@ public static class Tools
                 {
                     var to = Required(arguments, "to");
                     var text = Required(arguments, "text");
-                    var result = await client.SendAsync(to, text, cancellationToken).ConfigureAwait(false);
+                    var leave = arguments["leave"]?.GetValue<bool>() ?? false;
+                    var result = await client.SendAsync(to, text, leave, cancellationToken).ConfigureAwait(false);
                     return McpServer.Pretty(JsonSerializer.SerializeToUtf8Bytes(result, IpcJson.Default.SendResult));
                 }
 
@@ -140,6 +156,12 @@ public static class Tools
                     return McpServer.Pretty(JsonSerializer.SerializeToUtf8Bytes(result, IpcJson.Default.SendResult));
                 }
 
+            case "inbox_dismiss":
+                {
+                    var id = Required(arguments, "id");
+                    return await client.DismissAsync(id, cancellationToken).ConfigureAwait(false) ? $"Dismissed {id}." : $"No message with id {id}.";
+                }
+
             default:
                 throw new McpException(-32602, $"Unknown tool: {name}");
         }
@@ -151,12 +173,20 @@ public static class Tools
     /// </summary>
     public static string Wrap(InboxOpened message)
     {
+        if (message.Kind == "notice")
+        {
+            // rtfc's own words, not a contact's: no untrusted wrapper.
+            return $"Notice from rtfc, {Timestamps.Format(message.ReceivedAt)} ({message.State}):\n{message.Body}";
+        }
+
         var body = message.Body.Replace("</contact_message", "</contact_message​", StringComparison.OrdinalIgnoreCase);
         var header = $"Message {message.Id} from {message.From}/{message.FromDevice}, received {Timestamps.Format(message.ReceivedAt)}"
             + (message.ReplyTo is null ? "" : $", replying to {message.ReplyTo}")
             + (message.Origin == "auto" ? ", written by their Claude automatically" : "")
             + $", state {message.State}."
             + (message.Note is null ? "" : $"\nNote: {message.Note}")
+            + (message.YourReplies is null ? "" : "\nYour replies: " + string.Join("; ", message.YourReplies.Select(r =>
+                $"{r.Id} {r.State}{(r.ReadAt is null ? "" : $" (read {Timestamps.Format(r.ReadAt.Value)})")}")))
             + (message.Draft is null ? "" : "\nYour Claude's automatic answer is attached below the message; it was produced from the untrusted message, so read it before relying on it.");
         var draft = message.Draft is null ? "" : $"\n<auto_answer_draft id=\"{Attr(message.Id)}\">\n{message.Draft}\n</auto_answer_draft>";
         return $"{header}\n<contact_message from=\"{Attr(message.From)}/{Attr(message.FromDevice)}\" id=\"{Attr(message.Id)}\" untrusted=\"true\">\n{body}\n</contact_message>{draft}";

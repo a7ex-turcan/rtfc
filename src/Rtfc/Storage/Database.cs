@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -71,17 +71,35 @@ public sealed class Database : IDisposable
         lock (_lock)
         {
             using var transaction = _connection.BeginTransaction();
-            if (SchemaVersion < 2)
+            var version = SchemaVersion;
+            if (version < 2)
             {
                 // v2 (Phase 2, auto-answer): a note and an attempt counter per message.
                 Execute("ALTER TABLE inbox ADD COLUMN auto_note TEXT");
                 Execute("ALTER TABLE inbox ADD COLUMN auto_attempts INTEGER NOT NULL DEFAULT 0");
                 Execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'");
+                version = 2;
+            }
+
+            if (version < 3)
+            {
+                // v3 (Phase 4, async): the note serves every kind of message, and what was sent is recorded. The `sent` table itself
+                // was already created by schema.sql, which runs first.
+                Execute("ALTER TABLE inbox RENAME COLUMN auto_note TO note");
+                Execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
         }
     }
+
+    // ---- meta ----
+
+    public string? GetMeta(string key) => Scalar<string>("SELECT value FROM meta WHERE key = $key", ("$key", key));
+
+    public void SetMeta(string key, string value) => Execute(
+        "INSERT INTO meta (key, value) VALUES ($key, $value) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        ("$key", key), ("$value", value));
 
     // ---- self ----
 
@@ -211,52 +229,60 @@ public sealed class Database : IDisposable
             """
             INSERT OR IGNORE INTO inbox (id, to_device, kind, from_person, from_device, seq, reply_to, origin, hop, thread,
                                          body, sent_at, received_at, updated_at, state, handled_by, handled_at,
-                                         draft, auto_note, auto_attempts)
-            VALUES ($id, $to_device, 'person', $from_person, $from_device, $seq, $reply_to, $origin, $hop, $thread,
+                                         draft, note, auto_attempts)
+            VALUES ($id, $to_device, $kind, $from_person, $from_device, $seq, $reply_to, $origin, $hop, $thread,
                     $body, $sent_at, $received_at, $updated_at, $state, $handled_by, $handled_at,
-                    $draft, $auto_note, $auto_attempts)
+                    $draft, $note, $auto_attempts)
             """,
             ("$id", m.Id), ("$to_device", m.ToDevice), ("$from_person", m.FromPerson), ("$from_device", m.FromDevice),
             ("$seq", m.Seq), ("$reply_to", m.ReplyTo), ("$origin", m.Origin), ("$hop", (long)m.Hop), ("$thread", m.Thread),
             ("$body", m.Body), ("$sent_at", Time(m.SentAt)), ("$received_at", Timestamps.Format(m.ReceivedAt)),
             ("$updated_at", Timestamps.Format(m.UpdatedAt)), ("$state", m.State), ("$handled_by", m.HandledBy),
-            ("$handled_at", Time(m.HandledAt)), ("$draft", m.Draft), ("$auto_note", m.AutoNote), ("$auto_attempts", (long)m.AutoAttempts));
+            ("$handled_at", Time(m.HandledAt)), ("$draft", m.Draft), ("$note", m.Note), ("$auto_attempts", (long)m.AutoAttempts), ("$kind", m.Kind));
         return affected == 1;
     }
 
     private const string MessageColumns =
-        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, auto_note, auto_attempts";
+        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, note, auto_attempts, kind";
+
+    /// <summary>The kinds the messaging surface shows: people's messages and rtfc's own notices. Source items (spec §10) are Phase 8.</summary>
+    private const string MessageKinds = "kind IN ('person', 'notice')";
 
     private static InboxMessage ReadMessage(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt64(4), StringOrNull(r, 5), r.GetString(6),
         (int)r.GetInt64(7), StringOrNull(r, 8), r.GetString(9), Timestamps.ParseOrNull(StringOrNull(r, 10)),
         Timestamps.Parse(r.GetString(11)), Timestamps.Parse(r.GetString(12)), r.GetString(13), StringOrNull(r, 14),
-        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18));
+        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18), r.GetString(19));
 
     public InboxMessage? GetMessage(string id) =>
-        QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE id = $id AND kind = 'person'", ReadMessage, ("$id", id));
+        QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE id = $id AND {MessageKinds}", ReadMessage, ("$id", id));
 
     /// <summary>Person messages, oldest first. <paramref name="state"/> null means every state.</summary>
     public IReadOnlyList<InboxMessage> ListMessages(string? state) => state is null
-        ? Query($"SELECT {MessageColumns} FROM inbox WHERE kind = 'person' ORDER BY received_at, seq", ReadMessage)
-        : Query($"SELECT {MessageColumns} FROM inbox WHERE kind = 'person' AND state = $state ORDER BY received_at, seq", ReadMessage, ("$state", state));
+        ? Query($"SELECT {MessageColumns} FROM inbox WHERE {MessageKinds} ORDER BY received_at, seq", ReadMessage)
+        : Query($"SELECT {MessageColumns} FROM inbox WHERE {MessageKinds} AND state = $state ORDER BY received_at, seq", ReadMessage, ("$state", state));
 
     public void SetMessageState(string id, string state, string? handledBy, DateTimeOffset now) => Execute(
-        """
+        $"""
         UPDATE inbox SET state = $state, updated_at = $now,
           handled_by = CASE WHEN $handled_by IS NULL THEN handled_by ELSE $handled_by END,
           handled_at = CASE WHEN $handled_by IS NULL THEN handled_at ELSE $now END
-        WHERE id = $id AND kind = 'person'
+        WHERE id = $id AND {MessageKinds}
         """,
         ("$state", state), ("$now", Timestamps.Format(now)), ("$handled_by", handledBy), ("$id", id));
 
+    /// <summary>Replaces the human-facing note on a message without touching its state.</summary>
+    public void SetMessageNote(string id, string? note, DateTimeOffset now) => Execute(
+        $"UPDATE inbox SET note = $note, updated_at = $now WHERE id = $id AND {MessageKinds}",
+        ("$note", note), ("$now", Timestamps.Format(now)), ("$id", id));
+
     /// <summary>Moves a message through the auto-answer states, optionally recording a note, a draft and one more attempt.</summary>
     public void SetAutoState(string id, string state, string? note, string? draft, bool countAttempt, DateTimeOffset now) => Execute(
-        """
-        UPDATE inbox SET state = $state, updated_at = $now, auto_note = $note,
+        $"""
+        UPDATE inbox SET state = $state, updated_at = $now, note = $note,
           draft = CASE WHEN $draft IS NULL THEN draft ELSE $draft END,
           auto_attempts = auto_attempts + $attempt
-        WHERE id = $id AND kind = 'person'
+        WHERE id = $id AND {MessageKinds}
         """,
         ("$state", state), ("$now", Timestamps.Format(now)), ("$note", note), ("$draft", draft), ("$attempt", countAttempt ? 1L : 0L), ("$id", id));
 
@@ -270,6 +296,93 @@ public sealed class Database : IDisposable
     public int CountReceivedFrom(string fromDevice, DateTimeOffset since) => (int)Scalar<long>(
         "SELECT COUNT(*) FROM inbox WHERE kind = 'person' AND from_device = $device AND received_at > $since",
         ("$device", fromDevice), ("$since", Timestamps.Format(since)));
+
+    // ---- outbox (spec §7.2) ----
+
+    public void InsertOutbox(OutboxRow o) => Execute(
+        """
+        INSERT INTO outbox (id, to_person, to_device, kind, envelope, created_at, expires_at, attempts, state)
+        VALUES ($id, $to_person, $to_device, $kind, $envelope, $created_at, $expires_at, $attempts, $state)
+        """,
+        ("$id", o.Id), ("$to_person", o.ToPerson), ("$to_device", o.ToDevice), ("$kind", o.Kind), ("$envelope", o.Envelope),
+        ("$created_at", Timestamps.Format(o.CreatedAt)), ("$expires_at", Timestamps.Format(o.ExpiresAt)), ("$attempts", (long)o.Attempts), ("$state", o.State));
+
+    private const string OutboxColumns = "id, to_person, to_device, kind, envelope, created_at, expires_at, attempts, state";
+
+    private static OutboxRow ReadOutbox(SqliteDataReader r) => new(
+        r.GetString(0), r.GetString(1), StringOrNull(r, 2), r.GetString(3), r.GetString(4), Timestamps.Parse(r.GetString(5)),
+        Timestamps.Parse(r.GetString(6)), (int)r.GetInt64(7), r.GetString(8));
+
+    public OutboxRow? GetOutbox(string id) =>
+        QuerySingle($"SELECT {OutboxColumns} FROM outbox WHERE id = $id", ReadOutbox, ("$id", id));
+
+    /// <summary>Oldest first. <paramref name="state"/> null means every state.</summary>
+    public IReadOnlyList<OutboxRow> ListOutbox(string? state) => state is null
+        ? Query($"SELECT {OutboxColumns} FROM outbox ORDER BY created_at", ReadOutbox)
+        : Query($"SELECT {OutboxColumns} FROM outbox WHERE state = $state ORDER BY created_at", ReadOutbox, ("$state", state));
+
+    public void SetOutboxState(string id, string state, bool countAttempt) => Execute(
+        "UPDATE outbox SET state = $state, attempts = attempts + $attempt WHERE id = $id",
+        ("$state", state), ("$attempt", countAttempt ? 1L : 0L), ("$id", id));
+
+    public int CountOutbox(string state, string? toPerson = null) => (int)(toPerson is null
+        ? Scalar<long>("SELECT COUNT(*) FROM outbox WHERE state = $state", ("$state", state))
+        : Scalar<long>("SELECT COUNT(*) FROM outbox WHERE state = $state AND to_person = $person", ("$state", state), ("$person", toPerson)));
+
+    // ---- sent ----
+
+    public void InsertSent(SentRow s) => Execute(
+        """
+        INSERT OR REPLACE INTO sent (id, to_person, to_device, thread, reply_to, origin, kind, body, sent_at, delivered_at, read_at, expires_at, state)
+        VALUES ($id, $to_person, $to_device, $thread, $reply_to, $origin, $kind, $body, $sent_at, $delivered_at, $read_at, $expires_at, $state)
+        """,
+        ("$id", s.Id), ("$to_person", s.ToPerson), ("$to_device", s.ToDevice), ("$thread", s.Thread), ("$reply_to", s.ReplyTo), ("$origin", s.Origin),
+        ("$kind", s.Kind), ("$body", s.Body), ("$sent_at", Timestamps.Format(s.SentAt)), ("$delivered_at", Time(s.DeliveredAt)), ("$read_at", Time(s.ReadAt)),
+        ("$expires_at", Time(s.ExpiresAt)), ("$state", s.State));
+
+    private const string SentColumns = "id, to_person, to_device, thread, reply_to, origin, kind, body, sent_at, delivered_at, read_at, expires_at, state";
+
+    private static SentRow ReadSent(SqliteDataReader r) => new(
+        r.GetString(0), r.GetString(1), StringOrNull(r, 2), StringOrNull(r, 3), StringOrNull(r, 4), r.GetString(5), r.GetString(6), r.GetString(7),
+        Timestamps.Parse(r.GetString(8)), Timestamps.ParseOrNull(StringOrNull(r, 9)), Timestamps.ParseOrNull(StringOrNull(r, 10)),
+        Timestamps.ParseOrNull(StringOrNull(r, 11)), r.GetString(12));
+
+    public SentRow? GetSent(string id) => QuerySingle($"SELECT {SentColumns} FROM sent WHERE id = $id", ReadSent, ("$id", id));
+
+    /// <summary>Everything sent in answer to one inbox message, oldest first.</summary>
+    public IReadOnlyList<SentRow> ListSentReplies(string replyTo) =>
+        Query($"SELECT {SentColumns} FROM sent WHERE reply_to = $reply_to ORDER BY sent_at", ReadSent, ("$reply_to", replyTo));
+
+    public void SetSentState(string id, string state, DateTimeOffset? deliveredAt, DateTimeOffset? readAt) => Execute(
+        """
+        UPDATE sent SET state = $state,
+          delivered_at = CASE WHEN $delivered_at IS NULL THEN delivered_at ELSE $delivered_at END,
+          read_at = CASE WHEN $read_at IS NULL THEN read_at ELSE $read_at END
+        WHERE id = $id
+        """,
+        ("$state", state), ("$delivered_at", Time(deliveredAt)), ("$read_at", Time(readAt)), ("$id", id));
+
+    // ---- retention (spec §13) ----
+
+    /// <summary>Removes what nobody needs any more: handled messages, finished sent rows and finished outbox rows older than the given instants. Returns how many rows went.</summary>
+    public int Prune(DateTimeOffset handledBefore, DateTimeOffset outboxBefore)
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            var removed = Execute(
+                $"DELETE FROM inbox WHERE {MessageKinds} AND state IN ('answered', 'dismissed', 'auto_done') AND updated_at < $before",
+                ("$before", Timestamps.Format(handledBefore)));
+            removed += Execute(
+                "DELETE FROM sent WHERE state IN ('delivered', 'read', 'expired') AND sent_at < $before",
+                ("$before", Timestamps.Format(handledBefore)));
+            removed += Execute(
+                "DELETE FROM outbox WHERE state IN ('delivered', 'expired') AND created_at < $before",
+                ("$before", Timestamps.Format(outboxBefore)));
+            transaction.Commit();
+            return removed;
+        }
+    }
 
     // ---- sequence numbers ----
 

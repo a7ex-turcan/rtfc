@@ -68,7 +68,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"Auto: de
 EOS
 chmod +x "$FAKE"
 for h in "$A" "$B"; do
-  jq --arg c "$FAKE" '. + {claudePath: $c}' "$h/config.json" > "$h/config.tmp" && mv "$h/config.tmp" "$h/config.json"
+  jq --arg c "$FAKE" '. + {claudePath: $c, outbox: {pumpIntervalSeconds: 2}}' "$h/config.json" > "$h/config.tmp" && mv "$h/config.tmp" "$h/config.json"
 done
 
 step "ensure daemons (detached, idle-exit mode, exactly as the hook does it)"
@@ -146,6 +146,43 @@ expect "refused as not a contact" "$out" 'not_a_contact'
 TOKEN=$(RTFC_HOME="$A" "$BIN" invite | sed -n 3p)
 out=$(RTFC_HOME="$B" "$BIN" accept "$TOKEN"); expect "re-accepting refreshes the contact" "$out" "already a contact"
 out=$(RTFC_HOME="$A" "$BIN" contacts); expect "sasha is active again" "$out" "^sasha +active"
+
+step "async: sasha goes away, alex's reply and a left message wait, sasha comes back"
+out=$(RTFC_HOME="$B" "$BIN" away on); expect "sasha is away" "$out" "Away: nothing listens"
+out=$(RTFC_HOME="$B" "$BIN" statusline </dev/null); expect "sasha's status line says so" "$out" "💤 away"
+out=$(mcp "$A" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"inbox_reply\",\"arguments\":{\"id\":\"$ID\",\"text\":\"Second thought: also alert on-call.\"}}}")
+expect "the reply is queued" "$out" 'queued'
+out=$(mcp "$A" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send","arguments":{"to":"sasha","text":"Left for you.","leave":true}}}')
+expect "a message left for her is queued" "$out" 'queued'
+out=$(mcp "$A" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send","arguments":{"to":"sasha","text":"Not left."}}}')
+expect "a plain send is not queued" "$out" 'nobody_home'
+out=$(RTFC_HOME="$A" "$BIN" outbox); expect "the reply waits" "$out" "reply +to sasha"; expect "the message waits" "$out" "message +to sasha"
+out=$(RTFC_HOME="$A" "$BIN" statusline </dev/null); expect "alex's status line counts the outbox" "$out" "📤 2"
+out=$(RTFC_HOME="$A" "$BIN" inbox --all); expect "alex's copy notes the queued reply" "$out" "your reply: queued"
+out=$(RTFC_HOME="$B" "$BIN" away off); expect "sasha is back" "$out" "Back: listening again"
+inbox=""
+for i in $(seq 1 30); do
+  inbox=$(RTFC_HOME="$B" "$BIN" inbox)
+  printf '%s' "$inbox" | grep -q "Second thought" && printf '%s' "$inbox" | grep -q "Left for you" && break
+  sleep 1
+done
+expect "the queued reply arrived" "$inbox" "Second thought: also alert on-call"
+expect "the left message arrived" "$inbox" "Left for you"
+for i in $(seq 1 10); do RTFC_HOME="$A" "$BIN" outbox | grep -q "empty" && break; sleep 1; done
+out=$(RTFC_HOME="$A" "$BIN" outbox); expect "alex's outbox drained" "$out" "The outbox is empty"
+out=$(RTFC_HOME="$A" "$BIN" inbox --all); expect "alex's copy notes the delivery" "$out" "your reply: delivered"
+
+step "receipts: sasha opens the reply, alex learns it was read"
+RID=$(RTFC_HOME="$B" "$BIN" inbox | grep "Second thought" | awk '{print $1}')
+RTFC_HOME="$B" "$BIN" inbox open "$RID" >/dev/null
+for i in $(seq 1 10); do RTFC_HOME="$A" "$BIN" inbox --all | grep -q "your reply: read" && break; sleep 1; done
+out=$(RTFC_HOME="$A" "$BIN" inbox --all); expect "alex sees the reply was read" "$out" "your reply: read"
+
+step "rename and receipts settings"
+out=$(RTFC_HOME="$A" "$BIN" rename sasha sash); expect "renamed" "$out" "sasha is now sash to you"
+out=$(RTFC_HOME="$A" "$BIN" contacts); expect "contacts show the new name" "$out" "^sash +active"
+out=$(RTFC_HOME="$A" "$BIN" receipts sash off); expect "receipts off" "$out" "is not told"
+out=$(RTFC_HOME="$A" "$BIN" contacts); expect "contacts show no receipts" "$out" "no receipts"
 
 step "nobody home: stop alex, sasha sends"
 RTFC_HOME="$A" "$BIN" daemon stop >/dev/null; sleep 1

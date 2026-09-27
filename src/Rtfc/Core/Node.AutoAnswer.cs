@@ -174,16 +174,23 @@ public sealed partial class Node
             contact, deviceName: null, replyId, message.Thread ?? message.Id, replyTo: id, message.Hop + 1, answer, MessageOrigin.Auto, cancellationToken)
             .ConfigureAwait(false);
 
-        if (delivery.Status is SendStatus.Delivered or SendStatus.Partial)
+        if (delivery.Status == SendStatus.NobodyHome)
         {
-            _db.SetAutoState(id, InboxState.AutoDone, note: null, draft: answer, countAttempt: false, _clock.GetUtcNow());
+            // They left while the answer was being written: it waits in the outbox like any reply (spec §7.2).
+            delivery = Queue(contact, deviceId: null, replyId, message.Thread ?? message.Id, replyTo: id, message.Hop + 1, answer, MessageOrigin.Auto);
+        }
+
+        if (delivery.Status is SendStatus.Delivered or SendStatus.Partial or SendStatus.Queued)
+        {
+            var note = delivery.Status == SendStatus.Queued
+                ? $"Answered automatically; {contact.Handle} was not home, so the answer waits in the outbox (until {Timestamps.Format(delivery.ExpiresAt!.Value)})."
+                : null;
+            _db.SetAutoState(id, InboxState.AutoDone, note, draft: answer, countAttempt: false, _clock.GetUtcNow());
             _db.SetMessageState(id, InboxState.AutoDone, Self.DeviceId, _clock.GetUtcNow());
         }
         else
         {
-            // The answer exists but nobody was there to take it. Park it for the human, draft attached; the outbox (Phase 4) will carry these.
-            _db.SetAutoState(id, InboxState.Parked,
-                $"Auto-answered, but {contact.Handle} was not home when the answer was ready ({delivery.Status}). The draft is attached.",
+            _db.SetAutoState(id, InboxState.AutoFailed, $"Auto-answered, but delivery to {contact.Handle} failed ({delivery.Reason ?? delivery.Status}). The draft is attached.",
                 draft: answer, countAttempt: false, _clock.GetUtcNow());
         }
     }

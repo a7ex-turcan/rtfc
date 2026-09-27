@@ -64,8 +64,33 @@ public sealed class DaemonClient : IDisposable
     public Task<ContactView[]> ContactsAsync(bool probe, CancellationToken cancellationToken) =>
         GetAsync($"{IpcRoutes.Contacts}?probe={(probe ? "true" : "false")}", IpcJson.Default.ContactViewArray, cancellationToken);
 
-    public Task<SendResult> SendAsync(string to, string text, CancellationToken cancellationToken) =>
-        PostAsync(IpcRoutes.Send, new SendRequest(to, text), IpcJson.Default.SendRequest, IpcJson.Default.SendResult, cancellationToken);
+    public Task<SendResult> SendAsync(string to, string text, bool leave, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.Send, new SendRequest(to, text, leave), IpcJson.Default.SendRequest, IpcJson.Default.SendResult, cancellationToken);
+
+    /// <summary>False when there is no such message.</summary>
+    public async Task<bool> DismissAsync(string id, CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsync(IpcRoutes.InboxDismiss(id), content: null, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public Task<OutboxView[]> OutboxAsync(CancellationToken cancellationToken) =>
+        GetAsync(IpcRoutes.Outbox, IpcJson.Default.OutboxViewArray, cancellationToken);
+
+    public Task<ManagementResult> AwayAsync(bool on, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.Away, new ToggleRequest(on), IpcJson.Default.ToggleRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    public Task<ManagementResult> RenameAsync(string handle, string newHandle, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.ContactRename(handle), new RenameRequest(newHandle), IpcJson.Default.RenameRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    public Task<ManagementResult> ReceiptsAsync(string handle, bool on, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.ContactReceipts(handle), new ToggleRequest(on), IpcJson.Default.ToggleRequest, IpcJson.Default.ManagementResult, cancellationToken);
 
     public Task<InboxSummary[]> InboxAsync(string state, CancellationToken cancellationToken) =>
         GetAsync($"{IpcRoutes.Inbox}?state={Uri.EscapeDataString(state)}", IpcJson.Default.InboxSummaryArray, cancellationToken);
