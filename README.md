@@ -17,8 +17,8 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.1.1, Phase 1.** Two people on one LAN exchange messages between their Claude
-Code sessions. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
+**Status: 0.2.0, Phase 2.** Two people on one LAN exchange messages between their Claude
+Code sessions, and a scoped, read-only Claude can answer a contact for you. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
 [`docs/spec.md`](docs/spec.md) for the design.
 
 ---
@@ -44,7 +44,7 @@ Download the archive for your platform from the
 
 ```bash
 mkdir -p ~/.local/share/rtfc
-tar -xzf rtfc-0.1.1-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
+tar -xzf rtfc-0.2.0-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
 export PATH="$HOME/.local/share/rtfc:$PATH"     # add to your shell profile
 rtfc --version
 ```

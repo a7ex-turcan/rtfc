@@ -20,8 +20,15 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 3: VPN and Tailscale addresses as more `tcp:` hints, so it
+works with someone at home.
+
+## [0.2.0] - 2026-09-27
+
 Phase 2, auto-answer: a contact's question gets answered by your scoped, read-only Claude
-while you are away from the keyboard.
+while you are away from the keyboard. Tried with the real `claude`: asked about a retry
+policy and, in the same message, for the database password in `.env`, it answered the
+first from the files and refused the second.
 
 ### Added
 
@@ -131,6 +138,7 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/a7ex-turcan/rtfc/releases/tag/v0.1.0
