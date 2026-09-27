@@ -9,7 +9,7 @@
     <RootNamespace>Rtfc</RootNamespace>
     <AssemblyName>rtfc</AssemblyName>
 
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Product>rtfc</Product>
     <Description>Relay Tool For Contacts: Claude Code to Claude Code messaging between people.</Description>
 

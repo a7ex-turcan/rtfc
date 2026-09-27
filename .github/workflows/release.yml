@@ -1,0 +1,158 @@
+name: Release
+
+# Pushing a vX.Y.Z tag builds the release. The tag must match the version declared in the
+# csproj, the plugin manifest and the newest CHANGELOG.md section, or nothing is built.
+# Native AOT binaries are published per platform and the e2e story is run against the
+# binary that ships, because a trimmed build can pass every JIT test and still be wrong
+# (AGENTS.md). GitHub Releases only: there is no NuGet publish, by decision.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the declared version
+        id: check
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          csproj=$(sed -nE 's|.*<Version>([^<]+)</Version>.*|\1|p' src/Rtfc/Rtfc.csproj)
+          plugin=$(jq -r .version plugin/.claude-plugin/plugin.json)
+          changelog=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '[]# ')
+          echo "tag=$tag csproj=$csproj plugin=$plugin changelog=$changelog"
+          [ "$tag" = "$csproj" ] && [ "$tag" = "$plugin" ] && [ "$tag" = "$changelog" ] || {
+            echo "The tag does not match the version in Rtfc.csproj, plugin.json and CHANGELOG.md."; exit 1; }
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      # The release notes are the changelog section for this version, verbatim.
+      - name: Extract release notes
+        run: |
+          set -euo pipefail
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          [ -s notes.md ] || { echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}."; exit 1; }
+          cat notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Native AOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Publish (Native AOT)
+        run: dotnet publish src/Rtfc -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o publish
+
+      - name: The published binary runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la publish
+          ./publish/rtfc --version
+
+      # The whole Phase 1 story, against the binary that ships. Not on Windows: the script
+      # is bash with Unix socket paths; the Windows binary is covered by the unit tests.
+      - name: End to end against the published binary
+        if: runner.os != 'Windows'
+        run: RTFC_BIN="$PWD/publish/rtfc" scripts/e2e.sh
+
+      - name: Archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          name="rtfc-$version-${{ matrix.rid }}"
+          mkdir -p "stage/$name" out
+          # The binary and its native SQLite library; no symbol files.
+          find publish -maxdepth 1 -type f ! -name '*.dbg' ! -name '*.pdb' ! -name '*.dsym' -exec cp {} "stage/$name/" \;
+          cp LICENSE README.md CHANGELOG.md "stage/$name/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd stage && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)
+          else
+            tar -C stage -czf "out/$name.tar.gz" "$name"
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.rid }}
+          path: out/*
+
+  pack:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # The framework-dependent tool, for people with the SDK:
+      # dotnet tool install -g rtfc --add-source <directory holding the nupkg>
+      - name: Pack the dotnet tool
+        run: dotnet pack src/Rtfc -c Release -o out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: out/*.nupkg
+
+  release:
+    needs: [version, build, pack]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          ls -R artifacts
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "rtfc $version" \
+            --notes-file artifacts/notes/notes.md \
+            artifacts/binary-*/* artifacts/nupkg/*

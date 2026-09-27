@@ -17,7 +17,7 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.1.0, Phase 1.** Two people on one LAN exchange messages between their Claude
+**Status: 0.1.1, Phase 1.** Two people on one LAN exchange messages between their Claude
 Code sessions. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
 [`docs/spec.md`](docs/spec.md) for the design.
 
@@ -29,29 +29,37 @@ Code sessions. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not
 
 On **both** machines:
 
-- The [.NET 10 SDK](https://dotnet.microsoft.com/download).
 - [Claude Code](https://claude.com/claude-code) with plugin support (2.1 or later).
 - A network path between them: the same office LAN, where either hostnames resolve or
   you know the IP addresses. TCP port **47821** must be reachable (configurable).
 
+No .NET installation is needed: releases are native binaries.
+
 ### 1. Install the `rtfc` command
 
-There are no published packages yet, so build it from the repo:
+Download the archive for your platform from the
+[latest release](https://github.com/a7ex-turcan/rtfc/releases/latest) (`linux-x64`,
+`osx-arm64` or `win-x64`), extract it somewhere permanent, and put that directory on your
+`PATH`. Keep the two files together: `rtfc` loads its SQLite library from its own directory.
 
 ```bash
-git clone https://github.com/a7ex-turcan/rtfc.git
-cd rtfc
-dotnet pack src/Rtfc -c Release -o artifacts
-dotnet tool install -g rtfc --add-source ./artifacts
+mkdir -p ~/.local/share/rtfc
+tar -xzf rtfc-0.1.1-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
+export PATH="$HOME/.local/share/rtfc:$PATH"     # add to your shell profile
 rtfc --version
 ```
 
-`dotnet tool install` puts `rtfc` in `~/.dotnet/tools`; make sure that directory is on
-your `PATH` (the installer tells you if it isn't). The plugin calls `rtfc` from `PATH`, so
-this matters.
+On macOS, a binary downloaded with a browser is quarantined and Gatekeeper refuses it
+because it isn't signed; `xattr -dr com.apple.quarantine ~/.local/share/rtfc` clears that
+(a `curl` download isn't quarantined). On Windows, extract the zip and add the folder to
+`Path`.
 
-To upgrade later: pull, `dotnet pack` again, then `dotnet tool uninstall -g rtfc` and
-install again.
+The plugin calls `rtfc` from `PATH`, so this matters. To upgrade, extract the new release
+over the old one.
+
+If you have the .NET 10 SDK and prefer the framework-dependent tool, each release also
+carries the nupkg: `dotnet tool install -g rtfc --add-source <folder with the nupkg>`. And
+`dotnet pack src/Rtfc -c Release -o artifacts` builds it from source.
 
 ### 2. Create your identity
 
@@ -204,7 +212,7 @@ they never touch your real one.
 | The status line never changes | `refreshInterval` set? `rtfc statusline` prints nothing when nothing is parked; try `cat ~/.claude/rtfc/status.json`. |
 | A message shows an odd `</contact_message​>` inside | Someone tried to close the untrusted wrapper from inside a message. It was defused; treat the message with suspicion. |
 
-### Limitations in 0.1.0
+### Limitations in 0.1.1
 
 - One device per person. Multi-device comes in Phase 5.
 - Replies need the sender to be home. The outbox that delivers them later is Phase 4.
@@ -244,6 +252,11 @@ claude plugin validate plugin
 CI runs the build and tests on Linux, macOS and Windows, checks formatting, validates the
 plugin's JSON, checks the version is declared consistently, and fails if a skill that runs
 `rtfc` can be invoked by the model or holds a blanket `Bash(rtfc:*)` permission.
+
+A release is a `vX.Y.Z` tag. The release workflow checks the tag against the declared
+version, publishes Native AOT binaries per platform, runs `scripts/e2e.sh` against the
+binary that ships, and creates the GitHub Release with the changelog section as notes.
+See `CHANGELOG.md` for the versioning rules.
 
 | Path | What |
 | --- | --- |

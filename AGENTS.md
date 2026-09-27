@@ -139,7 +139,10 @@ to use with `RTFC_HOME` set.
 ## Engineering rules
 
 - **AOT-ready (§16).** `IsAotCompatible` is on and warnings are errors, so a trim or AOT
-  analyzer warning fails the build. Use System.Text.Json with source-generated
+  analyzer warning fails the build. The analyzers are not the whole story: a collection
+  expression on a `JsonArray` passed them and failed the real publish. Before a release,
+  or after touching JSON, `dotnet publish src/Rtfc -c Release -r osx-arm64
+  -p:PublishAot=true -o /some/dir` and run `RTFC_BIN=/some/dir/rtfc scripts/e2e.sh`. Use System.Text.Json with source-generated
   `JsonSerializerContext`s, never reflection-based serialization. No EF Core: use
   `Microsoft.Data.Sqlite` with hand-written SQL, or Dapper.AOT. Check that a package is AOT
   compatible before adding it. Don't suppress an AOT warning to get a green build; raise
@@ -290,7 +293,11 @@ disagree: `<Version>` in `src/Rtfc/Rtfc.csproj`, `version` in
 the changelog with the `[Unreleased]` items moved into it and the link references at the
 bottom updated. Semver: patch for fixes, minor for additive features, major for a breaking
 change to the CLI, the MCP tools or the wire protocol; before 1.0, minor may break. Tag it
-`vX.Y.Z` after merging. Don't bump the version for ordinary commits.
+`vX.Y.Z` after merging: the tag push runs `.github/workflows/release.yml`, which refuses a
+tag that doesn't match the declared version, publishes Native AOT binaries per platform,
+runs `scripts/e2e.sh` against them, and creates the GitHub Release. GitHub Releases only:
+no NuGet and no plugin marketplace, by the owner's decision (September 2026). Don't bump
+the version for ordinary commits.
 
 ## Where things are
 
@@ -308,5 +315,6 @@ not into this repo. The debounced file watcher that §10.2 points at is rtfm's
 | `plugin/` | Plugin wiring: manifest, `.mcp.json`, the SessionStart hook, and one skill per slash command. §16 says it ships from a separate marketplace repo; it lives here until there is something to ship |
 | `scripts/e2e.sh` | The manual smoke test |
 | `src/Rtfc/` | `Identity/` keys and certificates · `Storage/` SQLite · `Protocol/` frames · `Net/` transport and TLS sessions · `Core/` the node · `Daemon/` IPC host, client, launcher · `Mcp/` the stdio server · `Cli/` the commands |
-| `.github/workflows/ci.yml` | Build and test on three OSes, the formatting check, and plugin JSON and boundary checks |
+| `.github/workflows/ci.yml` | Build and test on three OSes, the formatting check, and plugin JSON, version and boundary checks |
+| `.github/workflows/release.yml` | On a `vX.Y.Z` tag: version gate, Native AOT binaries, e2e against them, the GitHub Release |
 | `global.json` | Pins the SDK and opts `dotnet test` into Microsoft.Testing.Platform |

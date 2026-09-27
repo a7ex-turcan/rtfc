@@ -12,13 +12,30 @@ speaking another version, so two people must run compatible releases.
 The version is declared in three places that must move together, and CI checks that they
 do: `<Version>` in `src/Rtfc/Rtfc.csproj` (the `rtfc` command, `rtfc --version`, and the MCP
 server's `serverInfo.version`), `version` in `plugin/.claude-plugin/plugin.json`, and the
-newest section below. Releases are tagged `vX.Y.Z`. There is no release workflow yet:
-packages are built locally with `dotnet pack`.
+newest section below. Pushing a `vX.Y.Z` tag runs the release workflow, which checks the
+tag against those three, builds Native AOT binaries for Linux, macOS and Windows, runs the
+end-to-end story against the binary that ships, and publishes a
+[GitHub Release](https://github.com/a7ex-turcan/rtfc/releases) with the matching section
+below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Next is Phase 2, auto-answer: a contact's question answered by a scoped, read-only,
-headless Claude run while you are away from the keyboard, plus `remove` and `block`.
+Nothing yet. Next is Phase 2, auto-answer: a contact's question answered by a scoped,
+read-only, headless Claude run while you are away from the keyboard, plus `remove` and
+`block`.
+
+## [0.1.1] - 2026-09-27
+
+The first release with downloadable binaries, so nobody has to compile it.
+
+### Added
+
+- **Releases on GitHub.** Pushing a `vX.Y.Z` tag builds Native AOT binaries for
+  `linux-x64`, `osx-arm64` and `win-x64`, runs the end-to-end story against them, and
+  publishes a GitHub Release with the changelog section as notes and the archives (plus
+  the dotnet-tool package) as assets. The tag must match the declared version.
+- `scripts/e2e.sh` checks every step and exits non-zero when the story doesn't hold, so
+  it can gate a release.
 
 ### Fixed
 
@@ -79,5 +96,6 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/a7ex-turcan/rtfc/releases/tag/v0.1.0
