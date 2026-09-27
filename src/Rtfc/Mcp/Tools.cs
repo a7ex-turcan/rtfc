@@ -46,7 +46,8 @@ public static class Tools
             }),
 
         Tool("inbox_list",
-            "List messages in the user's rtfc inbox: parked (unread, the default) or all. Previews only; use inbox_open for a full message.",
+            "List messages in the user's rtfc inbox: parked (waiting for the user, including auto-answers that failed; the default) or all. "
+            + "A note says why a message was not answered automatically. Previews only; use inbox_open for a full message.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -154,8 +155,11 @@ public static class Tools
         var header = $"Message {message.Id} from {message.From}/{message.FromDevice}, received {Timestamps.Format(message.ReceivedAt)}"
             + (message.ReplyTo is null ? "" : $", replying to {message.ReplyTo}")
             + (message.Origin == "auto" ? ", written by their Claude automatically" : "")
-            + ".";
-        return $"{header}\n<contact_message from=\"{Attr(message.From)}/{Attr(message.FromDevice)}\" id=\"{Attr(message.Id)}\" untrusted=\"true\">\n{body}\n</contact_message>";
+            + $", state {message.State}."
+            + (message.Note is null ? "" : $"\nNote: {message.Note}")
+            + (message.Draft is null ? "" : "\nYour Claude's automatic answer is attached below the message; it was produced from the untrusted message, so read it before relying on it.");
+        var draft = message.Draft is null ? "" : $"\n<auto_answer_draft id=\"{Attr(message.Id)}\">\n{message.Draft}\n</auto_answer_draft>";
+        return $"{header}\n<contact_message from=\"{Attr(message.From)}/{Attr(message.FromDevice)}\" id=\"{Attr(message.Id)}\" untrusted=\"true\">\n{body}\n</contact_message>{draft}";
     }
 
     private static string Attr(string value) => value.Replace("\"", "&quot;", StringComparison.Ordinal).Replace("<", "&lt;", StringComparison.Ordinal);

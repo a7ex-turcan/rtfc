@@ -36,6 +36,7 @@ public sealed class Database : IDisposable
             database.Execute("PRAGMA busy_timeout = 5000;");
             database.Execute("PRAGMA foreign_keys = ON;");
             database.Execute(Schema.Value);
+            database.Migrate();
             return database;
         }
         catch
@@ -55,9 +56,32 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
+    public const int CurrentSchemaVersion = 2;
+
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
         System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Brings an older database up to <see cref="CurrentSchemaVersion"/>. schema.sql creates
+    /// the current shape for new files; this is for files that already existed.
+    /// </summary>
+    private void Migrate()
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            if (SchemaVersion < 2)
+            {
+                // v2 (Phase 2, auto-answer): a note and an attempt counter per message.
+                Execute("ALTER TABLE inbox ADD COLUMN auto_note TEXT");
+                Execute("ALTER TABLE inbox ADD COLUMN auto_attempts INTEGER NOT NULL DEFAULT 0");
+                Execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'");
+            }
+
+            transaction.Commit();
+        }
+    }
 
     // ---- self ----
 
@@ -186,26 +210,28 @@ public sealed class Database : IDisposable
         var affected = Execute(
             """
             INSERT OR IGNORE INTO inbox (id, to_device, kind, from_person, from_device, seq, reply_to, origin, hop, thread,
-                                         body, sent_at, received_at, updated_at, state, handled_by, handled_at)
+                                         body, sent_at, received_at, updated_at, state, handled_by, handled_at,
+                                         draft, auto_note, auto_attempts)
             VALUES ($id, $to_device, 'person', $from_person, $from_device, $seq, $reply_to, $origin, $hop, $thread,
-                    $body, $sent_at, $received_at, $updated_at, $state, $handled_by, $handled_at)
+                    $body, $sent_at, $received_at, $updated_at, $state, $handled_by, $handled_at,
+                    $draft, $auto_note, $auto_attempts)
             """,
             ("$id", m.Id), ("$to_device", m.ToDevice), ("$from_person", m.FromPerson), ("$from_device", m.FromDevice),
             ("$seq", m.Seq), ("$reply_to", m.ReplyTo), ("$origin", m.Origin), ("$hop", (long)m.Hop), ("$thread", m.Thread),
             ("$body", m.Body), ("$sent_at", Time(m.SentAt)), ("$received_at", Timestamps.Format(m.ReceivedAt)),
             ("$updated_at", Timestamps.Format(m.UpdatedAt)), ("$state", m.State), ("$handled_by", m.HandledBy),
-            ("$handled_at", Time(m.HandledAt)));
+            ("$handled_at", Time(m.HandledAt)), ("$draft", m.Draft), ("$auto_note", m.AutoNote), ("$auto_attempts", (long)m.AutoAttempts));
         return affected == 1;
     }
 
     private const string MessageColumns =
-        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at";
+        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, auto_note, auto_attempts";
 
     private static InboxMessage ReadMessage(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt64(4), StringOrNull(r, 5), r.GetString(6),
         (int)r.GetInt64(7), StringOrNull(r, 8), r.GetString(9), Timestamps.ParseOrNull(StringOrNull(r, 10)),
         Timestamps.Parse(r.GetString(11)), Timestamps.Parse(r.GetString(12)), r.GetString(13), StringOrNull(r, 14),
-        Timestamps.ParseOrNull(StringOrNull(r, 15)));
+        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18));
 
     public InboxMessage? GetMessage(string id) =>
         QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE id = $id AND kind = 'person'", ReadMessage, ("$id", id));
@@ -223,6 +249,27 @@ public sealed class Database : IDisposable
         WHERE id = $id AND kind = 'person'
         """,
         ("$state", state), ("$now", Timestamps.Format(now)), ("$handled_by", handledBy), ("$id", id));
+
+    /// <summary>Moves a message through the auto-answer states, optionally recording a note, a draft and one more attempt.</summary>
+    public void SetAutoState(string id, string state, string? note, string? draft, bool countAttempt, DateTimeOffset now) => Execute(
+        """
+        UPDATE inbox SET state = $state, updated_at = $now, auto_note = $note,
+          draft = CASE WHEN $draft IS NULL THEN draft ELSE $draft END,
+          auto_attempts = auto_attempts + $attempt
+        WHERE id = $id AND kind = 'person'
+        """,
+        ("$state", state), ("$now", Timestamps.Format(now)), ("$note", note), ("$draft", draft), ("$attempt", countAttempt ? 1L : 0L), ("$id", id));
+
+    /// <summary>Auto-answer runs started since <paramref name="since"/>, for one person or for everyone (spec §7.4).</summary>
+    public int CountAutoAnswers(string? fromPerson, DateTimeOffset since) => (int)(fromPerson is null
+        ? Scalar<long>("SELECT COUNT(*) FROM inbox WHERE kind = 'person' AND auto_attempts > 0 AND received_at > $since", ("$since", Timestamps.Format(since)))
+        : Scalar<long>("SELECT COUNT(*) FROM inbox WHERE kind = 'person' AND auto_attempts > 0 AND from_person = $person AND received_at > $since",
+            ("$person", fromPerson), ("$since", Timestamps.Format(since))));
+
+    /// <summary>Messages stored from one device since <paramref name="since"/>, for the inbound rate limit (spec §7.4).</summary>
+    public int CountReceivedFrom(string fromDevice, DateTimeOffset since) => (int)Scalar<long>(
+        "SELECT COUNT(*) FROM inbox WHERE kind = 'person' AND from_device = $device AND received_at > $since",
+        ("$device", fromDevice), ("$since", Timestamps.Format(since)));
 
     // ---- sequence numbers ----
 
@@ -260,7 +307,7 @@ public sealed class Database : IDisposable
 
     // ---- plumbing ----
 
-    private int Execute(string sql, params (string Name, object? Value)[] parameters)
+    internal int Execute(string sql, params (string Name, object? Value)[] parameters)
     {
         lock (_lock)
         {

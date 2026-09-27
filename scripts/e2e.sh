@@ -56,6 +56,21 @@ expect "alex has an identity" "$out" "Created an identity for alex on desktop"
 out=$(RTFC_HOME="$B" "$BIN" init --handle sasha --device laptop --port 47902 --hint-host 127.0.0.1 2>&1)
 expect "sasha has an identity" "$out" "Created an identity for sasha on laptop"
 
+# A stand-in for `claude`: records how it was called and answers like a well-behaved headless
+# run would. The daemons read claudePath from config.json at start.
+FAKE="$E/fake-claude"
+cat > "$FAKE" <<'EOS'
+#!/bin/bash
+printf '%s\n' "$PWD" > "$(dirname "$0")/fake-cwd"
+printf '%s\n' "$@" > "$(dirname "$0")/fake-args"
+cat > /dev/null
+printf '{"type":"result","subtype":"success","is_error":false,"result":"Auto: dead-letter queue after 5 attempts.","num_turns":1}'
+EOS
+chmod +x "$FAKE"
+for h in "$A" "$B"; do
+  jq --arg c "$FAKE" '. + {claudePath: $c}' "$h/config.json" > "$h/config.tmp" && mv "$h/config.tmp" "$h/config.json"
+done
+
 step "ensure daemons (detached, idle-exit mode, exactly as the hook does it)"
 RTFC_HOME="$A" "$BIN" daemon ensure; rc=$?; expect "ensure a" "$rc" "^0$"
 RTFC_HOME="$B" "$BIN" daemon ensure; rc=$?; expect "ensure b" "$rc" "^0$"
@@ -103,6 +118,34 @@ out=$(RTFC_HOME="$A" "$BIN" inbox --all); expect "message marked answered" "$out
 step "sasha: the reply parked"
 out=$(RTFC_HOME="$B" "$BIN" statusline </dev/null); expect "sasha's status line shows one from alex" "$out" "^📨 1 · alex$"
 out=$(RTFC_HOME="$B" "$BIN" inbox); expect "reply parked from alex/desktop" "$out" "parked +alex/desktop: Poison messages go to a dead-letter queue"
+
+step "auto-answer: alex lets a (fake) headless claude answer sasha"
+mkdir -p "$E/scope"; echo "Poison messages go to a dead-letter queue after 5 attempts." > "$E/scope/RETRIES.md"
+out=$(RTFC_HOME="$A" "$BIN" auto sasha headless --scope "$E/scope" 2>&1); expect "auto on" "$out" "answered by a headless, read-only Claude"
+out=$(RTFC_HOME="$A" "$BIN" contacts); expect "contacts show the mode and the scope" "$out" "auto_headless \(.*scope\)"
+out=$(mcp "$B" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send","arguments":{"to":"alex","text":"What is the retry policy?"}}}')
+expect "question delivered" "$out" 'delivered.*alex/desktop'
+answer=""
+for i in $(seq 1 20); do
+  answer=$(RTFC_HOME="$B" "$BIN" inbox)
+  printf '%s' "$answer" | grep -q "Auto: dead-letter" && break
+  sleep 0.5
+done
+expect "sasha received the automatic answer" "$answer" "parked +alex/desktop: Auto: dead-letter queue after 5 attempts"
+out=$(RTFC_HOME="$A" "$BIN" inbox --all); expect "alex's copy is auto_done" "$out" "auto_done +sasha/laptop: What is the retry policy"
+expect "the run was restricted" "$(cat "$E/fake-args")" "^--restricted$"
+expect "the run loaded no MCP servers" "$(cat "$E/fake-args")" "^--strict-mcp-config$"
+expect "the run was confined to the scope" "$(cat "$E/fake-cwd")" "/scope$"
+out=$(RTFC_HOME="$B" "$BIN" statusline </dev/null); expect "sasha's status line counts two from alex" "$out" "^📨 2 · alex$"
+out=$(RTFC_HOME="$A" "$BIN" auto sasha off 2>&1); expect "auto off" "$out" "park until you look"
+
+step "remove: alex removes sasha, sasha is refused, a new invite brings her back"
+out=$(RTFC_HOME="$A" "$BIN" remove sasha 2>&1); expect "removed" "$out" "sasha is removed"
+out=$(mcp "$B" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send","arguments":{"to":"alex","text":"Still there?"}}}')
+expect "refused as not a contact" "$out" 'not_a_contact'
+TOKEN=$(RTFC_HOME="$A" "$BIN" invite | sed -n 3p)
+out=$(RTFC_HOME="$B" "$BIN" accept "$TOKEN"); expect "re-accepting refreshes the contact" "$out" "already a contact"
+out=$(RTFC_HOME="$A" "$BIN" contacts); expect "sasha is active again" "$out" "^sasha +active"
 
 step "nobody home: stop alex, sasha sends"
 RTFC_HOME="$A" "$BIN" daemon stop >/dev/null; sleep 1

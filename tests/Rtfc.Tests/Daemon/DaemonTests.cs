@@ -38,6 +38,11 @@ public class DaemonTests
         Assert.Equal(SendStatus.Rejected, (await client.SendAsync("nobody", "hi", Ct)).Status);
         Assert.Equal(SendStatus.Rejected, (await client.ReplyAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "hi", Ct)).Status);
 
+        // Management goes through the socket too; it is the CLI's path, never a tool's.
+        Assert.Equal(ManagementStatus.NotAContact, (await client.SetAutoAsync("nobody", "headless", temp.Home.Root, Ct)).Status);
+        Assert.Equal(ManagementStatus.NotAContact, (await client.RemoveAsync("nobody", Ct)).Status);
+        Assert.Equal(ManagementStatus.NotAContact, (await client.BlockAsync("nobody", Ct)).Status);
+
         await using (await client.AcquireLeaseAsync(Ct))
         {
             Assert.Equal(1, (await client.TryStatusAsync(Ct))!.Leases);

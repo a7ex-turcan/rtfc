@@ -95,6 +95,23 @@ public sealed class DaemonClient : IDisposable
     public Task<AcceptResult> AcceptAsync(string token, CancellationToken cancellationToken) =>
         PostAsync(IpcRoutes.Accept, new AcceptRequest(token), IpcJson.Default.AcceptRequest, IpcJson.Default.AcceptResult, cancellationToken);
 
+    public Task<ManagementResult> SetAutoAsync(string handle, string mode, string? scope, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.ContactAuto(handle), new AutoRequest(mode, scope), IpcJson.Default.AutoRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    public async Task<ManagementResult> RemoveAsync(string handle, CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsync(IpcRoutes.ContactRemove(handle), content: null, cancellationToken).ConfigureAwait(false);
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        return (await response.Content.ReadFromJsonAsync(IpcJson.Default.ManagementResult, cancellationToken).ConfigureAwait(false))!;
+    }
+
+    public async Task<ManagementResult> BlockAsync(string handle, CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsync(IpcRoutes.ContactBlock(handle), content: null, cancellationToken).ConfigureAwait(false);
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        return (await response.Content.ReadFromJsonAsync(IpcJson.Default.ManagementResult, cancellationToken).ConfigureAwait(false))!;
+    }
+
     public async Task ShutdownAsync(CancellationToken cancellationToken)
     {
         using var response = await _http.PostAsync(IpcRoutes.Shutdown, content: null, cancellationToken).ConfigureAwait(false);

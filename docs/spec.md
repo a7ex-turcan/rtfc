@@ -238,7 +238,7 @@ Set per contact with `/rtfc:auto <contact> off|headless|session [--scope <dir>]`
 - Frame the prompt so the incoming text is treated as untrusted input from a named contact, with instructions to answer only from the scoped files and never disclose secrets.
 - Send the output back as a reply with `origin: "auto"`.
 
-Verify the exact CLI flag names against current Claude Code docs when implementing. The benefits: no research-preview channel flags are needed, the answering Claude has no access to your working session's context, and nothing it does touches your active session.
+As implemented (Claude Code 2.1): `claude -p --output-format json --restricted --strict-mcp-config --no-session-persistence --disable-slash-commands --tools Read,Grep,Glob --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write,… --permission-mode default --max-budget-usd 0.50 --settings '{"permissions":{"deny":[Read rules for .env*, keys, certificates, credentials, .ssh, .aws, …]}}' --system-prompt <framing>`, with the wrapped message on stdin, `CLAUDE*` environment variables stripped (a nested Claude refuses to run under a session's), and a 3-minute wall clock since there is no `--max-turns`. Deny rules exist for `Read` only; `Grep` can still search any file in the scope, so the scope must not contain secrets. The benefits: no research-preview channel flags are needed, the answering Claude has no access to your working session's context, and nothing it does touches your active session.
 
 **`auto_session` (advanced).** The message is pushed into one designated running session as a Claude Code **channel** event, and Claude answers with full session context through the `inbox_reply` tool. This is powerful but riskier, since that session has your normal permissions. It also depends on the channels research preview (§12). The plugin must **never** declare the permission-relay capability: a contact must never be able to approve tool use in your session.
 
@@ -247,7 +247,7 @@ Verify the exact CLI flag names against current Claude Code docs when implementi
 1. Messages with `origin: "auto"` are **never** auto-answered. This alone prevents two auto-answering Claudes from ping-ponging.
 2. Auto-answer refuses messages with `hop ≥ 2`.
 3. There's a per-contact auto-answer rate limit (default 10/hour) and a global cap. Over the limit, messages are parked with a note.
-4. Inbound rate limit and size cap per contact device, enforced before the database write.
+4. Inbound rate limit (default 120/hour per contact device) and size cap (64 KB), enforced before the database write.
 
 `origin` is asserted by the sender, so these rules prevent accidents, not a malicious contact. A malicious contact should be removed. Rate limits bound the damage until then.
 
@@ -604,7 +604,9 @@ CREATE TABLE inbox (
   entity_key  TEXT,                               -- "jira:PAY-123"
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
-  draft       TEXT,                               -- output of a `prepare` run
+  draft       TEXT,                               -- output of a `prepare` run, or an auto-answer that could not be delivered
+  auto_note   TEXT,                               -- why a message was not auto-answered, or how the attempt went (schema v2)
+  auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message (schema v2)
   -- common
   thread      TEXT,
   title       TEXT,
@@ -667,10 +669,12 @@ CREATE TABLE seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 ```
 
+A `meta` table holds `schema_version`; the daemon migrates older files on open.
+
 **Relaunch behavior:**
 
 - Parked messages reappear in the status bar.
-- `auto_running` rows are re-queued; the answer is regenerated once and the attempt is recorded.
+- `auto_running` rows are re-queued; the answer is regenerated once and the attempt is recorded (`auto_attempts`; two interrupted attempts make it `auto_failed`).
 - The outbox pump resumes, and handshakes trigger it whenever a peer comes online.
 
 **Retention:** prune `answered` and `dismissed` messages after 30 days. Expire outbox entries after 7 days, leaving a local notice.

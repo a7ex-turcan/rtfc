@@ -8,14 +8,14 @@ using Rtfc.Storage;
 
 namespace Rtfc.Core;
 
-public sealed record NodeOptions(IReadOnlyList<string> HintHosts);
+public sealed record NodeOptions(IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer);
 
 /// <summary>
 /// Everything stateful on one device, minus the IPC surface (spec §3.1): the contact
 /// lifecycle, sending with nobody's-home, and the parked inbox. The daemon hosts one of
 /// these; the tests host two in one process.
 /// </summary>
-public sealed class Node : IAsyncDisposable
+public sealed partial class Node : IAsyncDisposable
 {
     private static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
@@ -24,17 +24,19 @@ public sealed class Node : IAsyncDisposable
     private readonly Database _db;
     private readonly ITransport _transport;
     private readonly NodeOptions _options;
+    private readonly IClaudeRunner _claude;
     private readonly TimeProvider _clock;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopping = new();
 
-    public Node(RtfcHome home, SelfIdentity self, Database db, ITransport transport, NodeOptions options, TimeProvider clock, ILogger logger)
+    public Node(RtfcHome home, SelfIdentity self, Database db, ITransport transport, NodeOptions options, IClaudeRunner claude, TimeProvider clock, ILogger logger)
     {
         _home = home;
         Self = self;
         _db = db;
         _transport = transport;
         _options = options;
+        _claude = claude;
         _clock = clock;
         _logger = logger;
 
@@ -53,6 +55,7 @@ public sealed class Node : IAsyncDisposable
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await _transport.StartAsync(HandleInboundAsync, cancellationToken).ConfigureAwait(false);
+        StartAutoAnswering();
         WriteStatus();
         _logger.LogInformation("rtfcd listening as {Handle}/{Device} ({Person}) on port {Port}", Self.Handle, Self.DeviceName, Ids.Fingerprint(Self.PersonId), (_transport as TcpTransport)?.Port);
     }
@@ -61,6 +64,7 @@ public sealed class Node : IAsyncDisposable
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
         await _transport.StopAsync().ConfigureAwait(false);
+        await StopAutoAnsweringAsync().ConfigureAwait(false);
     }
 
     /// <summary>The <c>tcp:</c> hints this device advertises in invite tokens and accept frames (spec §8.4).</summary>
@@ -102,10 +106,9 @@ public sealed class Node : IAsyncDisposable
             return new AcceptResult(AcceptStatus.Blocked, existing.Handle, existing.PersonId, Ids.Fingerprint(existing.PersonId));
         }
 
-        if (existing?.Status == ContactStatus.Active)
-        {
-            return new AcceptResult(AcceptStatus.AlreadyContact, existing.Handle, existing.PersonId, Ids.Fingerprint(existing.PersonId));
-        }
+        // An active contact's token is still worth presenting: removal and block are local (spec §5.2), so
+        // only the inviter knows whether we are still contacts, and a fresh exchange refreshes their hints.
+        var wasActive = existing?.Status == ContactStatus.Active;
 
         var hints = ParseHints(payload.Hints);
         var stream = await _transport.ConnectAsync("", hints, cancellationToken).ConfigureAwait(false);
@@ -139,12 +142,19 @@ public sealed class Node : IAsyncDisposable
 
                         var contact = Pin(ca, ack.Handle, session.RemoteCertificate, ack.DeviceName, ack.Hints.Length > 0 ? ack.Hints : payload.Hints);
                         await session.SendAsync(new ByeFrame(), cancellationToken).ConfigureAwait(false);
-                        return new AcceptResult(AcceptStatus.Accepted, contact.Handle, contact.PersonId, Ids.Fingerprint(contact.PersonId));
+                        return new AcceptResult(
+                            wasActive ? AcceptStatus.AlreadyContact : AcceptStatus.Accepted, contact.Handle, contact.PersonId, Ids.Fingerprint(contact.PersonId));
                     }
 
+                case ErrorFrame { Code: "blocked" } error:
+                    return new AcceptResult(AcceptStatus.Blocked, Reason: error.Message);
+
+                case ErrorFrame { Code: "invite_used" or "invite_unknown" or "invite_expired" } when wasActive:
+                    // The token is spent, but we are contacts already; nothing to fix.
+                    return new AcceptResult(AcceptStatus.AlreadyContact, existing!.Handle, existing.PersonId, Ids.Fingerprint(existing.PersonId));
+
                 case ErrorFrame error:
-                    return new AcceptResult(
-                        error.Code == "blocked" ? AcceptStatus.Blocked : AcceptStatus.Rejected, Reason: error.Message);
+                    return new AcceptResult(AcceptStatus.Rejected, Reason: error.Message);
 
                 case null:
                     return new AcceptResult(AcceptStatus.Failed, Reason: "The inviter closed the connection.");
@@ -247,11 +257,11 @@ public sealed class Node : IAsyncDisposable
         }
 
         var id = Ulid.NewUlid(_clock.GetUtcNow());
-        return DeliverAsync(contact, deviceName, id, thread: id, replyTo: null, hop: 0, text, cancellationToken);
+        return DeliverAsync(contact, deviceName, id, thread: id, replyTo: null, hop: 0, text, MessageOrigin.Human, cancellationToken);
     }
 
     private async Task<SendResult> DeliverAsync(
-        ContactRow contact, string? deviceName, string id, string thread, string? replyTo, int hop, string text, CancellationToken cancellationToken)
+        ContactRow contact, string? deviceName, string id, string thread, string? replyTo, int hop, string text, string origin, CancellationToken cancellationToken)
     {
         var devices = _db.ListDevices(contact.PersonId).Where(d => d.Status == DeviceStatus.Active).ToList();
         var targets = deviceName is null ? devices : devices.Where(d => string.Equals(d.Name, deviceName, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -268,7 +278,7 @@ public sealed class Node : IAsyncDisposable
         foreach (var device in targets)
         {
             var label = $"{contact.Handle}/{device.Name}";
-            var outcome = await DeliverToDeviceAsync(contact, ca, device, id, thread, replyTo, hop, text, cancellationToken).ConfigureAwait(false);
+            var outcome = await DeliverToDeviceAsync(contact, ca, device, id, thread, replyTo, hop, text, origin, cancellationToken).ConfigureAwait(false);
             switch (outcome)
             {
                 case null:
@@ -312,7 +322,7 @@ public sealed class Node : IAsyncDisposable
 
     /// <summary>Null on success, "unreachable" when no hint answered, otherwise a reason.</summary>
     private async Task<string?> DeliverToDeviceAsync(
-        ContactRow contact, X509Certificate2 ca, DeviceRow device, string id, string thread, string? replyTo, int hop, string text, CancellationToken cancellationToken)
+        ContactRow contact, X509Certificate2 ca, DeviceRow device, string id, string thread, string? replyTo, int hop, string text, string origin, CancellationToken cancellationToken)
     {
         var stream = await _transport.ConnectAsync(device.DeviceId, ParseHints(device.Endpoints), cancellationToken).ConfigureAwait(false);
         if (stream is null)
@@ -332,7 +342,7 @@ public sealed class Node : IAsyncDisposable
             var envelope = new MessageFrame(
                 HelloFrame.CurrentVersion, id,
                 new Address(Self.PersonId, Self.DeviceId), new Address(contact.PersonId, device.DeviceId),
-                seq, thread, replyTo, MessageOrigin.Human, hop, Timestamps.Format(_clock.GetUtcNow()), new MessageBody(text));
+                seq, thread, replyTo, origin, hop, Timestamps.Format(_clock.GetUtcNow()), new MessageBody(text));
             await session.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
 
             var reply = await session.ReceiveAsync(cancellationToken).AsTask().WaitAsync(AckTimeout, cancellationToken).ConfigureAwait(false);
@@ -448,17 +458,30 @@ public sealed class Node : IAsyncDisposable
             return new AckFrame(message.Id, AckStatus.Rejected, "unknown_device");
         }
 
+        var contact = _db.GetContact(trust.PersonId);
+        if (contact is null || contact.Status != ContactStatus.Active)
+        {
+            return new AckFrame(message.Id, AckStatus.Rejected, "not_a_contact");
+        }
+
         var now = _clock.GetUtcNow();
-        var stored = _db.InsertMessage(new InboxMessage(
+        if (_db.CountReceivedFrom(trust.DeviceId, now - RateWindow) >= _options.AutoAnswer.InboundPerDevicePerHour)
+        {
+            // Enforced before the write (spec §7.4): a flood never reaches the database.
+            return new AckFrame(message.Id, AckStatus.Rejected, "rate_limited");
+        }
+
+        var row = new InboxMessage(
             message.Id, Self.DeviceId, message.From.Person, message.From.Device, message.Seq, message.ReplyTo, message.Origin,
             message.Hop, message.Thread ?? message.Id, message.Body.Text, TryParseTime(message.SentAt), now, now,
-            InboxState.Parked, HandledBy: null, HandledAt: null));
-        if (!stored)
+            InboxState.Parked, HandledBy: null, HandledAt: null);
+        if (!_db.InsertMessage(row))
         {
             return new AckFrame(message.Id, AckStatus.Duplicate);
         }
 
         _db.RecordSeqIn(message.From.Device, message.Seq);
+        ConsiderAutoAnswer(contact, row);
         WriteStatus();
         InboxChanged?.Invoke();
         return new AckFrame(message.Id, AckStatus.Ok);
@@ -466,12 +489,16 @@ public sealed class Node : IAsyncDisposable
 
     // ---- inbox (spec §9.2) ----
 
+    /// <summary>The states that wait for a human: parked, and auto-answers that failed.</summary>
+    private static bool NeedsAttention(InboxMessage m) => m.State is InboxState.Parked or InboxState.AutoFailed;
+
     public InboxSummary[] ListInbox(string? state)
     {
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
-        return [.. _db.ListMessages(state).Select(m => new InboxSummary(
+        var messages = state == InboxState.Parked ? _db.ListMessages(null).Where(NeedsAttention) : _db.ListMessages(state);
+        return [.. messages.Select(m => new InboxSummary(
             m.Id, handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson)), DeviceName(m.FromDevice), m.State,
-            Preview(m.Body), m.ReceivedAt, m.ReplyTo, m.Origin))];
+            Preview(m.Body), m.ReceivedAt, m.ReplyTo, m.Origin, m.AutoNote))];
     }
 
     /// <summary>Marks a parked message read. Receipts arrive with Phase 4.</summary>
@@ -494,7 +521,7 @@ public sealed class Node : IAsyncDisposable
         var from = _db.GetContact(message.FromPerson)?.Handle ?? Ids.Fingerprint(message.FromPerson);
         return new InboxOpened(
             message.Id, from, DeviceName(message.FromDevice), message.FromPerson, message.State, message.ReceivedAt, message.SentAt,
-            message.Thread, message.ReplyTo, message.Origin, message.Hop, message.Body);
+            message.Thread, message.ReplyTo, message.Origin, message.Hop, message.Body, message.AutoNote, message.Draft);
     }
 
     /// <summary>Replies to the person who sent a message. Until the outbox lands (Phase 4), the sender must be home.</summary>
@@ -523,7 +550,7 @@ public sealed class Node : IAsyncDisposable
         }
 
         var replyId = Ulid.NewUlid(_clock.GetUtcNow());
-        var result = await DeliverAsync(contact, deviceName: null, replyId, original.Thread ?? original.Id, replyTo: id, original.Hop + 1, text, cancellationToken).ConfigureAwait(false);
+        var result = await DeliverAsync(contact, deviceName: null, replyId, original.Thread ?? original.Id, replyTo: id, original.Hop + 1, text, MessageOrigin.Human, cancellationToken).ConfigureAwait(false);
         if (result.Status is SendStatus.Delivered or SendStatus.Partial)
         {
             _db.SetMessageState(id, InboxState.Answered, Self.DeviceId, _clock.GetUtcNow());
@@ -532,6 +559,67 @@ public sealed class Node : IAsyncDisposable
         }
 
         return result;
+    }
+
+    // ---- management (spec §5.2, §7.3): reached only through the CLI, never through an MCP tool ----
+
+    /// <summary>Sets a contact's inbound mode. Headless auto-answer needs an existing scope directory; session mode is Phase 7.</summary>
+    public ManagementResult SetAutoMode(string handle, string mode, string? scope)
+    {
+        var contact = _db.FindContactByHandle(handle.Trim());
+        if (contact is null || contact.Status != ContactStatus.Active)
+        {
+            return new ManagementResult(ManagementStatus.NotAContact, Reason: $"'{handle}' is not an active contact.");
+        }
+
+        switch (mode)
+        {
+            case "off":
+                _db.UpsertContact(contact with { InboundMode = InboundMode.Park, AutoScope = null, AutoOwnerDevice = null, Rev = contact.Rev + 1 });
+                _logger.LogInformation("Auto-answer off for {Handle}", contact.Handle);
+                return new ManagementResult(ManagementStatus.Ok, contact.Handle);
+
+            case "headless":
+                if (string.IsNullOrWhiteSpace(scope))
+                {
+                    return new ManagementResult(ManagementStatus.Invalid, contact.Handle, "Headless auto-answer needs --scope <dir>: the only directory the answering Claude may read.");
+                }
+
+                var full = Path.GetFullPath(scope);
+                if (!Directory.Exists(full))
+                {
+                    return new ManagementResult(ManagementStatus.Invalid, contact.Handle, $"'{full}' is not a directory.");
+                }
+
+                _db.UpsertContact(contact with { InboundMode = InboundMode.AutoHeadless, AutoScope = full, AutoOwnerDevice = Self.DeviceId, Rev = contact.Rev + 1 });
+                _logger.LogInformation("Auto-answer headless for {Handle}, scope {Scope}", contact.Handle, full);
+                return new ManagementResult(ManagementStatus.Ok, contact.Handle);
+
+            case "session":
+                return new ManagementResult(ManagementStatus.Invalid, contact.Handle, "Session auto-answer is not available yet (Phase 7). Use headless.");
+
+            default:
+                return new ManagementResult(ManagementStatus.Invalid, contact.Handle, $"Unknown mode '{mode}'. Use off, headless or session.");
+        }
+    }
+
+    /// <summary>Removal is local and immediate (spec §5.2): the contact's CA leaves the trust store, so their next handshake is restricted.</summary>
+    public ManagementResult Remove(string handle) => SetStatus(handle, ContactStatus.Removed);
+
+    /// <summary>Block is remove plus refusing every future invite exchange with that person key.</summary>
+    public ManagementResult Block(string handle) => SetStatus(handle, ContactStatus.Blocked);
+
+    private ManagementResult SetStatus(string handle, string status)
+    {
+        var contact = _db.FindContactByHandle(handle.Trim());
+        if (contact is null || (contact.Status != ContactStatus.Active && status == ContactStatus.Removed))
+        {
+            return new ManagementResult(ManagementStatus.NotAContact, Reason: $"'{handle}' is not an active contact.");
+        }
+
+        _db.UpsertContact(contact with { Status = status, InboundMode = InboundMode.Park, AutoScope = null, AutoOwnerDevice = null, Rev = contact.Rev + 1 });
+        _logger.LogInformation("Contact {Handle} is now {Status}", contact.Handle, status);
+        return new ManagementResult(ManagementStatus.Ok, contact.Handle);
     }
 
     // ---- contacts (spec §9.2) ----
@@ -546,7 +634,7 @@ public sealed class Node : IAsyncDisposable
                 ? await ProbeAsync(devices, cancellationToken).ConfigureAwait(false)
                 : [];
             views.Add(new ContactView(
-                contact.Handle, contact.PersonId, Ids.Fingerprint(contact.PersonId), contact.Status, contact.InboundMode, contact.AcceptedAt,
+                contact.Handle, contact.PersonId, Ids.Fingerprint(contact.PersonId), contact.Status, contact.InboundMode, contact.AutoScope, contact.AcceptedAt,
                 [.. devices.Select(d => new DeviceView(d.Name, d.DeviceId, d.Status, online.TryGetValue(d, out var o) ? o : null, [.. d.Endpoints]))]));
         }
 
@@ -576,7 +664,7 @@ public sealed class Node : IAsyncDisposable
 
     public StatusSnapshot Status()
     {
-        var parked = _db.ListMessages(InboxState.Parked);
+        var parked = _db.ListMessages(null).Where(NeedsAttention).ToList();
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
         var from = parked.Select(m => handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson))).Distinct().ToArray();
         return new StatusSnapshot(new StatusGlobal(parked.Count, from), [], Away: false);

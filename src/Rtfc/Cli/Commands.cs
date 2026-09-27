@@ -105,6 +105,68 @@ public static class Commands
         }
     }
 
+    // ---- auto / remove / block (spec §7.3, §5.2) ----
+
+    public static async Task<int> AutoAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        var line = new CommandLine(args);
+        if (line.Positionals is not [var handle, var mode])
+        {
+            ctx.Error.WriteLine("usage: rtfc auto <contact> off|headless|session [--scope <dir>]");
+            return 2;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        var result = await client.SetAutoAsync(handle, mode, line.Value("scope"), ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            ctx.Error.WriteLine($"rtfc auto: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine(mode == "off"
+            ? $"Messages from {result.Handle} park until you look at them."
+            : $"Messages from {result.Handle} are now answered by a headless, read-only Claude that can see {Path.GetFullPath(line.Value("scope")!)} and nothing else. "
+              + "It never writes, never runs commands, and its answers arrive marked as automatic. Turn it off with: rtfc auto "
+              + $"{result.Handle} off");
+        return 0;
+    }
+
+    public static async Task<int> RemoveAsync(CommandContext ctx, IReadOnlyList<string> args, bool block)
+    {
+        var verb = block ? "block" : "remove";
+        if (args is not [var handle])
+        {
+            ctx.Error.WriteLine($"usage: rtfc {verb} <contact>");
+            return 2;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        var result = block
+            ? await client.BlockAsync(handle, ctx.CancellationToken).ConfigureAwait(false)
+            : await client.RemoveAsync(handle, ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            ctx.Error.WriteLine($"rtfc {verb}: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine(block
+            ? $"{result.Handle} is blocked: their devices are refused, and invites to or from them are refused too."
+            : $"{result.Handle} is removed: their devices are refused from now on. A new invite, either way, makes you contacts again.");
+        return 0;
+    }
+
     // ---- contacts / inbox (read-only conveniences; the MCP tools are the real surface) ----
 
     public static async Task<int> ContactsAsync(CommandContext ctx)
@@ -125,7 +187,8 @@ public static class Commands
         foreach (var contact in contacts)
         {
             var devices = string.Join(", ", contact.Devices.Select(d => $"{d.Name} {(d.Online switch { true => "home", false => "away", null => "?" })}"));
-            ctx.Out.WriteLine($"{contact.Handle,-16} {contact.Status,-8} {contact.InboundMode,-14} {devices}");
+            var mode = contact.AutoScope is null ? contact.InboundMode : $"{contact.InboundMode} ({contact.AutoScope})";
+            ctx.Out.WriteLine($"{contact.Handle,-16} {contact.Status,-8} {mode,-14} {devices}");
         }
 
         return 0;
@@ -163,7 +226,7 @@ public static class Commands
 
         foreach (var m in messages)
         {
-            ctx.Out.WriteLine($"{m.Id}  {m.State,-8} {m.From}/{m.FromDevice}: {m.Preview}");
+            ctx.Out.WriteLine($"{m.Id}  {m.State,-11} {m.From}/{m.FromDevice}: {m.Preview}{(m.Note is null ? "" : $"  [{m.Note}]")}");
         }
 
         return 0;

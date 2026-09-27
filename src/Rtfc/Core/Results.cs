@@ -37,6 +37,7 @@ public sealed record ContactView(
     string Fingerprint,
     string Status,
     string InboundMode,
+    string? AutoScope,
     DateTimeOffset? AcceptedAt,
     DeviceView[] Devices);
 
@@ -48,7 +49,8 @@ public sealed record InboxSummary(
     string Preview,
     DateTimeOffset ReceivedAt,
     string? ReplyTo,
-    string Origin);
+    string Origin,
+    string? Note = null);
 
 public sealed record InboxOpened(
     string Id,
@@ -62,7 +64,9 @@ public sealed record InboxOpened(
     string? ReplyTo,
     string Origin,
     int Hop,
-    string Body);
+    string Body,
+    string? Note = null,
+    string? Draft = null);
 
 public sealed record InviteResult(string Token, DateTimeOffset ExpiresAt, string[] Hints);
 
@@ -94,8 +98,26 @@ public sealed record StatusSnapshot(StatusGlobal Global, Dictionary<string, Proj
 /// <summary>The payload behind <c>rtfc1_</c> (spec §5.1): a fingerprint and hints, never certificates, so it stays short enough to paste.</summary>
 public sealed record InviteTokenPayload(int V, string Person, string Handle, string[] Hints, string Nonce, DateTimeOffset ExpiresAt);
 
-/// <summary>Per-device settings in <c>config.json</c>.</summary>
-public sealed record RtfcConfig(int Port, string[]? HintHosts)
+public static class ManagementStatus
+{
+    public const string Ok = "ok";
+    public const string NotAContact = "not_a_contact";
+    public const string Invalid = "invalid";
+}
+
+/// <summary>The outcome of a CLI-only management action (spec §9.3).</summary>
+public sealed record ManagementResult(string Status, string? Handle = null, string? Reason = null);
+
+/// <summary>The caps of spec §7.4. Counted from the database, so they survive a daemon restart.</summary>
+public sealed record AutoAnswerConfig(
+    int PerContactPerHour = 10,
+    int GlobalPerHour = 30,
+    int InboundPerDevicePerHour = 120,
+    int TimeoutSeconds = 180,
+    double MaxBudgetUsd = 0.5);
+
+/// <summary>Per-device settings in <c>config.json</c>. <c>ClaudePath</c> defaults to <c>claude</c> on PATH.</summary>
+public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null)
 {
     public static RtfcConfig Default => new(Net.TcpTransport.DefaultPort, null);
 }
@@ -112,6 +134,7 @@ public sealed record RtfcConfig(int Port, string[]? HintHosts)
 [JsonSerializable(typeof(InboxOpened))]
 [JsonSerializable(typeof(InviteResult))]
 [JsonSerializable(typeof(AcceptResult))]
+[JsonSerializable(typeof(ManagementResult))]
 [JsonSerializable(typeof(StatusSnapshot))]
 [JsonSerializable(typeof(InviteTokenPayload))]
 [JsonSerializable(typeof(RtfcConfig))]

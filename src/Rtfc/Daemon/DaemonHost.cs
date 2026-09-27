@@ -57,8 +57,10 @@ public static class DaemonHost
         builder.Services.AddSingleton(self);
         builder.Services.AddSingleton(db);
         builder.Services.AddSingleton<ITransport>(transport);
+        var claude = new ClaudeProcessRunner(config.ClaudePath ?? "claude");
         builder.Services.AddSingleton(sp => new Node(
-            home, self, db, transport, new NodeOptions(HintHosts.Resolve(config)), TimeProvider.System, sp.GetRequiredService<ILogger<Node>>()));
+            home, self, db, transport, new NodeOptions(HintHosts.Resolve(config), config.AutoAnswer ?? new AutoAnswerConfig()), claude,
+            TimeProvider.System, sp.GetRequiredService<ILogger<Node>>()));
 
         var app = builder.Build();
         var node = app.Services.GetRequiredService<Node>();
@@ -174,6 +176,23 @@ public static class DaemonHost
 
             return Results.Json(await node.AcceptAsync(request.Token, context.RequestAborted), IpcJson.Default.AcceptResult);
         });
+
+        app.MapPost(IpcRoutes.Contacts + "/{handle}/auto", async Task<IResult> (string handle, HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.AutoRequest, context.RequestAborted);
+            if (request is null)
+            {
+                return Results.Json(new IpcError("A JSON body with 'mode' and optional 'scope' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(node.SetAutoMode(handle, request.Mode, request.Scope), IpcJson.Default.ManagementResult);
+        });
+
+        app.MapPost(IpcRoutes.Contacts + "/{handle}/remove", IResult (string handle) =>
+            Results.Json(node.Remove(handle), IpcJson.Default.ManagementResult));
+
+        app.MapPost(IpcRoutes.Contacts + "/{handle}/block", IResult (string handle) =>
+            Results.Json(node.Block(handle), IpcJson.Default.ManagementResult));
 
         app.MapPost(IpcRoutes.Shutdown, IResult () =>
         {

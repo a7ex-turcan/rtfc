@@ -55,6 +55,12 @@ public static class EntryPoint
                     return await Commands.InviteAsync(ctx).ConfigureAwait(false);
                 case "accept":
                     return await Commands.AcceptAsync(ctx, rest).ConfigureAwait(false);
+                case "auto":
+                    return await Commands.AutoAsync(ctx, rest).ConfigureAwait(false);
+                case "remove":
+                    return await Commands.RemoveAsync(ctx, rest, block: false).ConfigureAwait(false);
+                case "block":
+                    return await Commands.RemoveAsync(ctx, rest, block: true).ConfigureAwait(false);
                 case "contacts":
                     return await Commands.ContactsAsync(ctx).ConfigureAwait(false);
                 case "inbox":
@@ -96,6 +102,9 @@ public static class EntryPoint
           init [--handle h] [--device d] [--port p] [--hint-host host]...
           invite                      print a single-use token to send to someone
           accept <token>              accept someone's invite (they must be home)
+          auto <contact> off|headless [--scope <dir>]
+                                      let a read-only headless Claude answer them from one directory
+          remove <contact>            stop talking to someone; block <contact> also refuses future invites
 
         look:
           contacts                    contacts and whether they are home

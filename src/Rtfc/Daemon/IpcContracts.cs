@@ -20,6 +20,11 @@ public static class IpcRoutes
 
     public static string InboxOpen(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/open";
     public static string InboxReply(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/reply";
+
+    // Management (spec §9.3). On the user-only socket, reached by the CLI; never an MCP tool.
+    public static string ContactAuto(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/auto";
+    public static string ContactRemove(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/remove";
+    public static string ContactBlock(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/block";
 }
 
 public sealed record DaemonStatus(
@@ -40,6 +45,8 @@ public sealed record ReplyRequest(string Text);
 
 public sealed record AcceptRequest(string Token);
 
+public sealed record AutoRequest(string Mode, string? Scope);
+
 public sealed record IpcError(string Error);
 
 [JsonSourceGenerationOptions(
@@ -50,6 +57,8 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(SendRequest))]
 [JsonSerializable(typeof(ReplyRequest))]
 [JsonSerializable(typeof(AcceptRequest))]
+[JsonSerializable(typeof(AutoRequest))]
+[JsonSerializable(typeof(ManagementResult))]
 [JsonSerializable(typeof(IpcError))]
 [JsonSerializable(typeof(SendResult))]
 [JsonSerializable(typeof(ContactView[]))]

@@ -105,4 +105,7 @@ public sealed record InboxMessage(
     DateTimeOffset UpdatedAt,
     string State,
     string? HandledBy,
-    DateTimeOffset? HandledAt);
+    DateTimeOffset? HandledAt,
+    string? Draft = null,
+    string? AutoNote = null,
+    int AutoAttempts = 0);

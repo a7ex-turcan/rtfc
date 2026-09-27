@@ -13,12 +13,57 @@ public class DatabaseTests
 
         using (var first = Database.Open(temp.Home.DatabasePath))
         {
-            Assert.Equal(1, first.SchemaVersion);
+            Assert.Equal(Database.CurrentSchemaVersion, first.SchemaVersion);
         }
 
         using var second = Database.Open(temp.Home.DatabasePath);
-        Assert.Equal(1, second.SchemaVersion);
+        Assert.Equal(Database.CurrentSchemaVersion, second.SchemaVersion);
         Assert.Null(second.GetSelf());
+    }
+
+    [Fact]
+    public void A_version_1_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.1.x left it.
+            db.Execute("ALTER TABLE inbox DROP COLUMN auto_note");
+            db.Execute("ALTER TABLE inbox DROP COLUMN auto_attempts");
+            db.Execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
+            Assert.Equal(1, db.SchemaVersion);
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.True(migrated.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1) with { AutoNote = "kept" }));
+        Assert.Equal("kept", migrated.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!.AutoNote);
+    }
+
+    [Fact]
+    public void Auto_answer_state_notes_drafts_and_attempts_are_counted()
+    {
+        using var db = Database.OpenInMemory();
+        db.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1));
+        db.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5S", seq: 2) with { FromPerson = "p_other", FromDevice = "d_other" });
+
+        Assert.Equal(0, db.CountAutoAnswers(null, Now.AddHours(-1)));
+        db.SetAutoState("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", InboxState.AutoRunning, null, null, countAttempt: true, Now);
+        db.SetAutoState("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", InboxState.AutoDone, null, "the answer", countAttempt: false, Now.AddSeconds(5));
+
+        var done = db.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!;
+        Assert.Equal(InboxState.AutoDone, done.State);
+        Assert.Equal("the answer", done.Draft);
+        Assert.Equal(1, done.AutoAttempts);
+        Assert.Equal(1, db.CountAutoAnswers("p_sasha", Now.AddHours(-1)));
+        Assert.Equal(0, db.CountAutoAnswers("p_other", Now.AddHours(-1)));
+        Assert.Equal(1, db.CountAutoAnswers(null, Now.AddHours(-1)));
+        Assert.Equal(0, db.CountAutoAnswers(null, Now.AddMinutes(1)));
+
+        Assert.Equal(1, db.CountReceivedFrom("d_sasha", Now.AddHours(-1)));
+        Assert.Equal(1, db.CountReceivedFrom("d_other", Now.AddHours(-1)));
+        Assert.Equal(0, db.CountReceivedFrom("d_nobody", Now.AddHours(-1)));
     }
 
     [Fact]

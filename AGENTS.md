@@ -22,18 +22,19 @@ update the spec in the same change. Don't let the two drift apart.
 
 ## Status
 
-**Phase 1, the thin slice, works end to end** (§17): `rtfc init`, invite and accept over
+**Phases 1 and 2 work end to end** (§17). Phase 1: `rtfc init`, invite and accept over
 mutual TLS, the daemon with its lease-based lifetime and Unix-socket IPC, `send` with
 nobody's-home, the parked inbox, the status line, and open and reply while the sender is
-home, all driven from the five MCP tools and the plugin's skills. `scripts/e2e.sh` runs
-the whole story on one machine with two daemons.
+home, all driven from the five MCP tools and the plugin's skills. Phase 2: `auto_headless`
+per contact (`Node.AutoAnswer.cs`, `ClaudeProcessRunner`), every guard of §7.4, and
+`remove`/`block`. `scripts/e2e.sh` runs the whole story on one machine with two daemons
+and a fake `claude`.
 
 Not there yet, by design: read receipts, the reply outbox, `away`, `rename`, dismiss and
-retention (Phase 4); `remove` and `block` (Phase 2, with auto-answer); fingerprint words
-(hex groups for now); session reuse between sends (one connection per delivery); a proper
-detach on Windows (`daemon run` calls `setsid` on Unix only). Next is **Phase 2,
-auto-answer**, because it's what makes rtfc more than chat. Third-party sources come last
-(Phase 8).
+retention (Phase 4); `auto_session` (Phase 7); fingerprint words (hex groups for now);
+session reuse between sends (one connection per delivery); a proper detach on Windows
+(`daemon run` calls `setsid` on Unix only). Next is **Phase 3**, VPN hints, then
+**Phase 4**, the outbox. Third-party sources come last (Phase 8).
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
 and the CLI-only management boundary all shipped in Phase 1. Update this section when a
@@ -192,6 +193,11 @@ to use with `RTFC_HOME` set.
   decimal comma (`dotnet` itself prints `4,54 sec`). Format numbers with `InvariantCulture`
   and timestamps as ISO 8601 in anything a program or Claude parses: envelopes, tool
   results, `status.json`, SQLite text columns.
+- **Schema changes are migrations.** `schema.sql` creates the current shape for new files;
+  `Database.Migrate` brings older files up, one `if (SchemaVersion < n)` block per version,
+  and `CurrentSchemaVersion` moves with it. Update the `CREATE TABLE` in `schema.sql` and
+  the spec's §13 in the same commit, and test the migration by dropping the new columns
+  (`DatabaseTests`).
 - **Package versions live in `Directory.Packages.props`** (central package management).
   Shared build settings live in `Directory.Build.props`.
 - **Style** comes from `.editorconfig`: file-scoped namespaces, `_camelCase` private fields,
@@ -226,18 +232,19 @@ spike, a test) before building on it, then record what you found here or in the 
 Checked 2026-09-27 against Claude Code 2.1.283 (`claude --help`) and the docs:
 
 - **Plugin commands are legacy**, so the plugin uses skills (see the engineering rules).
-- **Headless flags (§7.3):** `-p`, `--allowedTools`/`--allowed-tools`,
-  `--disallowedTools`/`--disallowed-tools`, `--tools`, `--permission-mode`, `--settings`,
-  `--no-session-persistence` and `--max-budget-usd` all exist. **`--max-turns` does not
-  appear in `--help`**, so confirm it still works or find another way to cap a run.
-- **`--restricted` fits auto-answer closely.** It removes Bash and the other code-running
-  tools plus WebFetch unless `--tools` names them, ignores user, project and local
-  settings, and confines file tools to the working directories. Evaluate it for
-  `auto_headless` and `prepare`.
-- **The headless run must not load rtfc itself.** If it did, the answering Claude would
-  have `mcp__rtfc__send`. `--strict-mcp-config` skips every MCP server not passed through
-  `--mcp-config`. Check that plugin hooks don't fire either. `--bare` skips hooks but also
-  skips OAuth and the keychain, so it needs `ANTHROPIC_API_KEY` and is probably unsuitable.
+- **Headless flags (§7.3), as used by `ClaudeProcessRunner`:** `-p --output-format json
+  --restricted --strict-mcp-config --no-session-persistence --disable-slash-commands
+  --tools/--allowedTools Read,Grep,Glob --disallowedTools … --permission-mode default
+  --max-budget-usd --settings {deny rules} --system-prompt`, prompt on stdin. **There is
+  no `--max-turns`** in this build; the caps are the budget and a wall-clock kill.
+  `--restricted` ignores user/project/local settings (so no plugins, no hooks) and confines
+  file tools to the working directory; `--strict-mcp-config` keeps every MCP server out,
+  including rtfc's own `send`. **The child must not inherit `CLAUDE*` environment
+  variables**: a daemon started from a session has a dozen of them and a nested Claude
+  refuses to run under them, so the runner strips them.
+- **Permission deny rules exist for `Read` only.** `Grep` and `Glob` have no path rules,
+  so the secret-path denies in `ClaudeProcessRunner.DenyRules` are a second line behind
+  "choose a scope without secrets", not the first. Documented for users in the README.
 
 Settled by running it:
 

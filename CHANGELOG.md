@@ -20,9 +20,44 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 2, auto-answer: a contact's question answered by a scoped,
-read-only, headless Claude run while you are away from the keyboard, plus `remove` and
-`block`.
+Phase 2, auto-answer: a contact's question gets answered by your scoped, read-only Claude
+while you are away from the keyboard.
+
+### Added
+
+- **Auto-answer, per contact, opt in.** `rtfc auto <contact> headless --scope <dir>` (or
+  `/rtfc:auto`) has a fresh headless Claude answer that contact's messages from the files
+  under one directory. The run is `claude -p --restricted --strict-mcp-config` with only
+  `Read`, `Grep` and `Glob`, deny rules for files that look like secrets (`.env*`, keys,
+  certificates, credentials, `.ssh`, `.aws`, …), no session persistence, no plugins, no
+  hooks, no MCP servers (so no rtfc `send`), a budget cap and a three-minute wall clock.
+  The message goes in on stdin wrapped as untrusted content with a system prompt that
+  says so. Answers arrive marked automatic on both sides. `rtfc auto <contact> off` turns
+  it off; `session` mode waits for Phase 7.
+- **Loop and abuse guards** (spec §7.4). A message written automatically is never
+  answered automatically, so two auto-answering Claudes cannot ping-pong. A thread deeper
+  than one reply is not answered automatically. Ten automatic answers per contact per
+  hour and thirty overall, counted from the database so a restart doesn't reset them.
+  One hundred and twenty inbound messages per device per hour, refused before anything is
+  stored. Whatever the guards stop is parked with a note saying why.
+- **`rtfc remove <contact>` and `rtfc block <contact>`** (`/rtfc:remove`, `/rtfc:block`).
+  Removal is local and immediate: the contact's CA leaves your trust store, so their next
+  connection is refused. Block also refuses every future invite exchange with that person,
+  from either side. Both switch auto-answer off for that contact.
+- A failed automatic answer, or one whose recipient left before it was ready, is parked
+  for you with the draft attached. `inbox_list` shows the note; `inbox_open` shows the
+  draft in its own tags.
+- `config.json` takes `claudePath` (the `claude` executable, default from `PATH`) and
+  `autoAnswer` limits (`perContactPerHour`, `globalPerHour`, `inboundPerDevicePerHour`,
+  `timeoutSeconds`, `maxBudgetUsd`).
+
+### Changed
+
+- **Accepting a token from someone already in your contacts now performs the exchange**
+  instead of returning early. It refreshes their endpoint hints, and someone who removed
+  or blocked you no longer looks like a contact from your side.
+- The database is schema version 2, with two new inbox columns; an existing file is
+  migrated the first time the daemon opens it.
 
 ## [0.1.1] - 2026-09-27
 

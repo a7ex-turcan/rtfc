@@ -64,7 +64,9 @@ CREATE TABLE IF NOT EXISTS inbox (
   entity_key  TEXT,                               -- "jira:PAY-123"
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
-  draft       TEXT,                               -- output of a `prepare` run
+  draft       TEXT,                               -- output of a `prepare` run, or an auto-answer that could not be delivered
+  auto_note   TEXT,                               -- why a message was not auto-answered, or how the attempt went (v2)
+  auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message (v2)
   -- common
   thread      TEXT,
   title       TEXT,
@@ -126,4 +128,4 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE TABLE IF NOT EXISTS seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '2');
