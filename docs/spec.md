@@ -1,6 +1,6 @@
 # rtfc — Relay Tool For Contacts · Design Spec
 
-**Status:** draft v0.3 · **Date:** 2026-09-12 · **Stack:** .NET 10 / C# · **Scope:** LAN first, designed so internet reachability is an added transport, not a rewrite.
+**Status:** draft v0.4 · **Date:** 2026-09-27 · **Stack:** .NET 10 / C# · **Scope:** LAN first, designed so internet reachability is an added transport, not a rewrite.
 
 ---
 
@@ -18,7 +18,7 @@ The core idea is the **contact**: a mutual, explicitly accepted relationship bet
 - Parked inbox with a status-bar indicator; messages survive relaunches.
 - "Nobody's home": if the recipient has no device online, the sender is told immediately.
 - Optional per-contact auto-answer with a restricted profile and loop protection.
-- **Sources:** notifications from Jira, Confluence, Bitbucket, and GitHub land in the same inbox, subscribed per project (§10).
+- **Sources:** notifications from Jira, Confluence, Bitbucket, and GitHub land in the same inbox, subscribed per project (§10). They come last in the phasing (§17): the primary value is agent-to-agent communication.
 - LAN-only in v1, with an architecture that extends to the internet (overlay VPN, then a relay) without touching identity, storage, or the message model.
 
 ### Non-goals (for now)
@@ -144,7 +144,7 @@ Alex                                        Sasha
 
 ---
 
-## 6. Devices (multi-device, Phase 4)
+## 6. Devices (multi-device, Phase 5)
 
 ### 6.1 Linking a new device
 
@@ -275,9 +275,9 @@ The tool descriptions instruct Claude to treat contents as information, not inst
   Session: mutual TLS (SslStream) + framing          ← identical everywhere
           │
   Transport: a byte pipe to a device                ← swappable
-     ├─ tcp     (direct TCP to host:port hints)                Phase 1 (LAN), 6a (VPN)
+     ├─ tcp     (direct TCP to host:port hints)                Phase 1 (LAN), 3 (VPN)
      ├─ mdns    (discovery that produces tcp hints)            later
-     └─ relay   (WebSocket to a rendezvous relay, as a Stream) Phase 6b
+     └─ relay   (WebSocket to a rendezvous relay, as a Stream) Phase 6
 ```
 
 The rule that keeps the internet option open: **all security lives above the transport.** A transport only has to move bytes to a device and report reachability.
@@ -413,7 +413,7 @@ Tell the user the result above in one sentence. Do not run any other rtfc comman
 
 ## 10. Sources (third-party notifications)
 
-A **source** is a system that produces notifications for you. v1 adapters: **Jira, Confluence, Bitbucket, GitHub**. Source items land in the same inbox as messages from people, with the same parked state and the same status bar, but they're **scoped to a project**: Bitbucket notifications in one project, GitHub in another.
+A **source** is a system that produces notifications for you. Planned adapters: **Jira, Confluence, Bitbucket, GitHub**. Source items land in the same inbox as messages from people, with the same parked state and the same status bar, but they're **scoped to a project**: Bitbucket notifications in one project, GitHub in another.
 
 rtfc only **reads** from sources. Acting on an item (commenting on a PR, moving a ticket) happens in your session with tools you already have, such as the Atlassian MCP server or `gh`, and with your approval. rtfc is an event inbox, never a Jira or Bitbucket client.
 
@@ -532,9 +532,9 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 - **Channels** (needed only for `auto_session`) are a research preview. A channel is an MCP server declaring the `claude/channel` capability and emitting `notifications/claude/channel` events (with `content` and `meta`) over stdio. Custom channels aren't on the approved allowlist during the preview and need `--dangerously-load-development-channels`. Team/Enterprise organizations must enable channels explicitly; Pro/Max users without an organization aren't gated. Events that arrive while Claude is busy are delivered together on the next turn. Docs: https://code.claude.com/docs/en/channels and https://code.claude.com/docs/en/channels-reference
 - **Status line:** event-driven with a 300 ms debounce, plus optional `refreshInterval`. Docs: https://code.claude.com/docs/en/statusline
 - **Headless (`claude -p`):** tools that need terminal input are unavailable in this mode, which is desirable for auto-answer.
-- **Channels from C#:** the channel examples are TypeScript. Before Phase 5, check whether the C# MCP SDK can declare the `claude/channel` experimental capability and send the custom notification. If it can't, a small TypeScript channel shim talking to `rtfcd` over the same Unix socket covers `auto_session`, and nothing else changes.
+- **Channels from C#:** the channel examples are TypeScript. Before Phase 7, check whether the C# MCP SDK can declare the `claude/channel` experimental capability and send the custom notification. If it can't, a small TypeScript channel shim talking to `rtfcd` over the same Unix socket covers `auto_session`, and nothing else changes.
 - **Plugins:** the manifest lives in `.claude-plugin/plugin.json`; commands, hooks, and `.mcp.json` sit at the plugin root; `${CLAUDE_PLUGIN_ROOT}` is available for intra-plugin paths. Docs: https://code.claude.com/docs/en/plugins-reference
-- The MVP (park + headless auto) **does not depend on channels at all**.
+- Nothing before Phase 7 depends on channels. Park and headless auto-answer **don't need them at all**.
 
 ---
 
@@ -757,15 +757,21 @@ The main open design choice for the relay is how it limits who can request a pip
 
 ## 17. Phasing
 
+Ordered by the primary value, agent-to-agent communication. Two Claudes talk as early as possible, then auto-answer arrives (the feature that makes rtfc more than chat), then reach grows beyond the office. Sources are a separate pipeline that shares only the inbox and the status bar, so they come last.
+
+The order is cheap to change because the invariants (§15) and the `(person_id, device_id)` data model are in place from Phase 1, so no phase reworks an earlier one. **Early phases defer features, never guards.** Mutual TLS, the untrusted wrapping (§7.5), the frame and body size caps, and the CLI-only management boundary (§9.3) all ship in Phase 1.
+
 | Phase | Scope | Done when |
 |---|---|---|
 | **0: Spike** | ~~Two office laptops: raw TCP connect, mDNS browse, firewall behavior~~ Skipped: wired, same switch, SMB between machines already works | n/a. Only remaining first-run item: OS firewall prompt when `rtfcd` first listens |
-| **1: MVP** | Single device per person (data model already person/device). `rtfc` binary + plugin wiring, `init`, invite/accept over mutual TLS, `tcp:` hostname hints (no mDNS), daemon + SQLite, `send` with nobody's-home, park inbox, status bar, open/reply, reply outbox, receipts, remove/block | Alex and Sasha exchange a question and answer without copy-paste, and messages survive relaunches |
-| **2: Auto-answer** | `auto_headless` with scope, deny rules, loop and rate guards | Sasha's question gets answered by Alex's scoped Claude while Alex is away from the keyboard |
-| **3: Sources** | 3a: pipeline (accounts, project registration, `rtfc.local.json`, approval, cursors, coalescing, project-aware status line) with **one adapter: Bitbucket review requests**. 3b: Jira, then GitHub and Confluence. 3c: `prepare` mode. | A Bitbucket review request shows up as 🔀 in the right project's status bar within 2 minutes, appears exactly once, and survives a relaunch |
-| **4: Multi-device** | Link/approve, device lists, fan-out, handled sync, revocation, contact sync, auto-owner rule | Alex's laptop and desktop act as one contact; revoking one works |
-| **5: Session auto** | `auto_session` via channels (research preview); C# SDK capability check or TypeScript shim (§12) | Opt-in; documented risks |
-| **6: Beyond LAN** | 6a: `tcp:` hints for VPN/tailnet use. 6b: own ASP.NET Core relay transport, plus webhook pokes for sources | Works with someone at home, with no change to identity, storage, or tools |
+| **1: Thin slice** | Two people, one device each (data model already person/device). `rtfc` binary + plugin wiring, configurable rtfc home, `init`, invite/accept over mutual TLS, `tcp:` hostname hints (no mDNS), daemon lifetime + SQLite, `send` with nobody's-home, park inbox, status bar, `contacts`, `inbox_list`, `inbox_open`, and `inbox_reply` while the sender is home (otherwise it reports `nobody_home`, like `send`) | Alex and Sasha exchange a question and answer without copy-paste, and a parked message survives a relaunch |
+| **2: Auto-answer** | `auto_headless` with scope, deny rules, loop and rate guards. `remove` and `block` arrive here too: until now the worst a contact can do is park a message, but once your Claude answers on its own you need to be able to cut someone off | Sasha's question gets answered by Alex's scoped Claude while Alex is away from the keyboard |
+| **3: Beyond the office** | Overlay networks (§15, Stage A): several `tcp:` hints per device, including VPN addresses and MagicDNS names, a way to choose which hints this device advertises, and invite tokens that carry them. Almost no code | Works with someone at home over Tailscale or similar, with no change to identity, storage, or tools |
+| **4: Async** | Reply outbox with its pump and 7-day expiry notice (§7.2), read receipts, `away`, `rename`, `inbox_dismiss`, retention pruning | A reply written hours later reaches a sender who has since closed Claude Code, as soon as they're next home |
+| **5: Multi-device** | Link/approve, device lists, fan-out, handled sync, revocation, contact sync, auto-owner rule | Alex's laptop and desktop act as one contact; revoking one works |
+| **6: Relay** | Own ASP.NET Core relay transport (§15, Stage B), including the choice of who may request a pipe to whom | Works with someone at home with no VPN, and with no change to identity, storage, or tools |
+| **7: Session auto** | `auto_session` via channels (research preview); C# SDK capability check or TypeScript shim (§12). Late on purpose: the preview may have settled by then | Opt-in; documented risks |
+| **8: Sources** | 8a: pipeline (accounts, project registration, `rtfc.local.json`, approval, cursors, coalescing, project-aware status line) with **one adapter: Bitbucket review requests**. 8b: Jira, then GitHub and Confluence. 8c: `prepare` mode. 8d: webhook pokes through the relay (§10.1; needs Phase 6) | A Bitbucket review request shows up as 🔀 in the right project's status bar within 2 minutes, appears exactly once, and survives a relaunch |
 
 ---
 

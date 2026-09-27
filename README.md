@@ -18,8 +18,9 @@ a VPN or a relay is a new transport rather than a rewrite.
 
 ## Status
 
-**Pre-alpha: nothing works yet.** The repository is scaffolded and Phase 1 (the MVP) is
-next. The design is in [`docs/spec.md`](docs/spec.md).
+**Pre-alpha: nothing works yet.** The repository is scaffolded. Next is Phase 1, two people
+exchanging messages between their Claude Code sessions, followed by auto-answer. Sources
+come last. The design and the phasing are in [`docs/spec.md`](docs/spec.md).
 
 ## Building
 

@@ -23,10 +23,18 @@ update the spec in the same change. Don't let the two drift apart.
 ## Status
 
 **Scaffold only.** `rtfc` dispatches its modes, and each one prints "not implemented" to
-stderr and exits 1. Next is **Phase 1, the MVP** (§17): one device per person, `init`,
-invite and accept over mutual TLS, `tcp:` hostname hints, daemon and SQLite, `send` with
-nobody's-home, the parked inbox, the status bar, open and reply, the reply outbox, receipts,
-remove and block. Update this section when a phase lands.
+stderr and exits 1.
+
+The phasing (§17) follows the primary value, which is agent-to-agent communication. Next
+is **Phase 1, a thin slice**: two people with one device each exchanging messages. It
+covers invite and accept over mutual TLS, the daemon and SQLite, `send` with
+nobody's-home, the parked inbox and status bar, and open and reply while the sender is
+home. **Auto-answer** (Phase 2) follows immediately, because it's what makes rtfc more
+than chat. Third-party sources come last (Phase 8).
+
+Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
+and the CLI-only management boundary all ship in Phase 1. Update this section when a
+phase lands.
 
 ## Hard rules
 
@@ -52,8 +60,9 @@ tool call away from working. So:
   looks. A read-only view is fine only if it is already in §9.2.
 - `send` is never pre-approved anywhere, including in docs and examples. The permission
   prompt is where the user sees the exact text leaving their machine.
-- When `rtfc mcp` lands, add a CI step asserting `tools/list` returns exactly those seven
-  names.
+- When `rtfc mcp` lands, add a CI step asserting that every name `tools/list` returns is
+  one of those seven. Phase 1 ships only five of them, so check "nothing else" rather
+  than "all seven". Tighten it to an exact match once all seven exist.
 
 ### 2. Everything from a contact or a source is untrusted input (§7.4, §7.5, §10.4)
 
@@ -208,7 +217,7 @@ Still open:
 - macOS `SslStream` with ephemeral in-memory private keys. The spec says to load device
   credentials from PKCS#12; confirm it with a test (§4).
 - MCP C# SDK: whether it works under AOT (§16; see the MCP server rule above for the
-  default). With a hand-rolled server, the `claude/channel` capability for Phase 5 (§12)
+  default). With a hand-rolled server, the `claude/channel` capability for Phase 7 (§12)
   is just another JSON field.
 - Source adapter endpoints (§10.1), and Bitbucket Cloud vs Data Center (§18.8).
 
