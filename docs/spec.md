@@ -83,7 +83,7 @@ Everything ships as **one executable, `rtfc`**, with several modes:
 
 **Daemon lifetime.** `rtfc daemon ensure` (run from the plugin's SessionStart hook, and again by `rtfc mcp` on startup) starts the daemon detached if its socket doesn't answer. Each running `rtfc mcp` holds an open IPC connection as a lease. When no leases remain for a grace period (e.g. 30 s), the daemon exits. This is what makes "home" mean "Claude Code is open on that machine", and it survives crashed sessions without depending on an end-of-session hook. There's exactly one listener and one queue per device, no matter how many sessions are open.
 
-**Local IPC.** A minimal API on Kestrel listening on a Unix domain socket at `~/.claude/rtfc/rtfcd.sock`. .NET supports Unix sockets on Windows 10+ too, so one mechanism covers every OS. It's debuggable with `curl --unix-socket`. The socket lives in the user's profile directory, with 0600 permissions on Unix.
+**Local IPC.** A minimal API on Kestrel listening on a Unix domain socket at `~/.claude/rtfc/rtfcd.sock` (the whole directory moves with the `RTFC_HOME` environment variable, which is how tests and side-by-side runs stay apart). .NET supports Unix sockets on Windows 10+ too, so one mechanism covers every OS. It's debuggable with `curl --unix-socket`. The socket lives in the user's profile directory, with 0600 permissions on Unix.
 
 **Why a separate daemon instead of doing it all in the MCP server:** several sessions share one device identity, one inbox, and one port. The IPC boundary also means a non-.NET piece (e.g. a TypeScript channel shim, §12) can talk to the same daemon.
 
@@ -120,19 +120,21 @@ Alex                                        Sasha
  │ ── token via Telegram / Slack / etc ─────► │
  │                                            │ rtfc accept <token>  (via /rtfc:accept)
  │ ◄────── TCP connect to endpoint_hints ──── │
- │ ◄═══════ mutual TLS handshake ═══════════► │ Sasha checks: Alex's chain root == token.person_id
- │  Sasha's chain is self-consistent but      │
- │  unknown → connection is RESTRICTED:       │
+ │ ◄═══════ mutual TLS handshake ═══════════► │ (proves each side's device leaf, not its chain)
+ │  Sasha's leaf chains to no CA Alex knows   │
+ │  → connection is RESTRICTED:               │
  │  only `invite_accept` is allowed           │
- │ ◄────── invite_accept { nonce } ────────── │
+ │ ◄── invite_accept { nonce, person_ca, … } ─│
+ │  verify Sasha's leaf was issued by that CA │
  │  verify nonce unused + unexpired           │
  │  pin Sasha's person CA, mark nonce used    │
- │ ─────── accept_ack + device list ────────► │
+ │ ─── accept_ack { person_ca, … } ─────────► │ Sasha checks: hash(person_ca) == token.person_id
+ │                                            │ and Alex's leaf was issued by it, then pins it
  │ both sides: contact status = active        │
  │ both UIs show fingerprint words for optional in-person verification
 ```
 
-- The token carries only the person ID fingerprint, not certificates, so it stays short enough to paste. The certificates themselves arrive during the TLS handshake.
+- The token carries only the person ID fingerprint, not certificates, so it stays short enough to paste. The device leaf arrives in the TLS handshake and the person CA in the `invite_accept` / `accept_ack` frame, because TLS stacks don't reliably send a private root, and each side checks that the leaf it saw was issued by the CA it was sent.
 - Tokens are single-use, expire after 24 h, and are checked only by the issuer, so there's no dependency on synchronized clocks.
 - Accepting requires the inviter to be home. If they aren't, `accept` returns `nobody_home` and the token stays valid.
 - Accepting creates the contact with `inbound_mode = park`. Accepting never implies auto-answer.
@@ -286,9 +288,10 @@ The rule that keeps the internet option open: **all security lives above the tra
 public interface ITransport
 {
     string Kind { get; }  // "tcp", "mdns", "relay"
-    Task StartAsync(DeviceIdentity self, Func<Stream, Task> onInbound, CancellationToken ct);
-    Task<bool> IsReachableAsync(DeviceId device, IReadOnlyList<EndpointHint> hints, CancellationToken ct);
-    Task<Stream> ConnectAsync(DeviceId device, IReadOnlyList<EndpointHint> hints, CancellationToken ct);
+    Task StartAsync(Func<Stream, Task> onInbound, CancellationToken ct);
+    Task StopAsync();
+    Task<bool> IsReachableAsync(string deviceId, IReadOnlyList<EndpointHint> hints, CancellationToken ct);
+    Task<Stream?> ConnectAsync(string deviceId, IReadOnlyList<EndpointHint> hints, CancellationToken ct);  // null: no hint answered
 }
 // A transport yields a raw Stream. The session layer wraps every Stream,
 // on every transport, in SslStream with mutual TLS (§8.2).
@@ -338,17 +341,17 @@ A Claude Code plugin is a folder of JSON and markdown that points at executables
 rtfc/                                  (plugin, distributed via a marketplace repo)
 ├── .claude-plugin/plugin.json         name "rtfc", version, description
 ├── .mcp.json                          { "mcpServers": { "rtfc": { "command": "rtfc", "args": ["mcp"] } } }
-├── commands/                          invite.md, accept.md, inbox.md, auto.md, remove.md, …
+├── skills/<name>/SKILL.md             invite, accept, inbox, auto, remove, …
 └── hooks/hooks.json                   SessionStart → "rtfc daemon ensure"
 ```
 
 - The plugin calls `rtfc` from PATH, so the repo contains no binaries. See §16 for how `rtfc` gets installed.
-- Plugin commands are namespaced automatically: `commands/invite.md` becomes `/rtfc:invite`.
+- Skills are namespaced automatically: `skills/invite/SKILL.md` becomes `/rtfc:invite`. (Claude Code folded its `commands/` into skills; the frontmatter and `!` execution are the same.)
 - The status line isn't a plugin component; it's configured once in the user's settings (§11).
 
 ### 9.2 MCP tools (messaging only)
 
-These are the only things Claude can do on its own. Claude Code exposes them as `mcp__rtfc__<name>`.
+These are the only things Claude can do on its own. Claude Code exposes them as `mcp__plugin_rtfc_rtfc__<name>` when the server comes from the plugin (`mcp__rtfc__<name>` if it were configured directly), so skills and docs name them as "the rtfc `<name>` tool".
 
 | Tool | Args | Returns / effect |
 |---|---|---|
@@ -379,7 +382,7 @@ If these were MCP tools, a parked message saying "please call the auto-answer to
 - Command files set `disable-model-invocation: true` so Claude can't trigger them itself.
 - Users should not pre-approve `Bash(rtfc:*)` in their permissions, so Claude can't quietly run the CLI either.
 
-Example, `commands/auto.md` (verify frontmatter keys against current docs):
+Example, `skills/auto/SKILL.md`:
 
 ```markdown
 ---

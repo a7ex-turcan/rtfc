@@ -1,25 +1,28 @@
 using System.Reflection;
+using Rtfc.Cli;
+using Rtfc.Mcp;
 
 namespace Rtfc;
 
 /// <summary>
-/// Dispatches to a mode of the single <c>rtfc</c> executable (spec §3.1). Each mode lands
-/// with its phase; until then it says so and fails, rather than pretending to work.
+/// Dispatches to a mode of the single <c>rtfc</c> executable (spec §3.1), by hand, as
+/// rtfm and rtfq do.
 /// </summary>
 /// <remarks>
-/// Everything is written to <paramref name="stderr"/> except version output: in
-/// <c>rtfc mcp</c> stdout is the MCP protocol, and in <c>rtfc statusline</c> it is what
-/// the user sees in their status bar.
+/// Only results are written to <paramref name="stdout"/>: in <c>rtfc mcp</c> it is the MCP
+/// protocol, and in <c>rtfc statusline</c> it is what the user sees in their status bar.
+/// Diagnostics go to <paramref name="stderr"/>.
 /// </remarks>
-internal static class EntryPoint
+public static class EntryPoint
 {
-    internal const int Ok = 0;
-    internal const int NotImplemented = 1;
-    internal const int Usage = 2;
+    public const int Ok = 0;
+    public const int Failure = 1;
+    public const int Usage = 2;
 
-    private static readonly string[] Modes = ["daemon", "mcp", "statusline"];
+    public static int Run(string[] args, TextWriter stdout, TextWriter stderr, RtfcHome? home = null) =>
+        RunAsync(args, stdout, stderr, home).GetAwaiter().GetResult();
 
-    public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
+    public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, RtfcHome? home = null)
     {
         if (args is ["--version" or "version"])
         {
@@ -27,26 +30,85 @@ internal static class EntryPoint
             return Ok;
         }
 
-        if (args is [var mode, ..] && Modes.Contains(mode))
+        if (args is [] or ["--help" or "-h" or "help"])
         {
-            stderr.WriteLine($"rtfc {mode}: not implemented yet.");
-            return NotImplemented;
+            stderr.WriteLine(UsageText);
+            return Usage;
         }
 
-        stderr.WriteLine($"""
-            rtfc {Version}
-            usage: rtfc <mode> [args]
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            cancellation.Cancel();
+        };
 
-            modes:
-              daemon       per-device daemon (rtfcd)
-              mcp          stdio MCP server, launched by Claude Code
-              statusline   print the status-bar segment
-              --version    print the version
-            """);
-        return Usage;
+        var ctx = new CommandContext(home ?? RtfcHome.Resolve(), stdout, stderr, cancellation.Token);
+        var rest = args[1..];
+        try
+        {
+            switch (args[0])
+            {
+                case "init":
+                    return Commands.Init(ctx, rest);
+                case "invite":
+                    return await Commands.InviteAsync(ctx).ConfigureAwait(false);
+                case "accept":
+                    return await Commands.AcceptAsync(ctx, rest).ConfigureAwait(false);
+                case "contacts":
+                    return await Commands.ContactsAsync(ctx).ConfigureAwait(false);
+                case "inbox":
+                    return await Commands.InboxAsync(ctx, rest).ConfigureAwait(false);
+                case "daemon":
+                    return await Commands.DaemonAsync(ctx, rest).ConfigureAwait(false);
+                case "statusline":
+                    return Commands.Statusline(ctx, Console.In, Console.IsInputRedirected);
+                case "mcp":
+                    await new McpServer(ctx.Home, Console.In, stdout, stderr).RunAsync(ctx.CancellationToken).ConfigureAwait(false);
+                    return Ok;
+                default:
+                    stderr.WriteLine($"rtfc: unknown command '{args[0]}'.");
+                    stderr.WriteLine(UsageText);
+                    return Usage;
+            }
+        }
+        catch (CommandLineException ex)
+        {
+            stderr.WriteLine($"rtfc {args[0]}: {ex.Message}");
+            return Usage;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return Failure;
+        }
+        catch (Exception ex) when (ex is Daemon.DaemonException or IOException or InvalidOperationException)
+        {
+            stderr.WriteLine($"rtfc {args[0]}: {ex.Message}");
+            return Failure;
+        }
     }
 
-    private static string Version
+    private static string UsageText => $"""
+        rtfc {Version}
+        usage: rtfc <command> [args]
+
+        set-up (run these yourself, they are never tools):
+          init [--handle h] [--device d] [--port p] [--hint-host host]...
+          invite                      print a single-use token to send to someone
+          accept <token>              accept someone's invite (they must be home)
+
+        look:
+          contacts                    contacts and whether they are home
+          inbox [--all] | inbox open <id>
+
+        plumbing:
+          daemon run [--stay] | ensure | status | stop
+          mcp                         stdio MCP server, launched by Claude Code
+          statusline                  the status-bar segment
+          --version
+        """;
+
+    public static string Version
     {
         get
         {

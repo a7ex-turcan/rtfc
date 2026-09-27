@@ -19,9 +19,21 @@
     <PackageId>rtfc</PackageId>
   </PropertyGroup>
 
+  <!--
+    The daemon's local IPC is a Kestrel minimal API on a Unix socket (spec §3.1). The
+    request delegate generator replaces reflection-based route binding, which Native AOT
+    cannot do.
+  -->
+  <PropertyGroup>
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

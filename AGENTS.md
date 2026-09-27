@@ -22,18 +22,21 @@ update the spec in the same change. Don't let the two drift apart.
 
 ## Status
 
-**Scaffold only.** `rtfc` dispatches its modes, and each one prints "not implemented" to
-stderr and exits 1.
+**Phase 1, the thin slice, works end to end** (§17): `rtfc init`, invite and accept over
+mutual TLS, the daemon with its lease-based lifetime and Unix-socket IPC, `send` with
+nobody's-home, the parked inbox, the status line, and open and reply while the sender is
+home, all driven from the five MCP tools and the plugin's skills. `scripts/e2e.sh` runs
+the whole story on one machine with two daemons.
 
-The phasing (§17) follows the primary value, which is agent-to-agent communication. Next
-is **Phase 1, a thin slice**: two people with one device each exchanging messages. It
-covers invite and accept over mutual TLS, the daemon and SQLite, `send` with
-nobody's-home, the parked inbox and status bar, and open and reply while the sender is
-home. **Auto-answer** (Phase 2) follows immediately, because it's what makes rtfc more
-than chat. Third-party sources come last (Phase 8).
+Not there yet, by design: read receipts, the reply outbox, `away`, `rename`, dismiss and
+retention (Phase 4); `remove` and `block` (Phase 2, with auto-answer); fingerprint words
+(hex groups for now); session reuse between sends (one connection per delivery); a proper
+detach on Windows (`daemon run` calls `setsid` on Unix only). Next is **Phase 2,
+auto-answer**, because it's what makes rtfc more than chat. Third-party sources come last
+(Phase 8).
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
-and the CLI-only management boundary all ship in Phase 1. Update this section when a
+and the CLI-only management boundary all shipped in Phase 1. Update this section when a
 phase lands.
 
 ## Hard rules
@@ -122,14 +125,16 @@ through the outbox. A resend with a known `id` gets `ack: duplicate`.
 ### 6. Leave the real `~/.claude/rtfc` alone
 
 Development happens on machines where Claude Code, and eventually a real rtfc, is running.
-Every path the code touches (database, keys, socket, status file) must derive from **one
-root** that defaults to `~/.claude/rtfc` and can be overridden. Ports must be configurable,
-and tests use port 0. That override doesn't exist yet: add it with the daemon, before
-anything writes to disk, and document its name here.
+Every path the code touches (database, keys, socket, status file, log) derives from
+`RtfcHome`, whose root is `~/.claude/rtfc` unless the **`RTFC_HOME`** environment variable
+says otherwise. The port lives in `config.json`; tests use port 0.
 
-Tests and manual runs use temp directories. Don't read, write or delete the real
-`~/.claude/rtfc`, don't start a daemon against it, and don't edit the user's
-`~/.claude/settings.json` (for example the status line) unless the user asks.
+Tests use `TempHome` (a short path under the temp directory, because a Unix socket path is
+capped at about a hundred characters on macOS); manual runs set `RTFC_HOME`. Don't read,
+write or delete the real `~/.claude/rtfc`, don't start a daemon against it, and don't edit
+the user's `~/.claude/settings.json` (for example the status line) unless the user asks.
+The installed global tool (`dotnet tool install -g rtfc --add-source ./artifacts`) is fine
+to use with `RTFC_HOME` set.
 
 ## Engineering rules
 
@@ -159,7 +164,24 @@ Tests and manual runs use temp directories. Don't read, write or delete the real
 - **The daemon is the only writer** to SQLite (WAL mode). `rtfc mcp` is stateless and
   forwards to the daemon over the Unix socket. `rtfc statusline` only reads `status.json`,
   because it runs every few seconds: no daemon calls and no database. The daemon writes
-  `status.json` atomically (temp file, then rename).
+  `status.json` atomically (temp file, then rename). `rtfc init` is the one exception: it
+  writes the identity and the `self` row before any daemon exists.
+- **The IPC is a Kestrel minimal API** on the Unix socket, with the request delegate
+  generator on so it survives Native AOT. **Every handler states its return type**
+  (`IResult () =>`, `async Task<IResult> (HttpContext) =>`). A handler without one once
+  compiled into an endpoint that answered 200 with an empty body, and the analyzers said
+  nothing; `DaemonTests` drives every endpoint through the real socket to catch a repeat.
+  Poke it by hand with `curl --unix-socket "$RTFC_HOME/rtfcd.sock" http://rtfcd/v1/status`.
+- **The daemon is spawned detached** by `rtfc daemon ensure` with all three stdio handles
+  redirected and then closed: inheriting them would keep the MCP server's stdout pipe open
+  after it exits, and Claude Code waits on that pipe. The child calls `setsid` on Unix so
+  a parent exiting doesn't take it along. Logs therefore go to `rtfcd.log`, never to
+  stdout or stderr.
+- **The plugin uses skills, not `commands/`.** Claude Code has folded commands into skills
+  and prefers skills for new work; `plugin/skills/<name>/SKILL.md` becomes `/rtfc:<name>`.
+  The frontmatter keys and `!` execution are the same as for commands. Tools from a plugin
+  MCP server are named `mcp__plugin_rtfc_rtfc__<tool>`, so skills say "the rtfc `<tool>`
+  tool" rather than spelling that out.
 - **stdout is reserved.** In `rtfc mcp` it is the MCP protocol; in `rtfc statusline` it is
   what the user sees. Logs and errors go to stderr. `EntryPoint` already works this way,
   and its tests hold the line.
@@ -178,10 +200,17 @@ Tests and manual runs use temp directories. Don't read, write or delete the real
 - The tests use **xUnit v3 on Microsoft.Testing.Platform**, opted in through `global.json`.
   With the .NET 10 SDK, `dotnet test` refuses to run xUnit v3 without that opt-in, so
   don't remove it.
-- Integration tests run **two daemons in one test process** with temp home directories and
-  localhost ports (§16), covering invite, send, nobody's home, and the reply outbox. Use
-  real TLS, real certificates and real SQLite files. Don't mock the session layer, because
-  that is where the bugs will be.
+- Integration tests run **two nodes in one test process** (`TestNode`) with temp home
+  directories and loopback ports (§16), covering invite, send, nobody's home, open and
+  reply. They use real TLS, real certificates and real SQLite files. Don't mock the session
+  layer, because that is where the bugs will be. `DaemonTests` hosts the real daemon on a
+  real socket.
+- `scripts/e2e.sh` is the manual smoke test: two homes under `$TMPDIR`, two detached
+  daemons, `rtfc mcp` driven with raw JSON-RPC, and the idle exit. Run it after any change
+  to the daemon, the MCP server or the CLI; CI can't, because it takes a minute and spawns
+  processes. For the last mile, `RTFC_HOME=<that home> claude --plugin-dir ./plugin -p "…"
+  --allowedTools mcp__plugin_rtfc_rtfc__contacts,mcp__plugin_rtfc_rtfc__inbox_list` runs a
+  headless session against it; `send` stays unapproved on purpose.
 - CI runs on Linux, macOS and Windows, because the risky parts are platform-specific: Unix
   sockets on Windows, `SslStream` key handling on macOS, and file permissions on keys.
 - Name tests as sentences: `Unimplemented_modes_fail_without_touching_stdout`.
@@ -193,11 +222,7 @@ spike, a test) before building on it, then record what you found here or in the 
 
 Checked 2026-09-27 against Claude Code 2.1.283 (`claude --help`) and the docs:
 
-- **Plugin commands are legacy.** The docs say custom commands have been merged into skills
-  (`plugin/skills/<name>/SKILL.md`) and prefer skills for new work. `commands/*.md` still
-  loads, and `description`, `argument-hint`, `allowed-tools`, `disable-model-invocation`
-  and `!` execution work in both. §9.1 says `commands/`, so decide which to use before
-  writing the first one and update the spec to match.
+- **Plugin commands are legacy**, so the plugin uses skills (see the engineering rules).
 - **Headless flags (§7.3):** `-p`, `--allowedTools`/`--allowed-tools`,
   `--disallowedTools`/`--disallowed-tools`, `--tools`, `--permission-mode`, `--settings`,
   `--no-session-persistence` and `--max-budget-usd` all exist. **`--max-turns` does not
@@ -211,21 +236,27 @@ Checked 2026-09-27 against Claude Code 2.1.283 (`claude --help`) and the docs:
   `--mcp-config`. Check that plugin hooks don't fire either. `--bare` skips hooks but also
   skips OAuth and the keychain, so it needs `ANTHROPIC_API_KEY` and is probably unsuitable.
 
+Settled by running it:
+
+- **macOS `SslStream` needs keychain-backed keys** (§4): certificates are always loaded
+  from the PKCS#12 files with `X509KeyStorageFlags.DefaultKeySet`, never used straight
+  from `CreateSelfSigned`/`CopyWithPrivateKey`. `PeerSessionTests` prove mutual TLS on
+  macOS; CI proves Linux and Windows.
+- **The MCP server is hand-rolled** over `JsonNode`, as in rtfq (§16). The `claude/channel`
+  capability for Phase 7 (§12) will be one more JSON field.
+- **The status line's stdin** carries `cwd` (§11); `rtfc statusline` reads and ignores it
+  until Phase 8.
+
 Still open:
 
-- The status line stdin field that carries the working directory (§11).
-- macOS `SslStream` with ephemeral in-memory private keys. The spec says to load device
-  credentials from PKCS#12; confirm it with a test (§4).
-- MCP C# SDK: whether it works under AOT (§16; see the MCP server rule above for the
-  default). With a hand-rolled server, the `claude/channel` capability for Phase 7 (§12)
-  is just another JSON field.
 - Source adapter endpoints (§10.1), and Bitbucket Cloud vs Data Center (§18.8).
+- Whether Claude Code on Windows kills the detached daemon with the MCP server. Unix
+  sockets on Windows are covered by `DaemonTests` in CI.
 
 ## Open decisions
 
 Don't settle these silently in code. Raise them.
 
-- **The rtfc home override** (rule 6): its name and precedence.
 - **Everything in §18**, such as daemon lifetime, sibling-device delivery and the read
   receipts default.
 
@@ -235,9 +266,11 @@ Don't settle these silently in code. Raise them.
 dotnet build                              # build everything (rtfc.slnx)
 dotnet test                               # run the tests
 dotnet format --verify-no-changes         # the formatting check CI runs
-dotnet run --project src/Rtfc -- --version    # run a mode: daemon | mcp | statusline | --version
+dotnet run --project src/Rtfc -- --help   # the CLI: init, invite, accept, contacts, inbox, daemon, mcp, statusline
+scripts/e2e.sh                            # two daemons on this machine, the whole Phase 1 story
+dotnet pack src/Rtfc -c Release -o artifacts && dotnet tool install -g rtfc --add-source ./artifacts   # put `rtfc` on PATH
 claude plugin validate plugin             # validate the plugin manifest
-claude --plugin-dir ./plugin              # try the plugin in a session (needs rtfc on PATH)
+RTFC_HOME=/some/temp/home claude --plugin-dir ./plugin   # try the plugin in a session without touching the real home
 ```
 
 ## Commits
@@ -258,6 +291,8 @@ not into this repo. The debounced file watcher that §10.2 points at is rtfm's
 | --- | --- |
 | `docs/spec.md` | The design and the source of truth: architecture, protocol, schema, threat model, phasing |
 | `README.md` | User-facing overview |
-| `plugin/` | Plugin wiring. §16 says the plugin ships from a separate marketplace repo; it lives here until there is something to ship |
+| `plugin/` | Plugin wiring: manifest, `.mcp.json`, the SessionStart hook, and one skill per slash command. §16 says it ships from a separate marketplace repo; it lives here until there is something to ship |
+| `scripts/e2e.sh` | The manual smoke test |
+| `src/Rtfc/` | `Identity/` keys and certificates · `Storage/` SQLite · `Protocol/` frames · `Net/` transport and TLS sessions · `Core/` the node · `Daemon/` IPC host, client, launcher · `Mcp/` the stdio server · `Cli/` the commands |
 | `.github/workflows/ci.yml` | Build and test on three OSes, the formatting check, and plugin JSON and boundary checks |
 | `global.json` | Pins the SDK and opts `dotnet test` into Microsoft.Testing.Platform |

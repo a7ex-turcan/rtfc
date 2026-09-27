@@ -43,6 +43,8 @@ public sealed class Node : IAsyncDisposable
 
     public SelfIdentity Self { get; }
 
+    public ITransport Transport => _transport;
+
     public long DeviceListVersion => 1;
 
     /// <summary>Raised after the inbox changed and <c>status.json</c> was rewritten.</summary>
