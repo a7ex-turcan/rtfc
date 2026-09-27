@@ -17,9 +17,15 @@ packages are built locally with `dotnet pack`.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 2, auto-answer: a contact's question answered by a scoped,
-read-only, headless Claude run while you are away from the keyboard, plus `remove` and
-`block`.
+Next is Phase 2, auto-answer: a contact's question answered by a scoped, read-only,
+headless Claude run while you are away from the keyboard, plus `remove` and `block`.
+
+### Fixed
+
+- **`rtfc` builds as a Native AOT binary again.** `dotnet publish -p:PublishAot=true`
+  failed on the MCP tool list, which used a collection expression that needs runtime code
+  generation; the trim and AOT analyzers had not flagged it. The published binary now
+  passes the whole `scripts/e2e.sh` story, which takes `RTFC_BIN` to point at any build.
 
 ## [0.1.0] - 2026-09-27
 

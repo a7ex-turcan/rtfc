@@ -6,8 +6,11 @@
 # macOS. Takes about a minute, most of it waiting for the idle exit.
 set -u
 cd "$(dirname "$0")/.." || exit 1
-BIN="$PWD/src/Rtfc/bin/Debug/net10.0/rtfc"
-[ -x "$BIN" ] || { echo "build first: dotnet build"; exit 1; }
+# RTFC_BIN points it at another build, such as a Native AOT publish: the guards must hold
+# in the binary that ships, not only under the JIT (AGENTS.md).
+BIN="${RTFC_BIN:-$PWD/src/Rtfc/bin/Debug/net10.0/rtfc}"
+[ -x "$BIN" ] || { echo "no executable at $BIN; build first: dotnet build"; exit 1; }
+echo "binary: $BIN"
 E="${TMPDIR:-/tmp}/rtfc-e2e"
 rm -rf "$E"; mkdir -p "$E/a" "$E/b"
 A="$E/a"; B="$E/b"

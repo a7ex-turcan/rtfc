@@ -22,8 +22,9 @@ public static class Tools
 
     public static bool Exists(string name) => Names.Contains(name);
 
-    public static JsonArray List() =>
-    [
+    // A JsonArray constructor, not a collection expression: the latter binds to JsonArray.Add<T>,
+    // which needs runtime code generation and fails a Native AOT publish (the analyzers miss it).
+    public static JsonArray List() => new(
         Tool("contacts",
             "List the user's rtfc contacts with each device's online state (home means Claude Code is open there) and inbound mode.",
             new JsonObject { ["type"] = "object", ["properties"] = new JsonObject(), ["additionalProperties"] = false }),
@@ -81,8 +82,7 @@ public static class Tools
                 },
                 ["required"] = new JsonArray("id", "text"),
                 ["additionalProperties"] = false,
-            }),
-    ];
+            }));
 
     public static async Task<string> CallAsync(DaemonClient client, string name, JsonObject arguments, CancellationToken cancellationToken)
     {
