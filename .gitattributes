@@ -1,0 +1,3 @@
+# LF everywhere, including Windows checkouts, so `dotnet format --verify-no-changes`
+# agrees with .editorconfig on every CI runner.
+* text=auto eol=lf

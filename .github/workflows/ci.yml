@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # All three, because the risky parts are platform-specific: Unix domain sockets on
+    # Windows (local IPC), SslStream and ephemeral keys on macOS, file permissions on keys.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JSON is well-formed
+        run: |
+          set -euo pipefail
+          find plugin -name '*.json' -print0 | xargs -0 -n1 jq empty
+
+      # The boundary rule (spec §9.3, AGENTS.md): anything that changes who can reach you
+      # or what your Claude does automatically is CLI-only, and only a human may start it.
+      # A command that shells out to rtfc must therefore be un-invocable by the model and
+      # scoped to its own subcommand. Checked for every command and skill file, including
+      # ones that do not exist yet: Claude Code now prefers skills to commands/, so the
+      # slash commands may land in either place.
+      - name: Management commands are user-only
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          status=0
+          for f in plugin/commands/*.md plugin/skills/*/SKILL.md; do
+            if grep -q '!`rtfc' "$f" && ! grep -qx 'disable-model-invocation: true' "$f"; then
+              echo "$f runs rtfc but does not set disable-model-invocation: true"
+              status=1
+            fi
+          done
+          if grep -rnE 'Bash\(rtfc(:\*| ?\*|\))' plugin; then
+            echo 'A blanket rtfc permission appears above. Scope it to one subcommand.'
+            status=1
+          fi
+          exit $status

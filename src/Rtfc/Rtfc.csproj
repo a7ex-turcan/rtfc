@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The one executable (spec §3.1): `rtfc daemon`, `rtfc mcp`, `rtfc statusline`, and the
+    management CLI are all modes of this binary.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Rtfc</RootNamespace>
+    <AssemblyName>rtfc</AssemblyName>
+
+    <Version>0.1.0</Version>
+    <Product>rtfc</Product>
+    <Description>Relay Tool For Contacts: Claude Code to Claude Code messaging between people.</Description>
+
+    <!-- Phase 1 distribution: `dotnet tool install -g rtfc` (spec §16). -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>rtfc</ToolCommandName>
+    <PackageId>rtfc</PackageId>
+
+    <!--
+      Native AOT is the public-release target, so the trim and AOT analyzers run from day
+      one. With TreatWarningsAsErrors, a reflection-heavy dependency fails the build the
+      day it is added, not the day we try to publish.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rtfc.Tests" />
+  </ItemGroup>
+
+</Project>

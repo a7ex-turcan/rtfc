@@ -1,0 +1,8 @@
+{
+  "name": "rtfc",
+  "version": "0.1.0",
+  "description": "Relay Tool For Contacts: message between people's Claude Code sessions, with a parked inbox and opt-in auto-answer.",
+  "author": {
+    "name": "Alex Turcan"
+  }
+}
