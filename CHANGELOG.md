@@ -20,6 +20,11 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
+one person on several devices.
+
+## [0.3.0] - 2026-09-27
+
 Phase 4, async: a reply written hours later reaches a sender who has since closed Claude
 Code, as soon as they are next home.
 
@@ -173,7 +178,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/a7ex-turcan/rtfc/releases/tag/v0.1.0

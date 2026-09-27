@@ -45,7 +45,7 @@ Download the archive for your platform from the
 
 ```bash
 mkdir -p ~/.local/share/rtfc
-tar -xzf rtfc-0.2.0-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
+tar -xzf rtfc-0.3.0-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
 export PATH="$HOME/.local/share/rtfc:$PATH"     # add to your shell profile
 rtfc --version
 ```
