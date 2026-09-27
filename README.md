@@ -341,6 +341,7 @@ See `CHANGELOG.md` for the versioning rules.
 | `tests/Rtfc.Tests/` | xUnit v3 |
 | `plugin/` | The Claude Code plugin: manifest, `.mcp.json`, the hook, one skill per slash command |
 | `docs/spec.md` | The design spec, the source of truth |
+| `docs/implementation.md` | How the code realizes it, what was verified, departures and why |
 | `AGENTS.md` | Guidance for AI agents working in this repo; `CLAUDE.md` points at it |
 | `CHANGELOG.md` | What changed, per version |
 

@@ -11,8 +11,10 @@ answered by a restricted, headless Claude. Jira, Confluence, Bitbucket and GitHu
 notifications land in the same inbox, scoped per project.
 
 **The design is `docs/spec.md`, and it is the source of truth.** Read the relevant section
-before changing anything; `§` numbers below refer to it. If the code has to diverge from it,
-update the spec in the same change. Don't let the two drift apart.
+before changing anything; `§` numbers below refer to it. `docs/implementation.md` records
+how this code realizes it, what was verified against the real thing, and every departure
+from the spec with its reason. If the code has to diverge from the spec, update the spec
+(the design) and implementation.md (the reason) in the same change. Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
@@ -251,16 +253,8 @@ Checked 2026-09-27 against Claude Code 2.1.283 (`claude --help`) and the docs:
   so the secret-path denies in `ClaudeProcessRunner.DenyRules` are a second line behind
   "choose a scope without secrets", not the first. Documented for users in the README.
 
-Settled by running it:
-
-- **macOS `SslStream` needs keychain-backed keys** (§4): certificates are always loaded
-  from the PKCS#12 files with `X509KeyStorageFlags.DefaultKeySet`, never used straight
-  from `CreateSelfSigned`/`CopyWithPrivateKey`. `PeerSessionTests` prove mutual TLS on
-  macOS; CI proves Linux and Windows.
-- **The MCP server is hand-rolled** over `JsonNode`, as in rtfq (§16). The `claude/channel`
-  capability for Phase 7 (§12) will be one more JSON field.
-- **The status line's stdin** carries `cwd` (§11); `rtfc statusline` reads and ignores it
-  until Phase 8.
+Everything settled by running it, with dates and how, is the "Verified against the real
+thing" table in `docs/implementation.md`. Read it before re-verifying anything.
 
 Still open:
 
@@ -322,6 +316,7 @@ not into this repo. The debounced file watcher that §10.2 points at is rtfm's
 | Path | What |
 | --- | --- |
 | `docs/spec.md` | The design and the source of truth: architecture, protocol, schema, threat model, phasing |
+| `docs/implementation.md` | How the code realizes the spec, verified facts, departures and why, schema history, known gaps |
 | `README.md` | Getting started and what users need to know; keep it true when behaviour changes |
 | `CHANGELOG.md` | Per-version history and the versioning rules |
 | `plugin/` | Plugin wiring: manifest, `.mcp.json`, the SessionStart hook, and one skill per slash command. §16 says it ships from a separate marketplace repo; it lives here until there is something to ship |

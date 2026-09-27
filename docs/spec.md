@@ -1,6 +1,8 @@
 # rtfc — Relay Tool For Contacts · Design Spec
 
-**Status:** draft v0.5 · **Date:** 2026-09-27 · **Stack:** .NET 10 / C# · **Scope:** LAN first, designed so internet reachability is an added transport, not a rewrite.
+**Status:** draft v0.6 · **Date:** 2026-09-27 · **Stack:** .NET 10 / C# · **Scope:** LAN first, designed so internet reachability is an added transport, not a rewrite.
+
+This is the design: what rtfc is, so that it could be built again from this document. How this code builds it, what was verified against the real thing, where it departed from earlier drafts and why, and the schema history are in [`implementation.md`](implementation.md).
 
 ---
 
@@ -134,7 +136,7 @@ Alex                                        Sasha
  │ both UIs show fingerprint words for optional in-person verification
 ```
 
-- The token carries only the person ID fingerprint, not certificates, so it stays short enough to paste. The device leaf arrives in the TLS handshake and the person CA in the `invite_accept` / `accept_ack` frame, because TLS stacks don't reliably send a private root, and each side checks that the leaf it saw was issued by the CA it was sent.
+- The token carries only the person ID fingerprint, not certificates, so it stays short enough to paste. The device leaf arrives in the TLS handshake and the person CA in the `invite_accept` / `accept_ack` frame; each side checks that the leaf it saw was issued by the CA it was sent (see implementation.md for why the CA does not travel in the TLS chain).
 - Tokens are single-use, expire after 24 h, and are checked only by the issuer, so there's no dependency on synchronized clocks.
 - Accepting requires the inviter to be home. If they aren't, `accept` returns `nobody_home` and the token stays valid.
 - Accepting creates the contact with `inbound_mode = park`. Accepting never implies auto-answer.
@@ -238,7 +240,10 @@ Set per contact with `/rtfc:auto <contact> off|headless|session [--scope <dir>]`
 - Frame the prompt so the incoming text is treated as untrusted input from a named contact, with instructions to answer only from the scoped files and never disclose secrets.
 - Send the output back as a reply with `origin: "auto"`.
 
-As implemented (Claude Code 2.1): `claude -p --output-format json --restricted --strict-mcp-config --no-session-persistence --disable-slash-commands --tools Read,Grep,Glob --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write,… --permission-mode default --max-budget-usd 0.50 --settings '{"permissions":{"deny":[Read rules for .env*, keys, certificates, credentials, .ssh, .aws, …]}}' --system-prompt <framing>`, with the wrapped message on stdin, `CLAUDE*` environment variables stripped (a nested Claude refuses to run under a session's), and a 3-minute wall clock since there is no `--max-turns`. Deny rules exist for `Read` only; `Grep` can still search any file in the scope, so the scope must not contain secrets. The benefits: no research-preview channel flags are needed, the answering Claude has no access to your working session's context, and nothing it does touches your active session.
+- The run must load no MCP servers (so it cannot use rtfc's own `send`), no plugins, no hooks, and must leave no session behind. The process must not inherit the environment a Claude Code session sets, or a nested Claude refuses to run.
+- Where the platform offers no turn cap, a budget cap and a wall clock take its place.
+
+The exact flags used, and the gaps found (path deny rules exist for `Read` only, so the scope must not contain secrets), are in implementation.md. The benefits: no research-preview channel flags are needed, the answering Claude has no access to your working session's context, and nothing it does touches your active session.
 
 **`auto_session` (advanced).** The message is pushed into one designated running session as a Claude Code **channel** event, and Claude answers with full session context through the `inbox_reply` tool. This is powerful but riskier, since that session has your normal permissions. It also depends on the channels research preview (§12). The plugin must **never** declare the permission-relay capability: a contact must never be able to approve tool use in your session.
 
@@ -346,12 +351,12 @@ rtfc/                                  (plugin, distributed via a marketplace re
 ```
 
 - The plugin calls `rtfc` from PATH, so the repo contains no binaries. See §16 for how `rtfc` gets installed.
-- Skills are namespaced automatically: `skills/invite/SKILL.md` becomes `/rtfc:invite`. (Claude Code folded its `commands/` into skills; the frontmatter and `!` execution are the same.)
+- Skills are namespaced automatically: `skills/invite/SKILL.md` becomes `/rtfc:invite`.
 - The status line isn't a plugin component; it's configured once in the user's settings (§11).
 
 ### 9.2 MCP tools (messaging only)
 
-These are the only things Claude can do on its own. Claude Code exposes them as `mcp__plugin_rtfc_rtfc__<name>` when the server comes from the plugin (`mcp__rtfc__<name>` if it were configured directly), so skills and docs name them as "the rtfc `<name>` tool".
+These are the only things Claude can do on its own. Claude Code exposes them as MCP tools of the `rtfc` server under a prefix it chooses, so skills and docs name them as "the rtfc `<name>` tool".
 
 | Tool | Args | Returns / effect |
 |---|---|---|
@@ -590,7 +595,7 @@ CREATE TABLE invites (
 CREATE TABLE inbox (
   id          TEXT NOT NULL,
   to_device   TEXT NOT NULL,
-  kind        TEXT NOT NULL,                      -- person | source | notice (a local note from rtfc itself, e.g. an expired reply)
+  kind        TEXT NOT NULL,                      -- person | source | notice (a note from rtfc itself, e.g. an expired reply)
   project_id  TEXT,                               -- NULL for person messages (global)
   -- person messages
   from_person TEXT,
@@ -605,8 +610,8 @@ CREATE TABLE inbox (
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
   draft       TEXT,                               -- output of a `prepare` run, or the auto-answer that was sent
-  note        TEXT,                               -- a line for the human: why not auto-answered, what became of the reply (schema v2, renamed v3)
-  auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message (schema v2)
+  note        TEXT,                               -- a line for the human: why not auto-answered, what became of the reply
+  auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message
   -- common
   thread      TEXT,
   title       TEXT,
@@ -665,7 +670,7 @@ CREATE TABLE outbox (
   state       TEXT NOT NULL                       -- pending | delivered | expired
 );
 
-CREATE TABLE sent (                               -- what left this device (schema v3): receipts and expiries need something to update
+CREATE TABLE sent (                               -- what left this device: receipts and expiries need something to update
   id          TEXT PRIMARY KEY,
   to_person   TEXT NOT NULL,
   to_device   TEXT,                               -- NULL = whichever device took it
@@ -685,7 +690,7 @@ CREATE TABLE seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 ```
 
-A `meta` table holds `schema_version`; the daemon migrates older files on open.
+A `meta` table holds `schema_version` and device-local flags such as `away`; the daemon migrates older files on open (history in implementation.md).
 
 **Relaunch behavior:**
 
@@ -756,14 +761,14 @@ The main open design choice for the relay is how it limits who can request a pip
 
 | Concern | Choice |
 |---|---|
-| MCP server | `ModelContextProtocol` (official C# SDK), stdio, same as rtfm, if it works under AOT; otherwise hand-rolled JSON-RPC over `JsonNode`, as in rtfq |
+| MCP server | Hand-rolled JSON-RPC 2.0 over stdio and `JsonNode`, as in rtfq: AOT-clean, and small enough to own |
 | Daemon host | `Microsoft.Extensions.Hosting` worker service |
 | Local IPC | Kestrel minimal API on a Unix domain socket (`WebApplication.CreateSlimBuilder` for AOT) |
 | Peer protocol | `TcpListener`/`TcpClient` + `SslStream` (mutual TLS), framing with `System.IO.Pipelines` |
 | Certificates & crypto | `System.Security.Cryptography`: `ECDsa`, `CertificateRequest`, `X509Chain` with custom root trust. No third-party crypto. |
 | Storage | `Microsoft.Data.Sqlite` (WAL) + hand-written SQL or Dapper.AOT. No EF Core: its Native AOT support is limited, and six tables don't need it. |
 | JSON | `System.Text.Json` with source-generated contexts (required for AOT) |
-| CLI | Hand-rolled dispatch, as in rtfm and rtfq (rtfm formats output with Spectre.Console; check it is AOT-clean before adopting it) |
+| CLI | Hand-rolled dispatch, as in rtfm and rtfq |
 | Auto-answer runner | `System.Diagnostics.Process` running `claude -p`, with timeout and output capture |
 | mDNS (later) | Evaluate `Makaretu.Dns.Multicast` forks or similar |
 | Tests | xUnit. Integration tests run two daemons in one test process with temp home directories and localhost ports, covering invite, send, nobody's-home, and the reply outbox. |
@@ -772,7 +777,7 @@ The main open design choice for the relay is how it limits who can request a pip
 
 **Distribution:**
 
-- **GitHub Releases only** (decided September 2026: not on NuGet). A `vX.Y.Z` tag builds Native AOT binaries per platform (linux-x64, osx-arm64, win-x64), runs the end-to-end story against them, and publishes an archive per platform plus the dotnet-tool package for people who have the SDK anyway. Colleagues download an archive and put it on `PATH`; no .NET install is needed.
+- **GitHub Releases only.** A `vX.Y.Z` tag builds Native AOT binaries per platform (linux-x64, osx-arm64, win-x64), runs the end-to-end story against them, and publishes an archive per platform plus the dotnet-tool package for people who have the SDK anyway. Colleagues download an archive and put it on `PATH`; no .NET install is needed. Not on NuGet.
 - **The plugin:** loaded with `claude --plugin-dir` from the repo for now; a marketplace entry (markdown and JSON only) can come later.
 
 ---
@@ -783,7 +788,7 @@ Ordered by the primary value, agent-to-agent communication. Two Claudes talk as 
 
 The order is cheap to change because the invariants (§15) and the `(person_id, device_id)` data model are in place from Phase 1, so no phase reworks an earlier one. **Early phases defer features, never guards.** Mutual TLS, the untrusted wrapping (§7.5), the frame and body size caps, and the CLI-only management boundary (§9.3) all ship in Phase 1.
 
-**Progress:** Phase 1 shipped as 0.1.x, Phase 2 as 0.2.0 and Phase 4 as 0.3.0 (Phase 4 was pulled ahead of 3: replies that wait for the sender are worth more than VPN hints). See `CHANGELOG.md`.
+Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints.
 
 | Phase | Scope | Done when |
 |---|---|---|
@@ -805,7 +810,7 @@ The order is cheap to change because the invariants (§15) and the `(person_id, 
 2. **Sibling-device delivery.** Should a message that landed on the desktop be offered to the laptop when it comes online, or does an inbox live where it landed? Currently only handled state syncs.
 3. **Attachments.** Diffs and files are the obvious next ask. What size limit, and are they ever allowed into auto-answer?
 4. **Groups.** Is "ask the team" a list of contacts with fan-out, or a first-class group concept?
-5. **Read receipts default.** On (current, implemented in 0.3.0 with `rtfc receipts <contact> off` per contact) or off?
+5. **Read receipts default.** On (current; off per contact with `rtfc receipts <contact> off`) or off?
 6. **Handle collisions.** How to display two contacts who both chose "alex" as their suggested handle.
 7. **Daemon lifetime matters more with sources.** Polling only happens while some session is open, so items catch up late (not lost) after the laptop has been closed. A login-item daemon would poll all day. Is that wanted?
 8. **Bitbucket flavor.** Cloud or Data Center first? The APIs differ.
