@@ -39,3 +39,7 @@ dotnet run --project src/Rtfc -- --version
 | `tests/Rtfc.Tests/` | xUnit v3 tests |
 | `plugin/` | The Claude Code plugin: JSON and markdown that call `rtfc` from PATH |
 | `docs/spec.md` | The design spec |
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).

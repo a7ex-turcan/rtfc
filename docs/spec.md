@@ -733,14 +733,14 @@ The main open design choice for the relay is how it limits who can request a pip
 
 | Concern | Choice |
 |---|---|
-| MCP server | `ModelContextProtocol` (official C# SDK), stdio, same as rtfm |
+| MCP server | `ModelContextProtocol` (official C# SDK), stdio, same as rtfm, if it works under AOT; otherwise hand-rolled JSON-RPC over `JsonNode`, as in rtfq |
 | Daemon host | `Microsoft.Extensions.Hosting` worker service |
 | Local IPC | Kestrel minimal API on a Unix domain socket (`WebApplication.CreateSlimBuilder` for AOT) |
 | Peer protocol | `TcpListener`/`TcpClient` + `SslStream` (mutual TLS), framing with `System.IO.Pipelines` |
 | Certificates & crypto | `System.Security.Cryptography`: `ECDsa`, `CertificateRequest`, `X509Chain` with custom root trust. No third-party crypto. |
 | Storage | `Microsoft.Data.Sqlite` (WAL) + hand-written SQL or Dapper.AOT. No EF Core: its Native AOT support is limited, and six tables don't need it. |
 | JSON | `System.Text.Json` with source-generated contexts (required for AOT) |
-| CLI | Same library as rtfm's CLI, for consistency |
+| CLI | Hand-rolled dispatch, as in rtfm and rtfq (rtfm formats output with Spectre.Console; check it is AOT-clean before adopting it) |
 | Auto-answer runner | `System.Diagnostics.Process` running `claude -p`, with timeout and output capture |
 | mDNS (later) | Evaluate `Makaretu.Dns.Multicast` forks or similar |
 | Tests | xUnit. Integration tests run two daemons in one test process with temp home directories and localhost ports, covering invite, send, nobody's-home, and the reply outbox. |

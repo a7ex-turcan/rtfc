@@ -5,6 +5,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <Authors>Alex Turcan</Authors>
+    <RepositoryUrl>https://github.com/a7ex-turcan/rtfc</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!--
+    Native AOT is the public-release target (spec §16), so product code runs the trim and
+    AOT analyzers from day one. With TreatWarningsAsErrors, a reflection-heavy dependency
+    fails the build the day it is added, not the day we try to publish. Test projects
+    need not be AOT-clean.
+  -->
+  <PropertyGroup Condition="!$(MSBuildProjectName.EndsWith('.Tests'))">
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
 </Project>

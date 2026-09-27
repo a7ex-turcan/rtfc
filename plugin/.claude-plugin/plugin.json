@@ -4,5 +4,8 @@
   "description": "Relay Tool For Contacts: message between people's Claude Code sessions, with a parked inbox and opt-in auto-answer.",
   "author": {
     "name": "Alex Turcan"
-  }
+  },
+  "homepage": "https://github.com/a7ex-turcan/rtfc",
+  "repository": "https://github.com/a7ex-turcan/rtfc",
+  "license": "MIT"
 }

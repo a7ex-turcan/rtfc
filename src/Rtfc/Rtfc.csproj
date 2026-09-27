@@ -17,13 +17,6 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>rtfc</ToolCommandName>
     <PackageId>rtfc</PackageId>
-
-    <!--
-      Native AOT is the public-release target, so the trim and AOT analyzers run from day
-      one. With TreatWarningsAsErrors, a reflection-heavy dependency fails the build the
-      day it is added, not the day we try to publish.
-    -->
-    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>

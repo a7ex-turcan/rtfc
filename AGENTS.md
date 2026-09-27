@@ -53,7 +53,7 @@ tool call away from working. So:
 - `send` is never pre-approved anywhere, including in docs and examples. The permission
   prompt is where the user sees the exact text leaving their machine.
 - When `rtfc mcp` lands, add a CI step asserting `tools/list` returns exactly those seven
-  names, the way sm-ts-mcp whitelists its tool surface.
+  names.
 
 ### 2. Everything from a contact or a source is untrusted input (§7.4, §7.5, §10.4)
 
@@ -129,8 +129,22 @@ Tests and manual runs use temp directories. Don't read, write or delete the real
   `JsonSerializerContext`s, never reflection-based serialization. No EF Core: use
   `Microsoft.Data.Sqlite` with hand-written SQL, or Dapper.AOT. Check that a package is AOT
   compatible before adding it. Don't suppress an AOT warning to get a green build; raise
-  it instead. The MCP C# SDK's AOT status is still open: sm-ts-mcp registers tools with
-  `WithToolsFromAssembly`, which is reflection, so expect to register tools explicitly.
+  it instead.
+- **Test guards in the published AOT binary, not only under the JIT.** rtfq's ADR 0001
+  records a trimmed reflection walk that turned a guard fail-open while every JIT test
+  still passed. Here the guards are the management boundary, the untrusted wrapping and
+  the auto-answer limits.
+- **The MCP server: prefer rtfq's approach.** The siblings split. rtfm uses the
+  `ModelContextProtocol` SDK with `WithToolsFromAssembly`, which relies on reflection and
+  isn't AOT-clean. rtfq ships Native AOT and hand-rolls JSON-RPC over `JsonNode` in about
+  200 lines (`src/Rtfq.Mcp/McpServer.cs`), because MCP is still moving and tool discovery
+  by reflection won't survive trimming. Follow rtfq unless the SDK is shown to work under
+  AOT with tools registered explicitly (§16).
+- **CLI parsing is hand-rolled, as in both siblings.** A `switch` on the first argument
+  dispatches to a command class, and a small args helper does the rest. That settles
+  §16's "same library as rtfm's CLI": rtfm uses Spectre.Console only to format output,
+  not Spectre.Console.Cli. Don't add Spectre.Console until it's confirmed AOT and trim
+  clean. rtfq, the AOT sibling, doesn't use it.
 - **No third-party crypto.** Use `System.Security.Cryptography`: ECDSA P-256, `CertificateRequest`,
   and `X509Chain` with `TrustMode = CustomRootTrust`. Never consult the OS trust store.
 - **The daemon is the only writer** to SQLite (WAL mode). `rtfc mcp` is stateless and
@@ -193,17 +207,15 @@ Still open:
 - The status line stdin field that carries the working directory (§11).
 - macOS `SslStream` with ephemeral in-memory private keys. The spec says to load device
   credentials from PKCS#12; confirm it with a test (§4).
-- MCP C# SDK: whether it supports AOT (§16), and whether it can declare the
-  `claude/channel` capability, which matters for Phase 5 (§12).
+- MCP C# SDK: whether it works under AOT (§16; see the MCP server rule above for the
+  default). With a hand-rolled server, the `claude/channel` capability for Phase 5 (§12)
+  is just another JSON field.
 - Source adapter endpoints (§10.1), and Bitbucket Cloud vs Data Center (§18.8).
 
 ## Open decisions
 
 Don't settle these silently in code. Raise them.
 
-- **CLI library.** §16 says to use "the same library as rtfm's CLI", but rtfm isn't on
-  this machine. Ask the owner which one before adding a dependency. Until then
-  `EntryPoint` dispatches by hand.
 - **The rtfc home override** (rule 6): its name and precedence.
 - **Everything in §18**, such as daemon lifetime, sibling-device delivery and the read
   receipts default.
@@ -226,6 +238,12 @@ for example "Tell the sender at once when nobody is home". Make one logical chan
 commit. When code changes the design, commit the spec edit in the same commit.
 
 ## Where things are
+
+When the spec says "same as rtfm", look at the siblings, which are public:
+[a7ex-turcan/rtfm](https://github.com/a7ex-turcan/rtfm) and
+[a7ex-turcan/rtfq](https://github.com/a7ex-turcan/rtfq). Clone them somewhere temporary,
+not into this repo. The debounced file watcher that §10.2 points at is rtfm's
+`src/Rtfm.Core/Watch/FolderWatcher.cs`.
 
 | Path | What |
 | --- | --- |
