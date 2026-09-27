@@ -49,6 +49,18 @@ jobs:
           set -euo pipefail
           find plugin -name '*.json' -print0 | xargs -0 -n1 jq empty
 
+      # The version is declared in three places (see CHANGELOG.md); a release that moves
+      # one and not the others ships a tool and a plugin that disagree about what they are.
+      - name: Version is declared consistently
+        run: |
+          set -euo pipefail
+          csproj=$(sed -nE 's|.*<Version>([^<]+)</Version>.*|\1|p' src/Rtfc/Rtfc.csproj)
+          plugin=$(jq -r .version plugin/.claude-plugin/plugin.json)
+          changelog=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '[]# ')
+          echo "csproj=$csproj plugin=$plugin changelog=$changelog"
+          [ -n "$csproj" ] && [ "$csproj" = "$plugin" ] && [ "$csproj" = "$changelog" ] || {
+            echo "The version differs between Rtfc.csproj, plugin.json and CHANGELOG.md."; exit 1; }
+
       # The boundary rule (spec §9.3, AGENTS.md): anything that changes who can reach you
       # or what your Claude does automatically is CLI-only, and only a human may start it.
       # A command that shells out to rtfc must therefore be un-invocable by the model and

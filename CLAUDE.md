@@ -29,6 +29,13 @@ loosen an auto-answer guard (spec §7.4) to get a test or a demo working.
 
 ## Leave the real `~/.claude/rtfc` alone
 
-Tests and manual runs use temp directories and port 0. Don't read, write or delete the
-user's real `~/.claude/rtfc`, don't start a daemon against it, and don't touch
-`~/.claude/settings.json` unless the user asks.
+Every path derives from `RtfcHome`, which `RTFC_HOME` overrides. Tests use `TempHome` and
+port 0; manual runs and `scripts/e2e.sh` set `RTFC_HOME` to a short path under the temp
+directory. Don't read, write or delete the user's real `~/.claude/rtfc`, don't start a
+daemon against it, and don't touch `~/.claude/settings.json` unless the user asks.
+
+## Every change lands in the changelog
+
+A user-visible change gets a line under `[Unreleased]` in `CHANGELOG.md` in the same
+commit. A release bumps the version in the three places `CHANGELOG.md` names, and CI
+fails if they disagree.

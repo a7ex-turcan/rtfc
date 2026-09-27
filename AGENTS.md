@@ -273,11 +273,24 @@ claude plugin validate plugin             # validate the plugin manifest
 RTFC_HOME=/some/temp/home claude --plugin-dir ./plugin   # try the plugin in a session without touching the real home
 ```
 
-## Commits
+## Commits, changelog and versions
 
 Write an imperative, sentence-case subject that says what changed, with no type prefix,
 for example "Tell the sender at once when nobody is home". Make one logical change per
 commit. When code changes the design, commit the spec edit in the same commit.
+
+`CHANGELOG.md` follows Keep a Changelog. Every user-visible change (a tool, a command, a
+flag, a status, wire behaviour, a fixed bug someone could have hit) gets a line under
+`[Unreleased]` in the same commit, written for the person using rtfc, not for the
+reviewer. Internal refactors don't.
+
+A release is a commit that moves the version in all three places, and CI fails if they
+disagree: `<Version>` in `src/Rtfc/Rtfc.csproj`, `version` in
+`plugin/.claude-plugin/plugin.json`, and a new `## [x.y.z] - date` section at the top of
+the changelog with the `[Unreleased]` items moved into it and the link references at the
+bottom updated. Semver: patch for fixes, minor for additive features, major for a breaking
+change to the CLI, the MCP tools or the wire protocol; before 1.0, minor may break. Tag it
+`vX.Y.Z` after merging. Don't bump the version for ordinary commits.
 
 ## Where things are
 
@@ -290,7 +303,8 @@ not into this repo. The debounced file watcher that §10.2 points at is rtfm's
 | Path | What |
 | --- | --- |
 | `docs/spec.md` | The design and the source of truth: architecture, protocol, schema, threat model, phasing |
-| `README.md` | User-facing overview |
+| `README.md` | Getting started and what users need to know; keep it true when behaviour changes |
+| `CHANGELOG.md` | Per-version history and the versioning rules |
 | `plugin/` | Plugin wiring: manifest, `.mcp.json`, the SessionStart hook, and one skill per slash command. §16 says it ships from a separate marketplace repo; it lives here until there is something to ship |
 | `scripts/e2e.sh` | The manual smoke test |
 | `src/Rtfc/` | `Identity/` keys and certificates · `Storage/` SQLite · `Protocol/` frames · `Net/` transport and TLS sessions · `Core/` the node · `Daemon/` IPC host, client, launcher · `Mcp/` the stdio server · `Cli/` the commands |
