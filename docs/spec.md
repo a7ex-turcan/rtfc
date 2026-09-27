@@ -1,6 +1,6 @@
 # rtfc — Relay Tool For Contacts · Design Spec
 
-**Status:** draft v0.4 · **Date:** 2026-09-27 · **Stack:** .NET 10 / C# · **Scope:** LAN first, designed so internet reachability is an added transport, not a rewrite.
+**Status:** draft v0.5 · **Date:** 2026-09-27 · **Stack:** .NET 10 / C# · **Scope:** LAN first, designed so internet reachability is an added transport, not a rewrite.
 
 ---
 
@@ -772,9 +772,8 @@ The main open design choice for the relay is how it limits who can request a pip
 
 **Distribution:**
 
-- **Phase 1:** `dotnet tool install -g rtfc` from NuGet. It's framework-dependent, so everyone needs .NET, which is fine for the office. The status line only reads a file, so normal startup time is acceptable.
-- **Public release:** Native AOT single binaries per platform (win-x64, osx-arm64, linux-x64) on GitHub Releases, for millisecond startup with no .NET install. Optionally add a plugin-side launcher that downloads the right binary on first run.
-- **The plugin:** a marketplace repo containing only markdown and JSON.
+- **GitHub Releases only** (decided September 2026: not on NuGet). A `vX.Y.Z` tag builds Native AOT binaries per platform (linux-x64, osx-arm64, win-x64), runs the end-to-end story against them, and publishes an archive per platform plus the dotnet-tool package for people who have the SDK anyway. Colleagues download an archive and put it on `PATH`; no .NET install is needed.
+- **The plugin:** loaded with `claude --plugin-dir` from the repo for now; a marketplace entry (markdown and JSON only) can come later.
 
 ---
 
@@ -783,6 +782,8 @@ The main open design choice for the relay is how it limits who can request a pip
 Ordered by the primary value, agent-to-agent communication. Two Claudes talk as early as possible, then auto-answer arrives (the feature that makes rtfc more than chat), then reach grows beyond the office. Sources are a separate pipeline that shares only the inbox and the status bar, so they come last.
 
 The order is cheap to change because the invariants (§15) and the `(person_id, device_id)` data model are in place from Phase 1, so no phase reworks an earlier one. **Early phases defer features, never guards.** Mutual TLS, the untrusted wrapping (§7.5), the frame and body size caps, and the CLI-only management boundary (§9.3) all ship in Phase 1.
+
+**Progress:** Phase 1 shipped as 0.1.x, Phase 2 as 0.2.0 and Phase 4 as 0.3.0 (Phase 4 was pulled ahead of 3: replies that wait for the sender are worth more than VPN hints). See `CHANGELOG.md`.
 
 | Phase | Scope | Done when |
 |---|---|---|
@@ -800,11 +801,11 @@ The order is cheap to change because the invariants (§15) and the `(person_id, 
 
 ## 18. Open questions
 
-1. **Daemon lifetime.** Session-bound (current design: home = Claude Code open) or a login item that is always home? The login item would let auto-answer work with no session open, but changes what "home" means.
+1. **Daemon lifetime.** Session-bound (current design: home = Claude Code open) or a login item that is always home? More pressing since Phase 4: the outbox is delivered by the daemon, so a queued reply leaves only while both sides have a session open at the same time. The login item would let auto-answer work with no session open, but changes what "home" means.
 2. **Sibling-device delivery.** Should a message that landed on the desktop be offered to the laptop when it comes online, or does an inbox live where it landed? Currently only handled state syncs.
 3. **Attachments.** Diffs and files are the obvious next ask. What size limit, and are they ever allowed into auto-answer?
 4. **Groups.** Is "ask the team" a list of contacts with fan-out, or a first-class group concept?
-5. **Read receipts default.** On (current) or off?
+5. **Read receipts default.** On (current, implemented in 0.3.0 with `rtfc receipts <contact> off` per contact) or off?
 6. **Handle collisions.** How to display two contacts who both chose "alex" as their suggested handle.
 7. **Daemon lifetime matters more with sources.** Polling only happens while some session is open, so items catch up late (not lost) after the laptop has been closed. A login-item daemon would poll all day. Is that wanted?
 8. **Bitbucket flavor.** Cloud or Data Center first? The APIs differ.

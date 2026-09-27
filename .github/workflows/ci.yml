@@ -39,6 +39,29 @@ jobs:
       - name: Test
         run: dotnet test -c Release --no-build
 
+      # The MCP surface is the seven tools of spec §9.2 and nothing else (AGENTS.md rule 1).
+      # tools/list needs neither a daemon nor an identity, so this runs against an empty home.
+      - name: MCP tools are a subset of spec §9.2
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          export RTFC_HOME="$(mktemp -d)"
+          {
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}'
+            printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+            printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+            sleep 3
+          } | dotnet run --project src/Rtfc -c Release --no-build -- mcp 2>/dev/null > mcp.out
+          names=$(grep '"tools":\[' mcp.out | grep -oE '"name":"[a-z_]+"' | sed 's/"name":"//; s/"//')
+          echo "tools: $(echo $names)"
+          [ -n "$names" ] || { echo "tools/list returned no tools"; cat mcp.out; exit 1; }
+          for n in $names; do
+            case "$n" in
+              contacts|send|inbox_list|inbox_open|inbox_reply|inbox_dismiss|sources) ;;
+              *) echo "tool '$n' is not one of the seven in spec §9.2"; exit 1 ;;
+            esac
+          done
+
   plugin:
     runs-on: ubuntu-latest
     steps:

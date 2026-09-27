@@ -8,7 +8,7 @@ copy-pasting Claude output between terminals and chat windows.
   until you look. They survive relaunches.
 - **"Nobody's home" is immediate.** If none of the recipient's devices is online, you
   are told straight away. Nothing is queued behind your back.
-- **Auto-answer is opt-in, per contact** (coming in Phase 2). A separate, read-only,
+- **Auto-answer is opt-in, per contact.** A separate, read-only,
   scoped Claude run answers for you. It never touches your working session.
 - **Sources** (coming last): Jira, Confluence, Bitbucket and GitHub notifications in the
   same inbox, scoped to the project they belong to.
@@ -320,13 +320,15 @@ they never touch your real one.
 dotnet build
 dotnet test                       # unit + integration tests (real TLS on loopback, real daemon on a real socket)
 dotnet format --verify-no-changes # what CI checks
-scripts/e2e.sh                    # two daemons on this machine, the whole Phase 1 story, ~1 minute
+scripts/e2e.sh                    # two daemons on this machine, the whole story, ~2 minutes
 claude plugin validate plugin
 ```
 
 CI runs the build and tests on Linux, macOS and Windows, checks formatting, validates the
-plugin's JSON, checks the version is declared consistently, and fails if a skill that runs
-`rtfc` can be invoked by the model or holds a blanket `Bash(rtfc:*)` permission.
+plugin's JSON, checks the version is declared consistently, asks the MCP server for its
+tool list and fails if any tool is not one of the seven the spec allows, and fails if a
+skill that runs `rtfc` can be invoked by the model or holds a blanket `Bash(rtfc:*)`
+permission.
 
 A release is a `vX.Y.Z` tag. The release workflow checks the tag against the declared
 version, publishes Native AOT binaries per platform, runs `scripts/e2e.sh` against the

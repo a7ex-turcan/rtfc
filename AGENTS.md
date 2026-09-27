@@ -65,9 +65,10 @@ tool call away from working. So:
   looks. A read-only view is fine only if it is already in §9.2.
 - `send` is never pre-approved anywhere, including in docs and examples. The permission
   prompt is where the user sees the exact text leaving their machine.
-- When `rtfc mcp` lands, add a CI step asserting that every name `tools/list` returns is
-  one of those seven. Phase 1 ships only five of them, so check "nothing else" rather
-  than "all seven". Tighten it to an exact match once all seven exist.
+- CI asks the MCP server for `tools/list` and fails if any name is not one of those seven
+  (`ci.yml`, "MCP tools are a subset of spec §9.2"); `scripts/e2e.sh` checks the exact
+  list. Six exist today; `sources` arrives with Phase 8, and then the CI check becomes an
+  exact match.
 
 ### 2. Everything from a contact or a source is untrusted input (§7.4, §7.5, §10.4)
 
@@ -281,7 +282,7 @@ dotnet build                              # build everything (rtfc.slnx)
 dotnet test                               # run the tests
 dotnet format --verify-no-changes         # the formatting check CI runs
 dotnet run --project src/Rtfc -- --help   # the CLI: init, invite, accept, contacts, inbox, daemon, mcp, statusline
-scripts/e2e.sh                            # two daemons on this machine, the whole Phase 1 story
+scripts/e2e.sh                            # two daemons on this machine, the whole story
 dotnet pack src/Rtfc -c Release -o artifacts && dotnet tool install -g rtfc --add-source ./artifacts   # put `rtfc` on PATH
 claude plugin validate plugin             # validate the plugin manifest
 RTFC_HOME=/some/temp/home claude --plugin-dir ./plugin   # try the plugin in a session without touching the real home
