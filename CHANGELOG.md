@@ -20,6 +20,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
+one person on several devices.
+
+## [0.5.0] - 2026-09-28
+
+Auto-answer for everyone at once, and without having to name a directory.
+
 ### Added
 
 - **`rtfc auto --all`** (and `/rtfc:auto --all`) sets auto-answer for every contact you have
@@ -245,7 +252,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.1...v0.3.2
