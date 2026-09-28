@@ -120,6 +120,17 @@ ancestors, and `~/.claude`, because `Grep` has no path rules and a forgotten `cd
 otherwise expose SSH keys and credentials. `--all` is a loop in the CLI over the active
 contacts, so the management surface on the socket did not grow.
 
+**A lease ends when the daemon stops, and a session takes one on the next daemon (§3.1).**
+The lease handler used to wait only for its client to hang up, so a stopping daemon held
+every session's connection, and its TCP port, until the host's shutdown timeout, and the
+sessions could not tell. It now also ends on `ApplicationStopping`. On the other side,
+`DaemonLease.Ended` tells `rtfc mcp` its lease is gone, and a small loop takes a lease on
+whichever daemon answers next. Before, a session learned only on its next tool call, so a
+daemon restarted by the CLI (after a config change, say) idled out 30 seconds later under
+an open session. The loop never starts a daemon itself, so `rtfc daemon stop` keeps its
+meaning. `DaemonTests` covers both halves against real daemons, and the session test fails
+without the loop.
+
 **Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
 status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the
 standard streams in the console's code page, and a process Claude Code starts gets a

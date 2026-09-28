@@ -109,17 +109,19 @@ public static class DaemonHost
             EntryPoint.Version, Environment.ProcessId, node.Self.PersonId, node.Self.Handle, node.Self.DeviceId, node.Self.DeviceName,
             (node.Transport as TcpTransport)?.Port ?? 0, node.AdvertisedHints(), leases.Count, options.IdleExit, node.IsAway), IpcJson.Default.DaemonStatus));
 
-        // Held open for as long as the caller keeps the connection: that is the lease.
+        // Held open for as long as the caller keeps the connection: that is the lease. It also ends the moment the daemon starts
+        // stopping, so a session notices at once and shutdown does not wait out the host's timeout on every open session.
         app.MapGet(IpcRoutes.Lease, async Task (HttpContext context) =>
         {
             using var lease = leases.Acquire();
+            using var held = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lifetime.ApplicationStopping);
             context.Response.ContentType = "text/plain";
             await context.Response.StartAsync(context.RequestAborted);
             await context.Response.WriteAsync("lease\n", context.RequestAborted);
             await context.Response.Body.FlushAsync(context.RequestAborted);
             try
             {
-                await Task.Delay(Timeout.Infinite, context.RequestAborted);
+                await Task.Delay(Timeout.Infinite, held.Token);
             }
             catch (OperationCanceledException)
             {

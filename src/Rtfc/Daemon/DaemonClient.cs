@@ -52,13 +52,13 @@ public sealed class DaemonClient : IDisposable
         }
     }
 
-    /// <summary>Holds a lease until the returned object is disposed.</summary>
-    public async Task<IAsyncDisposable> AcquireLeaseAsync(CancellationToken cancellationToken)
+    /// <summary>Holds a lease until the returned object is disposed, or until the daemon lets go of it (<see cref="DaemonLease.Ended"/>).</summary>
+    public async Task<DaemonLease> AcquireLeaseAsync(CancellationToken cancellationToken)
     {
         var response = await _http.GetAsync(IpcRoutes.Lease, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return new Lease(response, stream);
+        return new DaemonLease(response, stream);
     }
 
     public Task<ContactView[]> ContactsAsync(bool probe, CancellationToken cancellationToken) =>
@@ -196,14 +196,48 @@ public sealed class DaemonClient : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+}
 
-    private sealed class Lease(HttpResponseMessage response, Stream stream) : IAsyncDisposable
+/// <summary>
+/// One session's hold on the daemon (spec §3.1): an IPC request the daemon keeps open. <see cref="Ended"/> completes when the
+/// daemon lets go of it, because it stopped or the connection broke, so the holder can tell a live lease from a dead one.
+/// </summary>
+public sealed class DaemonLease : IAsyncDisposable
+{
+    private readonly HttpResponseMessage _response;
+    private readonly Stream _stream;
+    private readonly CancellationTokenSource _stop = new();
+
+    internal DaemonLease(HttpResponseMessage response, Stream stream)
     {
-        public async ValueTask DisposeAsync()
+        _response = response;
+        _stream = stream;
+        Ended = WatchAsync();
+    }
+
+    public Task Ended { get; }
+
+    private async Task WatchAsync()
+    {
+        var buffer = new byte[64];
+        try
         {
-            await stream.DisposeAsync().ConfigureAwait(false);
-            response.Dispose();
+            while (await _stream.ReadAsync(buffer, _stop.Token).ConfigureAwait(false) > 0)
+            {
+            }
         }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or OperationCanceledException or ObjectDisposedException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _stop.CancelAsync().ConfigureAwait(false);
+        await _stream.DisposeAsync().ConfigureAwait(false);
+        _response.Dispose();
+        await Ended.ConfigureAwait(false);
+        _stop.Dispose();
     }
 }
 

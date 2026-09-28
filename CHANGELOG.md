@@ -20,8 +20,15 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+### Fixed
+
+- **An open session keeps the daemon alive across a restart.** If the daemon was restarted
+  by something other than the session, for example `rtfc daemon stop` and a CLI command to
+  pick up a config change, the session did not take a lease on the new daemon until its
+  next tool call, so the daemon exited 30 seconds later and contacts saw nobody home. Now
+  the session holds a lease on it within a couple of seconds.
+- **Stopping the daemon is prompt.** With a session open, it used to keep running, and
+  keep its port, for up to 30 seconds after being told to stop.
 
 ## [0.5.0] - 2026-09-28
 

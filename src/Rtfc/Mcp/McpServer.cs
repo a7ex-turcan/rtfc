@@ -18,7 +18,11 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
     private static readonly string[] KnownProtocolVersions = ["2024-11-05", "2025-03-26", "2025-06-18"];
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
+    /// <summary>How often a session without a lease looks for a daemon to hold one on. Well inside the daemon's idle grace.</summary>
+    private static readonly TimeSpan LeaseRetry = TimeSpan.FromSeconds(2);
+
     private readonly DaemonClient _client = new(home);
+    private readonly SemaphoreSlim _leaseLock = new(1, 1);
 
     /// <summary>
     /// The session's directory (spec §10.2). Claude Code sets <c>CLAUDE_PROJECT_DIR</c> to where the session started and starts
@@ -27,11 +31,13 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
     private readonly string _directory = directory
         ?? (Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") is { Length: > 0 } projectDir ? projectDir : Environment.CurrentDirectory);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private IAsyncDisposable? _lease;
+    private DaemonLease? _lease;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         await EnsureDaemonAsync(cancellationToken).ConfigureAwait(false);
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var keeper = KeepLeaseAsync(stopping.Token);
         try
         {
             while (await input.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
@@ -50,12 +56,43 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
         }
         finally
         {
+            await stopping.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await keeper.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
             if (_lease is not null)
             {
                 await _lease.DisposeAsync().ConfigureAwait(false);
             }
 
             _client.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Keeps this session's lease on whichever daemon is running (spec §3.1). When the daemon lets go, because it stopped, the
+    /// session takes a lease on the next daemon that answers, whoever started it, so the session stays home and that daemon does
+    /// not idle out under it. It never starts a daemon: after <c>rtfc daemon stop</c>, the next tool call does that.
+    /// </summary>
+    private async Task KeepLeaseAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            if (_lease is { } lease)
+            {
+                await lease.Ended.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await Task.Delay(LeaseRetry, cancellationToken).ConfigureAwait(false);
+            if (await _client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is not null)
+            {
+                await TakeLeaseAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -153,18 +190,12 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
         }
     }
 
-    /// <summary>True when a daemon answers and this server holds a lease on it. Retries on every call, cheaply, so a daemon that died comes back.</summary>
+    /// <summary>True when a daemon answers and this server holds a live lease on it. Starts one if none answers, so a daemon that died comes back on the next call.</summary>
     private async Task<bool> EnsureDaemonAsync(CancellationToken cancellationToken)
     {
-        if (_lease is not null && await _client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is not null)
+        if (_lease is { Ended.IsCompleted: false } && await _client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is not null)
         {
             return true;
-        }
-
-        if (_lease is not null)
-        {
-            await _lease.DisposeAsync().ConfigureAwait(false);
-            _lease = null;
         }
 
         var outcome = await DaemonLauncher.EnsureAsync(home, cancellationToken).ConfigureAwait(false);
@@ -174,27 +205,52 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
             return false;
         }
 
+        return await TakeLeaseAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Takes a lease on the running daemon unless a live one is held, replacing one the daemon let go of, and registers the project with it.</summary>
+    private async Task<bool> TakeLeaseAsync(CancellationToken cancellationToken)
+    {
+        await _leaseLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _lease = await _client.AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or IOException)
-        {
-            log.WriteLine($"rtfc mcp: could not take a lease: {ex.Message}");
-            return false;
-        }
+            if (_lease is { Ended.IsCompleted: false })
+            {
+                return true;
+            }
 
-        try
-        {
-            // So a contact can address this project before anyone here has called a tool (spec §7.6).
-            await _client.RegisterProjectAsync(_directory, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or JsonException)
-        {
-            log.WriteLine($"rtfc mcp: could not register the project at {_directory}: {ex.Message}");
-        }
+            if (_lease is not null)
+            {
+                await _lease.DisposeAsync().ConfigureAwait(false);
+                _lease = null;
+            }
 
-        return true;
+            try
+            {
+                _lease = await _client.AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException)
+            {
+                log.WriteLine($"rtfc mcp: could not take a lease: {ex.Message}");
+                return false;
+            }
+
+            try
+            {
+                // So a contact can address this project before anyone here has called a tool (spec §7.6).
+                await _client.RegisterProjectAsync(_directory, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or JsonException)
+            {
+                log.WriteLine($"rtfc mcp: could not register the project at {_directory}: {ex.Message}");
+            }
+
+            return true;
+        }
+        finally
+        {
+            _leaseLock.Release();
+        }
     }
 
     private async Task WriteAsync(JsonObject message, CancellationToken cancellationToken)

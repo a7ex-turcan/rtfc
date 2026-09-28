@@ -2,6 +2,7 @@ using Rtfc.Cli;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
+using Rtfc.Mcp;
 using Rtfc.Storage;
 
 namespace Rtfc.Tests.Daemon;
@@ -73,6 +74,60 @@ public class DaemonTests
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
         Assert.Null(await client.TryStatusAsync(Ct));
         Assert.False(File.Exists(temp.Home.SocketPath));
+    }
+
+    [Fact]
+    public async Task A_held_lease_ends_as_soon_as_the_daemon_stops()
+    {
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+        var daemon = Task.Run(() => DaemonHost.RunAsync(temp.Home, new DaemonOptions(IdleExit: false, LogToConsole: false), Ct), Ct);
+        using var client = new DaemonClient(temp.Home);
+        await WaitForStatusAsync(client, daemon);
+
+        await using var lease = await client.AcquireLeaseAsync(Ct);
+        await WaitUntilAsync(async () => (await client.TryStatusAsync(Ct))!.Leases == 1);
+        Assert.False(lease.Ended.IsCompleted);
+
+        // A session must notice at once, and the daemon must not sit on its port waiting for sessions to hang up.
+        await client.ShutdownAsync(Ct);
+        await lease.Ended.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+    }
+
+    [Fact]
+    public async Task A_session_holds_a_lease_on_a_daemon_restarted_under_it_but_never_starts_one()
+    {
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+        using var client = new DaemonClient(temp.Home);
+        Task<int> StartDaemon() => Task.Run(() => DaemonHost.RunAsync(temp.Home, new DaemonOptions(IdleExit: false, LogToConsole: false), Ct), Ct);
+        async Task<bool> Leases(int count) => (await client.TryStatusAsync(Ct))?.Leases == count;
+
+        var first = StartDaemon();
+        await WaitForStatusAsync(client, first);
+        var input = new System.IO.Pipelines.Pipe();
+        var session = Task.Run(() => new McpServer(temp.Home, new StreamReader(input.Reader.AsStream()), new StringWriter(), new StringWriter(), temp.Home.Root).RunAsync(Ct), Ct);
+        await WaitUntilAsync(() => Leases(1));
+
+        // Stopped by someone else, e.g. `rtfc daemon stop`: the session does not bring it back on its own.
+        await client.ShutdownAsync(Ct);
+        Assert.Equal(0, await first.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+        await Task.Delay(TimeSpan.FromSeconds(3), Ct);
+        Assert.Null(await client.TryStatusAsync(Ct));
+
+        // Started again by someone else, e.g. the CLI: the session takes a lease on it, so it stays home and the daemon stays up.
+        var second = StartDaemon();
+        await WaitForStatusAsync(client, second);
+        await WaitUntilAsync(() => Leases(1), TimeSpan.FromSeconds(10));
+
+        await input.Writer.CompleteAsync();
+        await session.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await WaitUntilAsync(() => Leases(0));
+        await client.ShutdownAsync(Ct);
+        Assert.Equal(0, await second.WaitAsync(TimeSpan.FromSeconds(10), Ct));
     }
 
     [Fact]

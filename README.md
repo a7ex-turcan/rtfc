@@ -251,7 +251,8 @@ her, from either side. Neither needs her cooperation.
 - **The daemon.** One `rtfcd` per machine owns your keys, the database, the listener on
   port 47821 and a local API on `~/.claude/rtfc/rtfcd.sock`. Every open Claude Code
   session holds a lease on it; thirty seconds after the last one closes, the daemon exits.
-  That's what "home" means: Claude Code is open on that machine. The outbox is delivered
+  That's what "home" means: Claude Code is open on that machine. If the daemon is
+  restarted, open sessions take a lease on the new one within a couple of seconds. The outbox is delivered
   by that daemon too, so a queued reply leaves your machine only while you have a session
   open and the other side is home at the same time.
 - **Identity is keys, not addresses.** Contacts are pinned by their person CA. Hostnames
@@ -274,7 +275,7 @@ her, from either side. Neither needs her cooperation.
 
 ```bash
 rtfc daemon status          # running? which port, how many leases
-rtfc daemon stop            # stop it (it restarts on the next session)
+rtfc daemon stop            # stop it; `rtfc daemon ensure`, a command such as `rtfc contacts`, or a tool call starts it again
 rtfc daemon run --stay      # run in the foreground, never idle-exit; logs to the terminal too
 tail -f ~/.claude/rtfc/rtfcd.log
 curl --unix-socket ~/.claude/rtfc/rtfcd.sock http://rtfcd/v1/status
@@ -298,8 +299,10 @@ nobody can reach you.
 ```
 
 Only `port` is required. `hintHosts` is what your future invites and accepts advertise.
-Changes take effect when the daemon restarts (`rtfc daemon stop`). Contacts you already
-have keep the hints they learned; a new invite, accepted by them, refreshes them.
+Changes take effect when the daemon restarts: `rtfc daemon stop`, then `rtfc daemon ensure`
+(or any command that talks to the daemon, such as `rtfc contacts`) starts it with the new
+settings, and open sessions take a lease on it. Contacts you already have keep the hints they learned; a new invite,
+accepted by them, refreshes them.
 
 `RTFC_HOME` moves the whole directory somewhere else. Tests and the e2e script use it so
 they never touch your real one.
