@@ -20,8 +20,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+### Fixed
+
+- **On Windows, the status line shows 📨 again, and what you send keeps its accents.** rtfc
+  used the console's legacy code page (437 on an English Windows) on the pipes Claude Code
+  talks to it through, so the status line read `?? 1 � alex`, and a message with `é`, `ș`,
+  Cyrillic or an emoji was mangled before it left your machine. Pipes are now UTF-8 whatever
+  the console's code page.
 
 ## [0.3.2] - 2026-09-28
 

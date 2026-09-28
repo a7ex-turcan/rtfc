@@ -19,10 +19,10 @@ public static class EntryPoint
     public const int Failure = 1;
     public const int Usage = 2;
 
-    public static int Run(string[] args, TextWriter stdout, TextWriter stderr, RtfcHome? home = null) =>
-        RunAsync(args, stdout, stderr, home).GetAwaiter().GetResult();
+    public static int Run(string[] args, TextWriter stdout, TextWriter stderr, RtfcHome? home = null, TextReader? stdin = null) =>
+        RunAsync(args, stdout, stderr, home, stdin).GetAwaiter().GetResult();
 
-    public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, RtfcHome? home = null)
+    public static async Task<int> RunAsync(string[] args, TextWriter stdout, TextWriter stderr, RtfcHome? home = null, TextReader? stdin = null)
     {
         if (args is ["--version" or "version"])
         {
@@ -76,9 +76,9 @@ public static class EntryPoint
                 case "daemon":
                     return await Commands.DaemonAsync(ctx, rest).ConfigureAwait(false);
                 case "statusline":
-                    return Commands.Statusline(ctx, Console.In, Console.IsInputRedirected);
+                    return Commands.Statusline(ctx, stdin ?? Console.In, Console.IsInputRedirected);
                 case "mcp":
-                    await new McpServer(ctx.Home, Console.In, stdout, stderr).RunAsync(ctx.CancellationToken).ConfigureAwait(false);
+                    await new McpServer(ctx.Home, stdin ?? Console.In, stdout, stderr).RunAsync(ctx.CancellationToken).ConfigureAwait(false);
                     return Ok;
                 default:
                     stderr.WriteLine($"rtfc: unknown command '{args[0]}'.");

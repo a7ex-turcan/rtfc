@@ -96,6 +96,14 @@ SessionStart hook's pipe for the daemon's lifetime, and the session hung. Since 
 (`SetHandleInformation`), and `DaemonTests` runs the real `rtfc daemon ensure` with piped
 output and requires the pipes to close when it exits.
 
+**Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
+status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the
+standard streams in the console's code page, and a process Claude Code starts gets a
+console of its own in the system's legacy code page (437 on an en-US machine). 0.3.2 wrote
+📨 as `??` and read `é` as `├⌐`. `Program.cs` now wraps every redirected standard stream in
+UTF-8 without a BOM and leaves a real console to .NET. `PipeEncodingTests` start the real
+executable with no window, as Claude Code does, so the legacy code page is in force.
+
 **Accepting a token from an existing contact performs the exchange (§5.1, 0.2.0).**
 0.1.x returned `already_contact` without connecting, so a person who had removed or blocked
 you still looked like a contact from your side. Now the exchange always happens: the
@@ -174,6 +182,7 @@ they were checked; versions are what they were checked against.
 | The status line's stdin JSON carries `cwd` | docs and the e2e | 2026-09-27 |
 | `rtfc` is free on nuget.org | `dotnet package search` | 2026-09-27 |
 | On Windows a process started with redirected stdio still inherits its parent's inheritable handles, so a daemon spawned from a hook held the hook's stdout open and Claude Code 2.1.283 stayed busy on it | two Windows 11 machines, a session stuck on start; reproduced with a piped `daemon ensure` whose stdout closed only when the daemon stopped | 2026-09-28 |
+| A console process started with no window gets a fresh console in the system's OEM code page, and .NET uses that code page for redirected stdio too, so Claude Code saw `?? 1 � alex` | the status line on a Windows 11 VM; `PipeEncodingTests` with and without the fix | 2026-09-28 |
 
 ## Schema history
 

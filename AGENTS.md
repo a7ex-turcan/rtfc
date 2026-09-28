@@ -195,7 +195,9 @@ to use with `RTFC_HOME` set.
   tool" rather than spelling that out.
 - **stdout is reserved.** In `rtfc mcp` it is the MCP protocol; in `rtfc statusline` it is
   what the user sees. Logs and errors go to stderr. `EntryPoint` already works this way,
-  and its tests hold the line.
+  and its tests hold the line. Redirected stdio is UTF-8 whatever the console's code page
+  (`Program.cs`); don't read or write `Console.In`/`Console.Out` directly, take the reader
+  and writers `EntryPoint` is given.
 - **Machine-readable output uses the invariant culture.** This machine's locale uses a
   decimal comma (`dotnet` itself prints `4,54 sec`). Format numbers with `InvariantCulture`
   and timestamps as ISO 8601 in anything a program or Claude parses: envelopes, tool
