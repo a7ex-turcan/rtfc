@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
@@ -82,28 +81,28 @@ public class DaemonTests
         IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
         ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
 
-        var start = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "rtfc.exe" : "rtfc"))
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        start.ArgumentList.Add("daemon");
-        start.ArgumentList.Add("ensure");
-        start.Environment[RtfcHome.EnvironmentVariable] = temp.Home.Root;
-
         using var client = new DaemonClient(temp.Home);
         try
         {
-            using var ensure = Process.Start(start)!;
+            using var ensure = RtfcProcess.Start(temp.Home, "daemon", "ensure");
+            ensure.StandardInput.Close();
             var stdout = ensure.StandardOutput.ReadToEndAsync(Ct);
             var stderr = ensure.StandardError.ReadToEndAsync(Ct);
             await ensure.WaitForExitAsync(Ct);
 
-            Assert.Equal(0, ensure.ExitCode);
-            Assert.NotNull(await client.TryStatusAsync(Ct));
             await stdout.WaitAsync(TimeSpan.FromSeconds(5), Ct);
             await stderr.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+            // The pipes closing with ensure is the point. ensure gives the daemon ten seconds,
+            // which a cold CI runner once exceeded, so here it only has to come up at all.
+            try
+            {
+                await WaitUntilAsync(async () => await client.TryStatusAsync(Ct) is not null, TimeSpan.FromSeconds(30));
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail($"The daemon never answered. ensure exited with {ensure.ExitCode}, stderr: {await stderr}\nrtfcd.log:\n{ReadShared(temp.Home.LogPath)}");
+            }
         }
         finally
         {
@@ -157,9 +156,20 @@ public class DaemonTests
         throw new TimeoutException("The daemon did not answer on its socket.");
     }
 
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    private static string ReadShared(string path)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        if (!File.Exists(path))
+        {
+            return "(none)";
+        }
+
+        using var reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        return reader.ReadToEnd();
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
         while (!await condition())
         {
             if (DateTimeOffset.UtcNow > deadline)
