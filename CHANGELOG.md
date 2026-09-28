@@ -20,14 +20,30 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
+one person on several devices.
+
+## [0.5.2] - 2026-09-28
+
+Includes the fixes of 0.5.1, which was tagged but never published: its release build hit a
+flaky test.
+
 ### Fixed
 
 - **On Windows, `contacts` no longer fails with a socket error.** Windows takes about two
   seconds to report that a machine refused a connection, which is as long as the "who's
   home" check waits; when the refusal arrived just after the check gave up, the error
   escaped instead of the contact showing as not home.
+- **An open session keeps the daemon alive across a restart** (from 0.5.1). A daemon
+  restarted by something other than the session, such as `rtfc daemon stop` and a CLI
+  command after a config change, used to exit 30 seconds later because the session took no
+  lease on it until its next tool call. Now it does within a couple of seconds.
+- **Stopping the daemon is prompt** (from 0.5.1). With a session open, it used to keep
+  running, and keep its port, for up to 30 seconds after being told to stop.
 
 ## [0.5.1] - 2026-09-28
+
+Tagged, never published; these fixes shipped in 0.5.2.
 
 ### Fixed
 
@@ -268,7 +284,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.3...v0.4.0
