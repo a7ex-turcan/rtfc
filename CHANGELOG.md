@@ -23,6 +23,18 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
 one person on several devices.
 
+## [0.3.1] - 2026-09-28
+
+### Fixed
+
+- **The release archive now contains the plugin.** The README told a colleague to load
+  `plugin/` from a path that only existed in a clone of the repo. One download is now
+  enough: `claude --plugin-dir ~/.local/share/rtfc/plugin`.
+- The README's getting-started section defines "home" before using it, adds a sanity
+  check after install, moves the firewall prompt to where it happens, and no longer says
+  an automatic answer parks when its recipient has gone (it waits in the outbox since
+  0.3.0).
+
 ## [0.3.0] - 2026-09-27
 
 Phase 4, async: a reply written hours later reaches a sender who has since closed Claude
@@ -178,7 +190,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.1.0...v0.1.1

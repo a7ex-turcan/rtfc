@@ -17,7 +17,7 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.3.0, Phases 1, 2 and 4.** Two people on one LAN exchange messages between
+**Status: 0.3.1, Phases 1, 2 and 4.** Two people on one LAN exchange messages between
 their Claude Code sessions, a scoped, read-only Claude can answer a contact for you, and
 replies to someone who has gone wait until they are back. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
 [`docs/spec.md`](docs/spec.md) for the design.
@@ -34,18 +34,23 @@ On **both** machines:
 - A network path between them: the same office LAN, where either hostnames resolve or
   you know the IP addresses. TCP port **47821** must be reachable (configurable).
 
-No .NET installation is needed: releases are native binaries.
+No .NET installation is needed: releases are native binaries, and the archive contains the
+Claude Code plugin too.
+
+One word you'll meet everywhere: someone is **home** when they have a Claude Code session
+open with the plugin loaded. That's when their daemon runs and messages can reach them.
 
 ### 1. Install the `rtfc` command
 
 Download the archive for your platform from the
 [latest release](https://github.com/a7ex-turcan/rtfc/releases/latest) (`linux-x64`,
 `osx-arm64` or `win-x64`), extract it somewhere permanent, and put that directory on your
-`PATH`. Keep the two files together: `rtfc` loads its SQLite library from its own directory.
+`PATH`. Keep the files together: `rtfc` loads its SQLite library from its own directory,
+and the `plugin/` folder next to it is what Claude Code loads in step 3.
 
 ```bash
 mkdir -p ~/.local/share/rtfc
-tar -xzf rtfc-0.3.0-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
+tar -xzf rtfc-0.3.1-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
 export PATH="$HOME/.local/share/rtfc:$PATH"     # add to your shell profile
 rtfc --version
 ```
@@ -94,10 +99,17 @@ new person and every contact has to re-invite you.
 ### 3. Load the plugin in Claude Code
 
 ```bash
-claude --plugin-dir /path/to/rtfc/plugin
+claude --plugin-dir ~/.local/share/rtfc/plugin
 ```
 
-(A marketplace entry comes later; for now the plugin is loaded per session from the repo.)
+The flag is per session, so an alias saves typing until there is a marketplace entry:
+`alias claude='claude --plugin-dir ~/.local/share/rtfc/plugin'`. (From a clone of this
+repo, `./plugin` works the same.)
+
+Sanity check, inside that session: `/rtfc:contacts` should say you have no contacts yet.
+Outside it, `rtfc daemon status` shows the daemon that the session started. **The first
+time the daemon listens, macOS and Windows show a firewall prompt: allow it**, or nobody
+can reach you.
 
 The plugin adds:
 
@@ -192,8 +204,8 @@ What the answering Claude can and cannot do:
 Guards you don't have to think about: a message that was itself written by a Claude is
 never answered automatically (so two auto-answering Claudes can't loop), a thread deeper
 than one reply parks for a human, and a device flooding you is refused before anything is
-stored. If the run fails, or Sasha has gone before the answer is ready, the message parks
-with the draft attached so nothing is lost.
+stored. If the run fails, the message parks for you with a note; if Sasha has gone before
+the answer is ready, the answer waits in your outbox like any reply.
 
 `config.json` takes `claudePath` if `claude` isn't on the daemon's `PATH`, and an
 `autoAnswer` object to change the limits.
