@@ -20,8 +20,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+### Fixed
+
+- **On Windows, a Claude Code session no longer hangs when it starts the daemon.** The
+  daemon inherited the output pipe of the SessionStart hook that started it and held it
+  open, so Claude Code kept waiting on the hook, and whatever you typed first, such as
+  `/rtfc:contacts`, sat in the queue for minutes. The same leak would have kept the MCP
+  server's output open after it exited.
 
 ## [0.3.1] - 2026-09-28
 

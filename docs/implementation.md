@@ -88,6 +88,14 @@ server's stdout pipe, Claude Code would wait on that pipe after the server exits
 `rtfcd.log` and, on Unix, calls `setsid` to leave the parent's session. Windows gets
 `CreateNoWindow` and no more, for now.
 
+Redirecting is not enough on Windows: .NET always calls `CreateProcess` with handle
+inheritance on, so the daemon also inherited the stdio pipes of the process that spawned
+it, which are the hook's or the MCP server's pipes from Claude Code. 0.3.1 held the
+SessionStart hook's pipe for the daemon's lifetime, and the session hung. Since then
+`Spawn` clears the inherit flag on its own three stdio handles before starting the child
+(`SetHandleInformation`), and `DaemonTests` runs the real `rtfc daemon ensure` with piped
+output and requires the pipes to close when it exits.
+
 **Accepting a token from an existing contact performs the exchange (§5.1, 0.2.0).**
 0.1.x returned `already_contact` without connecting, so a person who had removed or blocked
 you still looked like a contact from your side. Now the exchange always happens: the
@@ -165,6 +173,7 @@ they were checked; versions are what they were checked against.
 | Plugin skills with `!` execution and `disable-model-invocation` load and run; plugin tools are `mcp__plugin_rtfc_rtfc__<name>` | headless session with `--plugin-dir` | 2026-09-27 |
 | The status line's stdin JSON carries `cwd` | docs and the e2e | 2026-09-27 |
 | `rtfc` is free on nuget.org | `dotnet package search` | 2026-09-27 |
+| On Windows a process started with redirected stdio still inherits its parent's inheritable handles, so a daemon spawned from a hook held the hook's stdout open and Claude Code 2.1.283 stayed busy on it | two Windows 11 machines, a session stuck on start; reproduced with a piped `daemon ensure` whose stdout closed only when the daemon stopped | 2026-09-28 |
 
 ## Schema history
 

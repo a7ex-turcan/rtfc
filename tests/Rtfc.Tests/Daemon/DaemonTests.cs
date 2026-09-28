@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
@@ -70,6 +71,48 @@ public class DaemonTests
 
         Assert.Equal(DaemonLauncher.Outcome.NoIdentity, await DaemonLauncher.EnsureAsync(temp.Home, Ct));
         Assert.False(File.Exists(temp.Home.SocketPath));
+    }
+
+    [Fact]
+    public async Task Ensure_does_not_hand_its_own_stdout_to_the_daemon()
+    {
+        // Claude Code runs the SessionStart hook with pipes for stdout and stderr and waits for
+        // them to close. A daemon that inherited them held the session up for its whole life.
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+
+        var start = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "rtfc.exe" : "rtfc"))
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add("daemon");
+        start.ArgumentList.Add("ensure");
+        start.Environment[RtfcHome.EnvironmentVariable] = temp.Home.Root;
+
+        using var client = new DaemonClient(temp.Home);
+        try
+        {
+            using var ensure = Process.Start(start)!;
+            var stdout = ensure.StandardOutput.ReadToEndAsync(Ct);
+            var stderr = ensure.StandardError.ReadToEndAsync(Ct);
+            await ensure.WaitForExitAsync(Ct);
+
+            Assert.Equal(0, ensure.ExitCode);
+            Assert.NotNull(await client.TryStatusAsync(Ct));
+            await stdout.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+            await stderr.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        }
+        finally
+        {
+            if (await client.TryStatusAsync(Ct) is not null)
+            {
+                await client.ShutdownAsync(Ct);
+                await WaitUntilAsync(async () => await client.TryStatusAsync(Ct) is null);
+            }
+        }
     }
 
     [Fact]

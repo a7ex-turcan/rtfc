@@ -55,6 +55,11 @@ public static class DaemonLauncher
     /// </summary>
     private static void Spawn(RtfcHome home)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            KeepStdioFromChildren();
+        }
+
         var self = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot locate the rtfc executable.");
         var start = new ProcessStartInfo(self)
         {
@@ -92,7 +97,39 @@ public static class DaemonLauncher
         }
     }
 
+    /// <summary>
+    /// Redirecting the child's stdio is not enough on Windows: .NET creates every child with
+    /// handle inheritance on, so the daemon would also inherit this process's own stdio, which
+    /// are the pipes Claude Code gave the SessionStart hook or the MCP server. Held for the
+    /// daemon's lifetime, the hook's pipe never closes and the session waits on it. Unix needs
+    /// none of this: there the child's 0, 1 and 2 are replaced and every other descriptor is
+    /// close-on-exec.
+    /// </summary>
+    private static void KeepStdioFromChildren()
+    {
+        foreach (var std in (ReadOnlySpan<int>)[StdInputHandle, StdOutputHandle, StdErrorHandle])
+        {
+            var handle = GetStdHandle(std);
+            if (handle != 0 && handle != -1)
+            {
+                _ = SetHandleInformation(handle, HandleFlagInherit, 0);
+            }
+        }
+    }
+
     // A blittable, argument-free signature: DllImport needs no marshalling stub, so this stays AOT-clean without unsafe code.
     [DllImport("libc", SetLastError = true)]
     private static extern int setsid();
+
+    private const int StdInputHandle = -10;
+    private const int StdOutputHandle = -11;
+    private const int StdErrorHandle = -12;
+    private const uint HandleFlagInherit = 1;
+
+    // Blittable too: BOOL comes back as int, handles as nint.
+    [DllImport("kernel32")]
+    private static extern nint GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32")]
+    private static extern int SetHandleInformation(nint hObject, uint dwMask, uint dwFlags);
 }
