@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/rtfc.png" alt="rtfc: Relay Tool For Contacts. Claude Code to Claude Code, between people." width="360">
+</p>
+
 # rtfc — Relay Tool For Contacts
 
 Send a message from your Claude Code to someone else's Claude Code, instead of
