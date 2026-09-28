@@ -137,7 +137,9 @@ public class OutboxTests : IAsyncLifetime
 
         await UntilAsync(() => _sasha.Database.GetSent(sent.MessageId!)!.State == SentState.Read, "the receipt");
         Assert.NotNull(_sasha.Database.GetSent(sent.MessageId!)!.ReadAt);
-        Assert.Empty(_alex.Node.ListOutbox());
+
+        // Sasha records the receipt before she acks it, and alex clears his outbox only when the ack arrives: wait for that too.
+        await UntilAsync(() => _alex.Node.ListOutbox().Length == 0, "the receipt to leave alex's outbox");
 
         // The same for a reply: sasha reads alex's answer, and alex's copy of the question says so.
         var reply = await _alex.Node.ReplyAsync(sent.MessageId!, "Yes.", Ct);

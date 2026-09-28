@@ -20,8 +20,12 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+### Fixed
+
+- **On Windows, `contacts` no longer fails with a socket error.** Windows takes about two
+  seconds to report that a machine refused a connection, which is as long as the "who's
+  home" check waits; when the refusal arrived just after the check gave up, the error
+  escaped instead of the contact showing as not home.
 
 ## [0.5.1] - 2026-09-28
 

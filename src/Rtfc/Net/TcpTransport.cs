@@ -120,6 +120,7 @@ public sealed class TcpTransport(int port, TimeSpan? connectTimeout = null) : IT
     {
         foreach (var hint in hints)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (hint.Kind != EndpointHint.Tcp)
             {
                 continue;
@@ -144,8 +145,16 @@ public sealed class TcpTransport(int port, TimeSpan? connectTimeout = null) : IT
                 client.NoDelay = true;
                 return new OwningNetworkStream(client);
             }
-            catch (Exception ex) when (ex is SocketException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            catch (SocketException)
             {
+                // Refused or unreachable: this hint is no good, try the next. Windows reports a refusal only after about two
+                // seconds of retries, so it can arrive just as the caller gives up; that is still "unreachable", and the check
+                // at the top of the loop reports the caller's cancellation as cancellation, never as a socket error.
+                client.Dispose();
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Our own connect timeout, not the caller's: try the next hint.
                 client.Dispose();
             }
             catch
