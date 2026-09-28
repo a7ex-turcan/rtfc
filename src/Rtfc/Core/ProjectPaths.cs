@@ -23,6 +23,9 @@ public static class ProjectPaths
         return full;
     }
 
+    /// <summary>The full path without a trailing separator, in its original case.</summary>
+    public static string Full(string path) => Trim(Path.GetFullPath(path));
+
     /// <summary>The folder name a contact addresses the project by.</summary>
     public static string Name(string root) => Path.GetFileName(Trim(root)) is { Length: > 0 } name ? name : root;
 

@@ -185,8 +185,17 @@ Per contact, opt in:
 
 ```bash
 rtfc auto sasha headless --scope ~/src/payments-api      # or /rtfc:auto sasha headless --scope ...
-rtfc auto sasha off
+/rtfc:auto sasha headless                                # in a session: the scope is the directory Claude runs in
+rtfc auto --all headless --scope ~/src/payments-api      # every contact you have now
+rtfc auto sasha off                                      # or --all off
 ```
+
+Without `--scope`, the scope is the directory Claude is running in, and rtfc says which one
+it picked. That default is refused for a drive root, your home folder or anything above it,
+and anything inside `~/.claude`; pass `--scope` if you really mean one of those. `--all`
+covers the contacts you have at that moment: someone who becomes a contact later still
+parks until you turn it on for them, and everyone shares the same scope and the same hourly
+cap on automatic answers.
 
 While it's on, a message from Sasha is answered by a **fresh, headless Claude** that can
 read the files under the scope directory and nothing else, and the answer goes back to

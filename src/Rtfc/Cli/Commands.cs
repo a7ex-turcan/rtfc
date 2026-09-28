@@ -108,13 +108,40 @@ public static class Commands
 
     // ---- auto / remove / block (spec §7.3, §5.2) ----
 
+    /// <summary>
+    /// <c>rtfc auto &lt;contact&gt;|--all off|headless|session [--scope &lt;dir&gt;]</c> (spec §7.3). <c>--all</c> covers every active contact
+    /// now; contacts accepted later still park (spec §5.1). Without <c>--scope</c>, headless reads the directory Claude runs in.
+    /// </summary>
     public static async Task<int> AutoAsync(CommandContext ctx, IReadOnlyList<string> args)
     {
-        var line = new CommandLine(args);
-        if (line.Positionals is not [var handle, var mode])
+        var line = new CommandLine(args, "all");
+        var all = line.Flag("all");
+        (string? handle, string mode) target = (all, line.Positionals) switch
         {
-            ctx.Error.WriteLine("usage: rtfc auto <contact> off|headless|session [--scope <dir>]");
+            (true, [var m]) => (null, m),
+            (false, [var h, var m]) => (h, m),
+            _ => (null, ""),
+        };
+        if (target.mode.Length == 0)
+        {
+            ctx.Error.WriteLine("usage: rtfc auto <contact>|--all off|headless|session [--scope <dir>]");
             return 2;
+        }
+
+        var scope = line.Value("scope") is { } given ? ProjectPaths.Full(given) : null;
+        var defaulted = false;
+        if (target.mode == "headless" && scope is null)
+        {
+            scope = AutoScope.Default(
+                Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR"), Environment.CurrentDirectory,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), out var refusal);
+            if (scope is null)
+            {
+                ctx.Error.WriteLine($"rtfc auto: {refusal}");
+                return 1;
+            }
+
+            defaulted = true;
         }
 
         using var client = await ConnectAsync(ctx).ConfigureAwait(false);
@@ -123,19 +150,46 @@ public static class Commands
             return 1;
         }
 
-        var result = await client.SetAutoAsync(handle, mode, line.Value("scope"), ctx.CancellationToken).ConfigureAwait(false);
-        if (result.Status != ManagementStatus.Ok)
+        string[] handles = target.handle is { } one
+            ? [one]
+            : [.. (await client.ContactsAsync(probe: false, ctx.CancellationToken).ConfigureAwait(false)).Where(c => c.Status == ContactStatus.Active).Select(c => c.Handle)];
+        if (handles.Length == 0)
         {
-            ctx.Error.WriteLine($"rtfc auto: {result.Reason}");
+            ctx.Out.WriteLine("No active contacts yet, so nothing changed.");
+            return 0;
+        }
+
+        var changed = new List<string>();
+        foreach (var handle in handles)
+        {
+            var result = await client.SetAutoAsync(handle, target.mode, scope, ctx.CancellationToken).ConfigureAwait(false);
+            if (result.Status != ManagementStatus.Ok)
+            {
+                ctx.Error.WriteLine($"rtfc auto: {result.Reason}");
+                continue;
+            }
+
+            changed.Add(result.Handle!);
+        }
+
+        if (changed.Count == 0)
+        {
             return 1;
         }
 
-        ctx.Out.WriteLine(mode == "off"
-            ? $"Messages from {result.Handle} park until you look at them."
-            : $"Messages from {result.Handle} are now answered by a headless, read-only Claude that can see {Path.GetFullPath(line.Value("scope")!)} and nothing else. "
-              + "It never writes, never runs commands, and its answers arrive marked as automatic. Turn it off with: rtfc auto "
-              + $"{result.Handle} off");
-        return 0;
+        var who = string.Join(", ", changed);
+        var undo = all ? "rtfc auto --all off" : $"rtfc auto {changed[0]} off";
+        ctx.Out.WriteLine(target.mode == "off"
+            ? $"Messages from {who} park until you look at them."
+            : $"Messages from {who} are now answered by a headless, read-only Claude that can see {scope}"
+              + (defaulted ? " (the directory Claude is running in; pass --scope to choose another)" : "")
+              + $" and nothing else. It never writes, never runs commands, and its answers arrive marked as automatic. Turn it off with: {undo}");
+        if (all && target.mode != "off")
+        {
+            ctx.Out.WriteLine("Contacts you accept later still park until you turn this on for them.");
+        }
+
+        return changed.Count == handles.Length ? 0 : 1;
     }
 
     public static async Task<int> RemoveAsync(CommandContext ctx, IReadOnlyList<string> args, bool block)

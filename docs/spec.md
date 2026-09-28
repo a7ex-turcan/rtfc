@@ -228,7 +228,10 @@ New messages are **never queued** when nobody's home. The user can choose to put
 
 ### 7.3 Inbound modes
 
-Set per contact with `/rtfc:auto <contact> off|headless|session [--scope <dir>]`.
+Set per contact with `/rtfc:auto <contact> off|headless|session [--scope <dir>]`, or for every contact at once with `--all` in place of the contact.
+
+- `--all` covers the contacts that are active at that moment. Accepting still never implies auto-answer (§5.1): someone who becomes a contact later parks until you turn it on for them.
+- Without `--scope`, `headless` reads the directory Claude is running in: `CLAUDE_PROJECT_DIR`, else the command's working directory. As a default, that directory is refused if it is a filesystem root, your home directory or anything above it, or anything inside `~/.claude`; the answering Claude's `Grep` has no path rules (implementation.md), and those places hold keys and credentials. An explicit `--scope` is the user's choice.
 
 **`park` (default).** The message is stored with state `parked`, and the status file is updated. The user pulls it in with `/rtfc:inbox` or by asking Claude ("what did Sasha send?"). Opening it sets `read` and sends a read receipt, if enabled for that contact.
 
@@ -405,7 +408,7 @@ Example, `skills/auto/SKILL.md`:
 ```markdown
 ---
 description: Set auto-answer mode for a contact
-argument-hint: <contact> off|headless|session [--scope <dir>]
+argument-hint: <contact>|--all off|headless|session [--scope <dir>]
 allowed-tools: Bash(rtfc auto:*)
 disable-model-invocation: true
 ---
@@ -422,7 +425,7 @@ Tell the user the result above in one sentence. Do not run any other rtfc comman
 | `/rtfc:contacts` | Prompt: asks Claude to show contacts and who's home via the MCP tools |
 | `/rtfc:init` · `/rtfc:invite` · `/rtfc:accept <token>` | CLI |
 | `/rtfc:rename <contact> <handle>` · `/rtfc:remove <contact>` · `/rtfc:block <contact>` | CLI |
-| `/rtfc:auto <contact> off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` | CLI |
+| `/rtfc:auto <contact>\|--all off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` | CLI |
 | `/rtfc:sources` | Prompt: asks Claude to show this project's subscriptions and their health via the `sources` tool |
 | `/rtfc:sources-approve` · `/rtfc:project-forget` | CLI |
 | *(terminal only)* `rtfc account add` / `remove` | CLI in a real terminal; prompts for a secret, which must never pass through Claude |

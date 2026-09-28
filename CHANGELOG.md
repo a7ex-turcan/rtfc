@@ -20,8 +20,18 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+### Added
+
+- **`rtfc auto --all`** (and `/rtfc:auto --all`) sets auto-answer for every contact you have
+  now, in one go; `--all off` turns it off for everyone. Contacts you accept later still
+  park until you turn it on for them.
+
+### Changed
+
+- **`--scope` is optional.** Without it, `rtfc auto <contact> headless` lets the answering
+  Claude read the directory Claude is running in, and says which one. It refuses that
+  default when it is a drive root, your home folder or above it, or inside `~/.claude`, and
+  asks for `--scope` instead.
 
 ## [0.4.0] - 2026-09-28
 

@@ -19,7 +19,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §5 contact lifecycle | `Node.CreateInvite`, `AcceptAsync`, `HandleInviteAcceptAsync`, `Pin`; `Core/InviteToken.cs`; remove and block in `Node.SetStatus` |
 | §7.1 envelope and frames | `Protocol/Frames.cs`, `FrameCodec.cs`, `Ulid.cs` |
 | §7.2 sending, nobody's home, the outbox | `Node.SendAsync`, `DeliverAsync`, `DeliverToDeviceAsync`; `Node.Outbox.cs` for the queue, the pump, expiry and notices |
-| §7.3 inbound modes | park in `Node.Receive`; `auto_headless` in `Node.AutoAnswer.cs` with `Core/ClaudeRunner.cs`; receipts in `Node.Open`, `QueueReceipt`, `ReceiveReceipt` |
+| §7.3 inbound modes | park in `Node.Receive`; `auto_headless` in `Node.AutoAnswer.cs` with `Core/ClaudeRunner.cs`; `rtfc auto` (`--all`, the default scope) in `Commands.AutoAsync` and `Cli/AutoScope.cs`; receipts in `Node.Open`, `QueueReceipt`, `ReceiveReceipt` |
 | §7.4 loop and abuse protection | `Node.AutoAnswer.SkipReason`; the inbound rate limit and size checks in `Node.Receive` |
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
 | §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
@@ -109,6 +109,16 @@ untrusted wrapper; otherwise a contact could put a sentence in front of Claude t
 Registration happens in `rtfc mcp` rather than the SessionStart hook, because the hook
 leaves the process as soon as the daemon is up, and the MCP server is the one that also
 needs the directory for `send` and `inbox_list`.
+
+**Auto-answer's default scope is the session's directory, with a floor (§7.3).** `rtfc auto`
+resolves it in the CLI (`Cli/AutoScope.cs`), because the directory is the caller's, not
+the daemon's: `CLAUDE_PROJECT_DIR`, else the working directory. That Claude Code sets
+`CLAUDE_PROJECT_DIR` for a skill's `!` command was not confirmed (a headless `claude -p
+"/skill"` ran no turn); the working directory is the session's either way, and the command
+prints the directory it chose. The default refuses roots, the home folder and its
+ancestors, and `~/.claude`, because `Grep` has no path rules and a forgotten `cd ~` would
+otherwise expose SSH keys and credentials. `--all` is a loop in the CLI over the active
+contacts, so the management surface on the socket did not grow.
 
 **Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
 status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the

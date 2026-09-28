@@ -110,8 +110,9 @@ public static class EntryPoint
           init [--handle h] [--device d] [--port p] [--hint-host host]...
           invite                      print a single-use token to send to someone
           accept <token>              accept someone's invite (they must be home)
-          auto <contact> off|headless [--scope <dir>]
+          auto <contact>|--all off|headless [--scope <dir>]
                                       let a read-only headless Claude answer them from one directory
+                                      (default: where Claude runs; --all: every contact you have now)
           remove <contact>            stop talking to someone; block <contact> also refuses future invites
           rename <contact> <handle>   what you call them; only you see it
           receipts <contact> on|off   tell them when you read their messages (default on)

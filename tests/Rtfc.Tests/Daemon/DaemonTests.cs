@@ -1,6 +1,8 @@
+using Rtfc.Cli;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
+using Rtfc.Storage;
 
 namespace Rtfc.Tests.Daemon;
 
@@ -71,6 +73,46 @@ public class DaemonTests
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
         Assert.Null(await client.TryStatusAsync(Ct));
         Assert.False(File.Exists(temp.Home.SocketPath));
+    }
+
+    [Fact]
+    public async Task Auto_all_covers_every_active_contact_and_nobody_else()
+    {
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            foreach (var (handle, status) in new[] { ("sasha", ContactStatus.Active), ("dan", ContactStatus.Active), ("eve", ContactStatus.Removed) })
+            {
+                using var other = new TempHome();
+                using var person = IdentityStore.Create(other.Home, handle, "laptop", DateTimeOffset.UtcNow);
+                db.UpsertContact(new ContactRow(
+                    Ids.Person(person.PersonCa), handle, person.PersonCa.RawData, status, DateTimeOffset.UtcNow, InboundMode.Park,
+                    AutoScope: null, AutoOwnerDevice: null, ReadReceipts: true, DeviceListVersion: 0, Rev: 1));
+            }
+        }
+
+        var scope = Directory.CreateDirectory(Path.Combine(temp.Home.Root, "payments-api")).FullName;
+        var daemon = Task.Run(() => DaemonHost.RunAsync(temp.Home, new DaemonOptions(IdleExit: false, LogToConsole: false), Ct), Ct);
+        using var client = new DaemonClient(temp.Home);
+        await WaitForStatusAsync(client, daemon);
+        var ctx = new CommandContext(temp.Home, new StringWriter(), new StringWriter(), Ct);
+
+        Assert.Equal(0, await Commands.AutoAsync(ctx, ["--all", "headless", "--scope", scope]));
+        var contacts = (await client.ContactsAsync(probe: false, Ct)).ToDictionary(c => c.Handle);
+        Assert.Equal((InboundMode.AutoHeadless, scope), (contacts["sasha"].InboundMode, contacts["sasha"].AutoScope));
+        Assert.Equal((InboundMode.AutoHeadless, scope), (contacts["dan"].InboundMode, contacts["dan"].AutoScope));
+        Assert.Equal(InboundMode.Park, contacts["eve"].InboundMode);
+        Assert.Contains("Messages from dan, sasha are now answered", ctx.Out.ToString());
+        Assert.Contains("Contacts you accept later still park", ctx.Out.ToString());
+
+        Assert.Equal(0, await Commands.AutoAsync(ctx, ["--all", "off"]));
+        Assert.All(await client.ContactsAsync(probe: false, Ct), c => Assert.Equal(InboundMode.Park, c.InboundMode));
+        Assert.Equal(2, await Commands.AutoAsync(ctx, ["--all", "sasha", "off"]));
+
+        await client.ShutdownAsync(Ct);
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
     }
 
     [Fact]
