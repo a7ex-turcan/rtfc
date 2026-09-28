@@ -26,10 +26,17 @@ public sealed record SendResult(
     string? Requested = null,
     string[]? Online = null,
     string? Reason = null,
-    DateTimeOffset? ExpiresAt = null)
+    DateTimeOffset? ExpiresAt = null,
+    string? Project = null)
 {
     public static SendResult Rejected(string reason) => new(SendStatus.Rejected, Reason: reason);
 }
+
+/// <summary>
+/// How to send (spec §7.2, §7.6). <see cref="Project"/> names one of the recipient's projects; <see cref="FromDirectory"/> is
+/// the sending session's directory, which decides where an answer lands on this side.
+/// </summary>
+public sealed record SendOptions(bool Leave = false, string? Project = null, string? FromDirectory = null);
 
 public sealed record DeviceView(string Name, string DeviceId, string Status, bool? Online, string[] Hints);
 
@@ -76,7 +83,16 @@ public sealed record InboxSummary(
     string Origin,
     string? Note = null,
     string? ReplyState = null,
-    string Kind = "person");
+    string Kind = "person",
+    string? Project = null);
+
+/// <summary>What <c>inbox_list</c> shows a session (spec §7.6): its messages, and a count of what is parked in other projects.</summary>
+public sealed record InboxListing(InboxSummary[] Messages, ProjectCount[] Elsewhere);
+
+public sealed record ProjectCount(string Project, int Parked, string[] From);
+
+/// <summary>A registered project, as the session that registered it sees it.</summary>
+public sealed record ProjectView(string Name, string Root);
 
 public sealed record InboxOpened(
     string Id,
@@ -94,7 +110,8 @@ public sealed record InboxOpened(
     string? Note = null,
     string? Draft = null,
     SentSummary[]? YourReplies = null,
-    string Kind = "person");
+    string Kind = "person",
+    string? Project = null);
 
 public sealed record InviteResult(string Token, DateTimeOffset ExpiresAt, string[] Hints);
 
@@ -118,9 +135,10 @@ public sealed record AcceptResult(
 
 public sealed record StatusGlobal(int Parked, string[] From, int Pending = 0);
 
-public sealed record ProjectStatus(int Reviews, int Tickets, int PendingSubscriptions);
+/// <summary>One project's line in <c>status.json</c>: messages addressed to it (spec §7.6) and, from Phase 8, its source items.</summary>
+public sealed record ProjectStatus(string Name, int Parked, string[] From, int Reviews = 0, int Tickets = 0, int PendingSubscriptions = 0);
 
-/// <summary>The contents of <c>status.json</c> (spec §11).</summary>
+/// <summary>The contents of <c>status.json</c> (spec §11). <c>Projects</c> is keyed by the project's normalized root (<see cref="ProjectPaths.Key"/>).</summary>
 public sealed record StatusSnapshot(StatusGlobal Global, Dictionary<string, ProjectStatus> Projects, bool Away);
 
 /// <summary>The payload behind <c>rtfc1_</c> (spec §5.1): a fingerprint and hints, never certificates, so it stays short enough to paste.</summary>
@@ -168,6 +186,7 @@ public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePat
 [JsonSerializable(typeof(ContactView[]))]
 [JsonSerializable(typeof(InboxSummary))]
 [JsonSerializable(typeof(InboxSummary[]))]
+[JsonSerializable(typeof(InboxListing))]
 [JsonSerializable(typeof(InboxOpened))]
 [JsonSerializable(typeof(OutboxView[]))]
 [JsonSerializable(typeof(InviteResult))]

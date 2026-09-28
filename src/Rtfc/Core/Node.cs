@@ -265,29 +265,32 @@ public sealed partial class Node : IAsyncDisposable
 
     // ---- sending (spec §7.2) ----
 
-    /// <summary>Sends to a contact now. With <paramref name="leave"/>, a message nobody is home for waits in the outbox instead (spec §7.2, "leave it for her").</summary>
-    public async Task<SendResult> SendAsync(string to, string text, bool leave, CancellationToken cancellationToken)
-    {
-        var result = await SendAsync(to, text, cancellationToken).ConfigureAwait(false);
-        if (result.Status != SendStatus.NobodyHome || !leave)
-        {
-            return result;
-        }
+    public Task<SendResult> SendAsync(string to, string text, CancellationToken cancellationToken) =>
+        SendAsync(to, text, new SendOptions(), cancellationToken);
 
-        var contact = _db.FindContactByHandle(to.Trim())!;
-        return Queue(contact, deviceId: null, result.MessageId!, thread: result.MessageId!, replyTo: null, hop: 0, text, MessageOrigin.Human);
-    }
+    public Task<SendResult> SendAsync(string to, string text, bool leave, CancellationToken cancellationToken) =>
+        SendAsync(to, text, new SendOptions(Leave: leave), cancellationToken);
 
-    public Task<SendResult> SendAsync(string to, string text, CancellationToken cancellationToken)
+    /// <summary>
+    /// Sends to a contact now. With <see cref="SendOptions.Leave"/>, a message nobody is home for waits in the outbox instead
+    /// (spec §7.2, "leave it for her"). With <see cref="SendOptions.Project"/>, it is addressed to one of their projects (spec §7.6).
+    /// </summary>
+    public async Task<SendResult> SendAsync(string to, string text, SendOptions options, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            return Task.FromResult(SendResult.Rejected("empty_message"));
+            return SendResult.Rejected("empty_message");
         }
 
         if (Encoding.UTF8.GetByteCount(text) > MessageFrame.MaxBodyBytes)
         {
-            return Task.FromResult(SendResult.Rejected("body_too_large"));
+            return SendResult.Rejected("body_too_large");
+        }
+
+        var project = string.IsNullOrWhiteSpace(options.Project) ? null : options.Project.Trim();
+        if (project is not null && !ProjectName.IsValid(project))
+        {
+            return SendResult.Rejected("invalid_project");
         }
 
         var slash = to.IndexOf('/');
@@ -297,15 +300,29 @@ public sealed partial class Node : IAsyncDisposable
         var contact = _db.FindContactByHandle(handle.Trim());
         if (contact is null || contact.Status != ContactStatus.Active)
         {
-            return Task.FromResult(SendResult.Rejected("not_a_contact"));
+            return SendResult.Rejected("not_a_contact");
         }
 
+        // An answer to a message addressed to a project lands in the project it was sent from (spec §7.6), decided here, not on the wire.
+        var replyProject = project is not null && options.FromDirectory is { } from ? RegisterProject(from).Id : null;
         var id = Ulid.NewUlid(_clock.GetUtcNow());
-        return DeliverAsync(contact, deviceName, id, thread: id, replyTo: null, hop: 0, text, MessageOrigin.Human, cancellationToken);
+        var outgoing = new Outgoing(id, Thread: id, ReplyTo: null, Hop: 0, text, MessageOrigin.Human, project, replyProject);
+        var result = await DeliverAsync(contact, deviceName, outgoing, cancellationToken).ConfigureAwait(false);
+        if (result.Status == SendStatus.NobodyHome && options.Leave)
+        {
+            result = Queue(contact, deviceId: null, outgoing);
+        }
+
+        return project is null ? result : result with { Project = project };
     }
 
-    private async Task<SendResult> DeliverAsync(
-        ContactRow contact, string? deviceName, string id, string thread, string? replyTo, int hop, string text, string origin, CancellationToken cancellationToken)
+    /// <summary>
+    /// A message or reply on its way out. <see cref="Project"/> travels in the envelope; <see cref="ReplyProject"/> stays here, in
+    /// <c>sent.project_id</c>, and is where an answer to it will land (spec §7.6).
+    /// </summary>
+    private sealed record Outgoing(string Id, string Thread, string? ReplyTo, int Hop, string Text, string Origin, string? Project = null, string? ReplyProject = null);
+
+    private async Task<SendResult> DeliverAsync(ContactRow contact, string? deviceName, Outgoing message, CancellationToken cancellationToken)
     {
         var devices = _db.ListDevices(contact.PersonId).Where(d => d.Status == DeviceStatus.Active).ToList();
         var targets = deviceName is null ? devices : devices.Where(d => string.Equals(d.Name, deviceName, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -322,7 +339,7 @@ public sealed partial class Node : IAsyncDisposable
         foreach (var device in targets)
         {
             var label = $"{contact.Handle}/{device.Name}";
-            var outcome = await DeliverToDeviceAsync(contact, ca, device, id, thread, replyTo, hop, text, origin, cancellationToken).ConfigureAwait(false);
+            var outcome = await DeliverToDeviceAsync(contact, ca, device, message, cancellationToken).ConfigureAwait(false);
             switch (outcome)
             {
                 case null:
@@ -342,23 +359,24 @@ public sealed partial class Node : IAsyncDisposable
         {
             var now = _clock.GetUtcNow();
             _db.InsertSent(new SentRow(
-                id, contact.PersonId, deviceName is null ? null : targets[0].DeviceId, thread, replyTo, origin,
-                replyTo is null ? SentKind.Message : SentKind.Reply, text, now, DeliveredAt: now, ReadAt: null, ExpiresAt: null, SentState.Delivered));
+                message.Id, contact.PersonId, deviceName is null ? null : targets[0].DeviceId, message.Thread, message.ReplyTo, message.Origin,
+                message.ReplyTo is null ? SentKind.Message : SentKind.Reply, message.Text, now, DeliveredAt: now, ReadAt: null, ExpiresAt: null,
+                SentState.Delivered, message.ReplyProject));
         }
 
         if (delivered.Count == targets.Count)
         {
-            return new SendResult(SendStatus.Delivered, id, To: [.. delivered]);
+            return new SendResult(SendStatus.Delivered, message.Id, To: [.. delivered]);
         }
 
         if (delivered.Count > 0)
         {
-            return new SendResult(SendStatus.Partial, id, To: [.. delivered], Unreachable: [.. unreachable]);
+            return new SendResult(SendStatus.Partial, message.Id, To: [.. delivered], Unreachable: [.. unreachable]);
         }
 
         if (failure is not null)
         {
-            return new SendResult(SendStatus.Failed, id, Reason: failure);
+            return new SendResult(SendStatus.Failed, message.Id, Reason: failure);
         }
 
         if (deviceName is not null)
@@ -369,7 +387,7 @@ public sealed partial class Node : IAsyncDisposable
                 Online: [.. online.Where(kv => kv.Value).Select(kv => $"{contact.Handle}/{kv.Key.Name}")]);
         }
 
-        return new SendResult(SendStatus.NobodyHome, id, Person: contact.Handle);
+        return new SendResult(SendStatus.NobodyHome, message.Id, Person: contact.Handle);
     }
 
     /// <summary>An authenticated session to one of a contact's devices, or null when it is unreachable or someone else answered.</summary>
@@ -401,8 +419,7 @@ public sealed partial class Node : IAsyncDisposable
     }
 
     /// <summary>Null on success, "unreachable" when no hint answered, otherwise a reason.</summary>
-    private async Task<string?> DeliverToDeviceAsync(
-        ContactRow contact, X509Certificate2 ca, DeviceRow device, string id, string thread, string? replyTo, int hop, string text, string origin, CancellationToken cancellationToken)
+    private async Task<string?> DeliverToDeviceAsync(ContactRow contact, X509Certificate2 ca, DeviceRow device, Outgoing message, CancellationToken cancellationToken)
     {
         var session = await OpenSessionAsync(contact, ca, device, cancellationToken).ConfigureAwait(false);
         if (session is null)
@@ -415,9 +432,9 @@ public sealed partial class Node : IAsyncDisposable
             await using var _ = session;
             var seq = _db.NextSeqOut(device.DeviceId);
             var envelope = new MessageFrame(
-                HelloFrame.CurrentVersion, id,
+                HelloFrame.CurrentVersion, message.Id,
                 new Address(Self.PersonId, Self.DeviceId), new Address(contact.PersonId, device.DeviceId),
-                seq, thread, replyTo, origin, hop, Timestamps.Format(_clock.GetUtcNow()), new MessageBody(text));
+                seq, message.Thread, message.ReplyTo, message.Origin, message.Hop, Timestamps.Format(_clock.GetUtcNow()), new MessageBody(message.Text), message.Project);
             await session.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
 
             var reply = await session.ReceiveAsync(cancellationToken).AsTask().WaitAsync(AckTimeout, cancellationToken).ConfigureAwait(false);
@@ -526,7 +543,8 @@ public sealed partial class Node : IAsyncDisposable
             return new AckFrame(message.Id, AckStatus.Rejected, "wrong_recipient");
         }
 
-        if (message.Origin is not (MessageOrigin.Human or MessageOrigin.Auto) || message.Hop < 0)
+        if (message.Origin is not (MessageOrigin.Human or MessageOrigin.Auto) || message.Hop < 0
+            || (message.Project is not null && !ProjectName.IsValid(message.Project)))
         {
             return new AckFrame(message.Id, AckStatus.Rejected, "bad_envelope");
         }
@@ -555,10 +573,12 @@ public sealed partial class Node : IAsyncDisposable
             return new AckFrame(message.Id, AckStatus.Rejected, "rate_limited");
         }
 
+        // The ack below is the same wherever the message lands, so a contact can't probe which projects exist (spec §7.6).
+        var (projectId, note) = Route(trust.PersonId, message);
         var row = new InboxMessage(
             message.Id, Self.DeviceId, message.From.Person, message.From.Device, message.Seq, message.ReplyTo, message.Origin,
             message.Hop, message.Thread ?? message.Id, message.Body.Text, TryParseTime(message.SentAt), now, now,
-            InboxState.Parked, HandledBy: null, HandledAt: null);
+            InboxState.Parked, HandledBy: null, HandledAt: null, Note: note, ProjectId: projectId);
         if (!_db.InsertMessage(row))
         {
             return new AckFrame(message.Id, AckStatus.Duplicate);
@@ -576,15 +596,37 @@ public sealed partial class Node : IAsyncDisposable
     /// <summary>The states that wait for a human: parked, and auto-answers that failed.</summary>
     private static bool NeedsAttention(InboxMessage m) => m.State is InboxState.Parked or InboxState.AutoFailed;
 
-    public InboxSummary[] ListInbox(string? state)
+    /// <summary>Every message in <paramref name="state"/>, whichever project it is in. What the CLI shows.</summary>
+    public InboxSummary[] ListInbox(string? state) => ListInbox(state, directory: null, allProjects: true).Messages;
+
+    /// <summary>
+    /// The inbox as a session sees it (spec §7.6, §9.2): with <paramref name="allProjects"/> or no <paramref name="directory"/>,
+    /// everything; otherwise the shared inbox and this directory's project, plus a count of what is parked in the others.
+    /// </summary>
+    public InboxListing ListInbox(string? state, string? directory, bool allProjects)
     {
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
+        var projects = _db.ListProjects().ToDictionary(p => p.Id);
+        var here = allProjects || directory is null ? null : RegisterProject(directory).Id;
+        bool Visible(InboxMessage m) => here is null || ProjectIdOf(m, projects) is null || ProjectIdOf(m, projects) == here;
+
         var messages = state == InboxState.Parked ? _db.ListMessages(null).Where(NeedsAttention) : _db.ListMessages(state);
-        return [.. messages.Select(m => new InboxSummary(
+        var summaries = messages.Where(Visible).Select(m => new InboxSummary(
             m.Id, FromLabel(m, handles), m.Kind == InboxKind.Notice ? "" : DeviceName(m.FromDevice), m.State,
             Preview(m.Body), m.ReceivedAt, m.ReplyTo, m.Origin, m.Note,
-            m.Kind == InboxKind.Person ? _db.ListSentReplies(m.Id).LastOrDefault()?.State : null, m.Kind))];
+            m.Kind == InboxKind.Person ? _db.ListSentReplies(m.Id).LastOrDefault()?.State : null, m.Kind,
+            ProjectIdOf(m, projects) is { } p ? projects[p].Name : null));
+
+        var elsewhere = here is null
+            ? []
+            : _db.ListMessages(null).Where(m => NeedsAttention(m) && !Visible(m)).GroupBy(m => ProjectIdOf(m, projects)!)
+                .Select(g => new ProjectCount(projects[g.Key].Name, g.Count(), [.. g.Select(m => FromLabel(m, handles)).Distinct()]));
+        return new InboxListing([.. summaries], [.. elsewhere]);
     }
+
+    /// <summary>A message's project, or null for the shared inbox. A project that is no longer known falls back to the shared inbox.</summary>
+    private static string? ProjectIdOf(InboxMessage m, Dictionary<string, ProjectRow> projects) =>
+        m.ProjectId is { } id && projects.ContainsKey(id) ? id : null;
 
     private static string FromLabel(InboxMessage m, Dictionary<string, string> handles) =>
         m.Kind == InboxKind.Notice ? "rtfc" : handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson));
@@ -633,7 +675,8 @@ public sealed partial class Node : IAsyncDisposable
         return new InboxOpened(
             message.Id, from, message.Kind == InboxKind.Notice ? "" : DeviceName(message.FromDevice), message.FromPerson, message.State,
             message.ReceivedAt, message.SentAt, message.Thread, message.ReplyTo, message.Origin, message.Hop, message.Body, message.Note,
-            message.Draft, replies.Length == 0 ? null : replies, message.Kind);
+            message.Draft, replies.Length == 0 ? null : replies, message.Kind,
+            message.ProjectId is { } project ? _db.GetProject(project)?.Name : null);
     }
 
     /// <summary>Replies to the person who sent a message: delivered now, or queued in the outbox if nobody is home (spec §7.2).</summary>
@@ -661,12 +704,13 @@ public sealed partial class Node : IAsyncDisposable
             return SendResult.Rejected("not_a_contact");
         }
 
-        var replyId = Ulid.NewUlid(_clock.GetUtcNow());
-        var thread = original.Thread ?? original.Id;
-        var result = await DeliverAsync(contact, deviceName: null, replyId, thread, replyTo: id, original.Hop + 1, text, MessageOrigin.Human, cancellationToken).ConfigureAwait(false);
+        // A reply to a message in one of our projects records that project, so the answer to the reply lands there too (spec §7.6).
+        var reply = new Outgoing(
+            Ulid.NewUlid(_clock.GetUtcNow()), original.Thread ?? original.Id, ReplyTo: id, original.Hop + 1, text, MessageOrigin.Human, ReplyProject: original.ProjectId);
+        var result = await DeliverAsync(contact, deviceName: null, reply, cancellationToken).ConfigureAwait(false);
         if (result.Status == SendStatus.NobodyHome)
         {
-            result = Queue(contact, deviceId: null, replyId, thread, replyTo: id, original.Hop + 1, text, MessageOrigin.Human);
+            result = Queue(contact, deviceId: null, reply);
             _db.SetMessageNote(id, $"Your reply waits in the outbox until {contact.Handle} is next home (until {Timestamps.Format(result.ExpiresAt!.Value)}).", _clock.GetUtcNow());
         }
 
@@ -815,12 +859,18 @@ public sealed partial class Node : IAsyncDisposable
 
     // ---- status (spec §11) ----
 
+    /// <summary>The shared inbox under <c>global</c>, and messages addressed to a project under that project's root key (spec §11).</summary>
     public StatusSnapshot Status()
     {
         var parked = _db.ListMessages(null).Where(NeedsAttention).ToList();
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
-        var from = parked.Select(m => FromLabel(m, handles)).Distinct().ToArray();
-        return new StatusSnapshot(new StatusGlobal(parked.Count, from, _db.CountOutbox(OutboxState.Pending)), [], IsAway);
+        var projects = _db.ListProjects().ToDictionary(p => p.Id);
+        var shared = parked.Where(m => ProjectIdOf(m, projects) is null).ToList();
+        var perProject = parked.Where(m => ProjectIdOf(m, projects) is not null).GroupBy(m => projects[m.ProjectId!]).ToDictionary(
+            g => g.Key.RootPath,
+            g => new ProjectStatus(g.Key.Name, g.Count(), [.. g.Select(m => FromLabel(m, handles)).Distinct()]));
+        return new StatusSnapshot(
+            new StatusGlobal(shared.Count, [.. shared.Select(m => FromLabel(m, handles)).Distinct()], _db.CountOutbox(OutboxState.Pending)), perProject, IsAway);
     }
 
     private void WriteStatus()

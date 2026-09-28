@@ -274,21 +274,23 @@ public sealed partial class Node
     }
 
     /// <summary>Puts a message or reply in the outbox and records it as sent-but-queued.</summary>
-    private SendResult Queue(ContactRow contact, string? deviceId, string id, string thread, string? replyTo, int hop, string text, string origin)
+    private SendResult Queue(ContactRow contact, string? deviceId, Outgoing message)
     {
         var now = _clock.GetUtcNow();
         var expires = now + _options.Outbox.Expiry;
-        var kind = replyTo is null ? OutboxKind.Message : OutboxKind.Reply;
+        var kind = message.ReplyTo is null ? OutboxKind.Message : OutboxKind.Reply;
         var envelope = new MessageFrame(
-            HelloFrame.CurrentVersion, id, new Address(Self.PersonId, Self.DeviceId), new Address(contact.PersonId, deviceId ?? ""),
-            Seq: 0, thread, replyTo, origin, hop, Timestamps.Format(now), new MessageBody(text));
+            HelloFrame.CurrentVersion, message.Id, new Address(Self.PersonId, Self.DeviceId), new Address(contact.PersonId, deviceId ?? ""),
+            Seq: 0, message.Thread, message.ReplyTo, message.Origin, message.Hop, Timestamps.Format(now), new MessageBody(message.Text), message.Project);
 
-        _db.InsertSent(new SentRow(id, contact.PersonId, deviceId, thread, replyTo, origin, kind, text, now, DeliveredAt: null, ReadAt: null, expires, SentState.Queued));
-        _db.InsertOutbox(new OutboxRow(id, contact.PersonId, deviceId, kind, Encoding.UTF8.GetString(Frames.Serialize(envelope)), now, expires, Attempts: 0, OutboxState.Pending));
-        _logger.LogInformation("Queued {Kind} {Id} for {Handle}, expires {Expires}", kind, id, contact.Handle, Timestamps.Format(expires));
+        _db.InsertSent(new SentRow(
+            message.Id, contact.PersonId, deviceId, message.Thread, message.ReplyTo, message.Origin, kind, message.Text, now,
+            DeliveredAt: null, ReadAt: null, expires, SentState.Queued, message.ReplyProject));
+        _db.InsertOutbox(new OutboxRow(message.Id, contact.PersonId, deviceId, kind, Encoding.UTF8.GetString(Frames.Serialize(envelope)), now, expires, Attempts: 0, OutboxState.Pending));
+        _logger.LogInformation("Queued {Kind} {Id} for {Handle}, expires {Expires}", kind, message.Id, contact.Handle, Timestamps.Format(expires));
         KickOutbox();
         WriteStatus();
-        return new SendResult(SendStatus.Queued, id, Person: contact.Handle, ExpiresAt: expires);
+        return new SendResult(SendStatus.Queued, message.Id, Person: contact.Handle, ExpiresAt: expires);
     }
 
     /// <summary>Queues a read receipt for the device that sent a message. Delivered by the pump, now if they are home, later if not.</summary>

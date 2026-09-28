@@ -18,6 +18,7 @@ public static class IpcRoutes
     public const string Accept = "/v1/accept";
     public const string Outbox = "/v1/outbox";
     public const string Away = "/v1/away";
+    public const string Projects = "/v1/projects";
     public const string Shutdown = "/v1/shutdown";
 
     public static string InboxOpen(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/open";
@@ -45,7 +46,10 @@ public sealed record DaemonStatus(
     bool IdleExit,
     bool Away = false);
 
-public sealed record SendRequest(string To, string Text, bool Leave = false);
+/// <summary><c>From</c> is the sending session's directory (spec §7.6); <c>Project</c> names one of the recipient's projects.</summary>
+public sealed record SendRequest(string To, string Text, bool Leave = false, string? Project = null, string? From = null);
+
+public sealed record ProjectRequest(string Directory);
 
 public sealed record ToggleRequest(bool On);
 
@@ -76,6 +80,9 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(SendResult))]
 [JsonSerializable(typeof(ContactView[]))]
 [JsonSerializable(typeof(InboxSummary[]))]
+[JsonSerializable(typeof(InboxListing))]
+[JsonSerializable(typeof(ProjectRequest))]
+[JsonSerializable(typeof(ProjectView))]
 [JsonSerializable(typeof(InboxOpened))]
 [JsonSerializable(typeof(InviteResult))]
 [JsonSerializable(typeof(AcceptResult))]

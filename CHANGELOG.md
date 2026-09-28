@@ -20,8 +20,26 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+### Added
+
+- **Messages addressed to a project.** *"Send this to sasha, in payments-api"*: the `send`
+  tool takes an optional `project`, the folder name of one of the recipient's projects, and
+  the message lands in that project on their side instead of in the shared inbox. Their
+  sessions in that project count and list it as usual; their other sessions show a pointer,
+  `📨 1 · alex → payments-api`. A name that matches none of their projects lands in the
+  shared inbox with a note, and the sender can't tell the difference. Without a project,
+  nothing changes.
+- **Threads stay in their project.** The answer to a message you sent to a project lands in
+  the project you sent it from, and the conversation keeps to those two projects from then
+  on. Each side decides this from its own records; no project name is sent back.
+- `inbox_list` takes `scope`: `project` (the default) lists the shared inbox and this
+  session's project and counts what waits in your other projects; `all` lists everything.
+  `rtfc inbox` lists everything and marks each message's project.
+- Each session tells the daemon which project it runs in: the git root around the
+  directory Claude Code started in.
+
+The wire protocol stays at version 1: the envelope's new `project` field is optional, and a
+0.3.x daemon ignores it and delivers to the shared inbox.
 
 ## [0.3.3] - 2026-09-28
 

@@ -12,13 +12,20 @@ namespace Rtfc.Mcp;
 /// moving, and reflection-based tool discovery would not survive Native AOT.
 /// </summary>
 /// <remarks>stdout is the protocol. Diagnostics go to <c>log</c> (stderr), never to <c>output</c>.</remarks>
-public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output, TextWriter log)
+public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output, TextWriter log, string? directory = null)
 {
     private const string DefaultProtocolVersion = "2025-06-18";
     private static readonly string[] KnownProtocolVersions = ["2024-11-05", "2025-03-26", "2025-06-18"];
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
     private readonly DaemonClient _client = new(home);
+
+    /// <summary>
+    /// The session's directory (spec §10.2). Claude Code sets <c>CLAUDE_PROJECT_DIR</c> to where the session started and starts
+    /// this server there too (checked against Claude Code 2.1.283); the daemon resolves it to the enclosing git root.
+    /// </summary>
+    private readonly string _directory = directory
+        ?? (Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") is { Length: > 0 } projectDir ? projectDir : Environment.CurrentDirectory);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private IAsyncDisposable? _lease;
 
@@ -132,7 +139,7 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
 
         try
         {
-            var text = await Tools.CallAsync(_client, name, arguments, cancellationToken).ConfigureAwait(false);
+            var text = await Tools.CallAsync(_client, name, arguments, _directory, cancellationToken).ConfigureAwait(false);
             return ToolText(text);
         }
         catch (McpException ex) when (ex.Code == -32602)
@@ -170,13 +177,24 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
         try
         {
             _lease = await _client.AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
-            return true;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
             log.WriteLine($"rtfc mcp: could not take a lease: {ex.Message}");
             return false;
         }
+
+        try
+        {
+            // So a contact can address this project before anyone here has called a tool (spec §7.6).
+            await _client.RegisterProjectAsync(_directory, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or JsonException)
+        {
+            log.WriteLine($"rtfc mcp: could not register the project at {_directory}: {ex.Message}");
+        }
+
+        return true;
     }
 
     private async Task WriteAsync(JsonObject message, CancellationToken cancellationToken)

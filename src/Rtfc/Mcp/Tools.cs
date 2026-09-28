@@ -33,7 +33,8 @@ public static class Tools
             "Send a message to a contact's Claude Code. `to` is a contact handle, or handle/device for one device. Delivered only if a "
             + "device is online: the result is delivered, partial, nobody_home, device_offline or rejected, and nothing is queued unless "
             + "`leave` is true, which the user must have asked for (\"leave it for her\"): then a message nobody is home for waits in the "
-            + "outbox for up to a week and the result is queued. "
+            + "outbox for up to a week and the result is queued. `project` addresses one of the recipient's projects, only when the user "
+            + "named it (\"send this to sasha, in payments-api\"); without it the message goes to their shared inbox, as usual. "
             + "The user approves the exact text before it leaves the machine, so pass the final text, not a summary.",
             new JsonObject
             {
@@ -43,6 +44,12 @@ public static class Tools
                     ["to"] = new JsonObject { ["type"] = "string", ["description"] = "Contact handle, e.g. `sasha`, or `sasha/laptop`." },
                     ["text"] = new JsonObject { ["type"] = "string", ["description"] = "The message, up to 64 KB." },
                     ["leave"] = new JsonObject { ["type"] = "boolean", ["description"] = "If nobody is home, leave it in the outbox for when they are. Only when the user asked. Default false." },
+                    ["project"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "The folder name of the recipient's project, e.g. `payments-api`, exactly as the user said it. Omit unless the user named one. "
+                            + "If the recipient has no project by that name, it lands in their shared inbox with a note; the result is the same either way.",
+                    },
                 },
                 ["required"] = new JsonArray("to", "text"),
                 ["additionalProperties"] = false,
@@ -50,14 +57,16 @@ public static class Tools
 
         Tool("inbox_list",
             "List messages in the user's rtfc inbox: parked (waiting for the user, including auto-answers that failed and notices from rtfc; "
-            + "the default) or all. A note says what happened to a message or to the user's reply (queued, delivered, read). Previews only; "
-            + "use inbox_open for a full message.",
+            + "the default) or all. By default this shows the shared inbox and messages addressed to this session's project, and counts what "
+            + "is parked in the user's other projects; scope all lists every project. A note says what happened to a message or to the "
+            + "user's reply (queued, delivered, read). Previews only; use inbox_open for a full message.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["properties"] = new JsonObject
                 {
                     ["state"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("parked", "all"), ["description"] = "Default: parked." },
+                    ["scope"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("project", "all"), ["description"] = "Default: project." },
                 },
                 ["additionalProperties"] = false,
             }),
@@ -100,7 +109,8 @@ public static class Tools
                 ["additionalProperties"] = false,
             }));
 
-    public static async Task<string> CallAsync(DaemonClient client, string name, JsonObject arguments, CancellationToken cancellationToken)
+    /// <summary>Runs one tool. <paramref name="directory"/> is the session's, so sending and listing know which project they are in (spec §7.6).</summary>
+    public static async Task<string> CallAsync(DaemonClient client, string name, JsonObject arguments, string directory, CancellationToken cancellationToken)
     {
         switch (name)
         {
@@ -120,7 +130,8 @@ public static class Tools
                     var to = Required(arguments, "to");
                     var text = Required(arguments, "text");
                     var leave = arguments["leave"]?.GetValue<bool>() ?? false;
-                    var result = await client.SendAsync(to, text, leave, cancellationToken).ConfigureAwait(false);
+                    var project = arguments["project"]?.GetValue<string>();
+                    var result = await client.SendAsync(new SendRequest(to, text, leave, project, directory), cancellationToken).ConfigureAwait(false);
                     return McpServer.Pretty(JsonSerializer.SerializeToUtf8Bytes(result, IpcJson.Default.SendResult));
                 }
 
@@ -132,13 +143,26 @@ public static class Tools
                         throw new McpException(-32602, "state must be 'parked' or 'all'.");
                     }
 
-                    var messages = await client.InboxAsync(state, cancellationToken).ConfigureAwait(false);
-                    if (messages.Length == 0)
+                    var scope = arguments["scope"]?.GetValue<string>() ?? "project";
+                    if (scope is not ("project" or "all"))
                     {
-                        return state == "parked" ? "Nothing parked." : "The inbox is empty.";
+                        throw new McpException(-32602, "scope must be 'project' or 'all'.");
                     }
 
-                    return McpServer.Pretty(JsonSerializer.SerializeToUtf8Bytes(messages, IpcJson.Default.InboxSummaryArray));
+                    var listing = await client.InboxAsync(state, scope == "all" ? null : directory, cancellationToken).ConfigureAwait(false);
+                    var elsewhere = listing.Elsewhere.Length == 0
+                        ? ""
+                        : "Parked in the user's other projects, not listed here: "
+                            + string.Join("; ", listing.Elsewhere.Select(e => $"{e.Project} ({e.Parked} from {string.Join(", ", e.From)})"))
+                            + ". Use scope all to list them.";
+                    if (listing.Messages.Length == 0)
+                    {
+                        var none = state == "parked" ? "Nothing parked." : "The inbox is empty.";
+                        return elsewhere.Length == 0 ? none : $"Nothing parked in the shared inbox or this project. {elsewhere}";
+                    }
+
+                    var list = McpServer.Pretty(JsonSerializer.SerializeToUtf8Bytes(listing.Messages, IpcJson.Default.InboxSummaryArray));
+                    return elsewhere.Length == 0 ? list : $"{list}\n\n{elsewhere}";
                 }
 
             case "inbox_open":
@@ -181,6 +205,7 @@ public static class Tools
 
         var body = message.Body.Replace("</contact_message", "</contact_message​", StringComparison.OrdinalIgnoreCase);
         var header = $"Message {message.Id} from {message.From}/{message.FromDevice}, received {Timestamps.Format(message.ReceivedAt)}"
+            + (message.Project is null ? "" : $", for the user's project {message.Project}")
             + (message.ReplyTo is null ? "" : $", replying to {message.ReplyTo}")
             + (message.Origin == "auto" ? ", written by their Claude automatically" : "")
             + $", state {message.State}."

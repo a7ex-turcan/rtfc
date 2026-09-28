@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS inbox (
   id          TEXT NOT NULL,
   to_device   TEXT NOT NULL,
   kind        TEXT NOT NULL,                      -- person | source | notice (a local note from rtfc itself, schema v3)
-  project_id  TEXT,                               -- NULL for person messages (global)
+  project_id  TEXT,                               -- NULL = the shared inbox; set for source items and project-addressed messages (spec §7.6)
   -- person messages
   from_person TEXT,
   from_device TEXT,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS accounts (            -- secrets live in the keychain
 
 CREATE TABLE IF NOT EXISTS projects (
   id          TEXT PRIMARY KEY,
-  root_path   TEXT NOT NULL UNIQUE,               -- normalized path key
+  root_path   TEXT NOT NULL UNIQUE,               -- normalized path key (lower case on Windows)
   name        TEXT
 );
 
@@ -138,10 +138,11 @@ CREATE TABLE IF NOT EXISTS sent (                -- what left this device, so re
   delivered_at TEXT,
   read_at     TEXT,
   expires_at  TEXT,                               -- while queued in the outbox
-  state       TEXT NOT NULL                       -- queued | delivered | read | expired
+  state       TEXT NOT NULL,                      -- queued | delivered | read | expired
+  project_id  TEXT                                -- where a reply to this lands (spec §7.6, schema v4); NULL = the shared inbox
 );
 
 CREATE TABLE IF NOT EXISTS seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '3');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '4');

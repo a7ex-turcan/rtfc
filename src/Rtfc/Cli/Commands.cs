@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
@@ -339,7 +340,8 @@ public static class Commands
             return 0;
         }
 
-        var messages = await client.InboxAsync(line.Flag("all") ? "all" : "parked", ctx.CancellationToken).ConfigureAwait(false);
+        // The CLI is not in a session, so it lists every project's messages and says which project each is in.
+        var messages = (await client.InboxAsync(line.Flag("all") ? "all" : "parked", ctx.CancellationToken).ConfigureAwait(false)).Messages;
         if (messages.Length == 0)
         {
             ctx.Out.WriteLine(line.Flag("all") ? "The inbox is empty." : "Nothing parked.");
@@ -348,7 +350,7 @@ public static class Commands
 
         foreach (var m in messages)
         {
-            var from = m.Kind == "notice" ? "rtfc" : $"{m.From}/{m.FromDevice}";
+            var from = (m.Kind == "notice" ? "rtfc" : $"{m.From}/{m.FromDevice}") + (m.Project is null ? "" : $" → {m.Project}");
             var tail = (m.Note is null ? "" : $"  [{m.Note}]") + (m.ReplyState is null ? "" : $"  (your reply: {m.ReplyState})");
             ctx.Out.WriteLine($"{m.Id}  {m.State,-11} {from}: {m.Preview}{tail}");
         }
@@ -422,13 +424,14 @@ public static class Commands
 
     // ---- statusline (spec §11) ----
 
+    /// <summary>
+    /// The status line segment (spec §11). The shared inbox counts together with the session's own project; another project's
+    /// messages show as a pointer, <c>📨 1 · alex → payments-api</c>. Reads only <c>status.json</c>: it runs every few seconds.
+    /// </summary>
     public static int Statusline(CommandContext ctx, TextReader stdin, bool stdinRedirected)
     {
-        if (stdinRedirected)
-        {
-            // Claude Code passes session JSON (cwd and more). Phase 8 uses it to pick the project.
-            _ = stdin.ReadToEnd();
-        }
+        // Claude Code passes session JSON on stdin, with the directory the session runs in.
+        var directory = stdinRedirected ? SessionDirectory(stdin.ReadToEnd()) : null;
 
         var status = StatusFile.Read(ctx.Home.StatusPath);
         if (status is null)
@@ -436,16 +439,24 @@ public static class Commands
             return 0;
         }
 
+        var projects = status.Projects ?? [];
+        var here = directory is null ? null : projects.Keys.Where(root => ProjectPaths.Contains(root, directory)).MaxBy(root => root.Length);
+
         var segments = new List<string>();
         if (status.Away)
         {
             segments.Add("💤 away");
         }
 
-        if (status.Global.Parked > 0)
+        var parked = status.Global.Parked + (here is null ? 0 : projects[here].Parked);
+        if (parked > 0)
         {
-            var from = status.Global.From.Length == 0 ? "" : " · " + string.Join(", ", status.Global.From);
-            segments.Add($"📨 {status.Global.Parked.ToString(CultureInfo.InvariantCulture)}{from}");
+            segments.Add($"📨 {parked.ToString(CultureInfo.InvariantCulture)}{Senders([.. status.Global.From, .. here is null ? [] : projects[here].From ?? []])}");
+        }
+
+        foreach (var (_, project) in projects.Where(p => p.Key != here && p.Value.Parked > 0).OrderBy(p => p.Value.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            segments.Add($"📨 {project.Parked.ToString(CultureInfo.InvariantCulture)}{Senders(project.From ?? [])} → {project.Name}");
         }
 
         if (status.Global.Pending > 0)
@@ -460,6 +471,41 @@ public static class Commands
 
         return 0;
     }
+
+    /// <summary>The key (<see cref="ProjectPaths.Key"/>) of the session's directory in Claude Code's status line JSON: <c>workspace.project_dir</c>, else <c>cwd</c>.</summary>
+    private static string? SessionDirectory(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            string? directory = null;
+            if (root.TryGetProperty("workspace", out var workspace) && workspace.ValueKind == JsonValueKind.Object
+                && workspace.TryGetProperty("project_dir", out var projectDir) && projectDir.ValueKind == JsonValueKind.String)
+            {
+                directory = projectDir.GetString();
+            }
+
+            if (string.IsNullOrEmpty(directory) && root.TryGetProperty("cwd", out var cwd) && cwd.ValueKind == JsonValueKind.String)
+            {
+                directory = cwd.GetString();
+            }
+
+            return string.IsNullOrEmpty(directory) ? null : ProjectPaths.Key(directory);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private static string Senders(IEnumerable<string> from) =>
+        from.Distinct().ToArray() is { Length: > 0 } names ? " · " + string.Join(", ", names) : "";
 
     // ---- helpers ----
 

@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -87,6 +87,19 @@ public sealed class Database : IDisposable
                 // was already created by schema.sql, which runs first.
                 Execute("ALTER TABLE inbox RENAME COLUMN auto_note TO note");
                 Execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
+                version = 3;
+            }
+
+            if (version < 4)
+            {
+                // v4 (project-addressed messages, spec §7.6): where a reply to something we sent lands. A `sent` table that
+                // schema.sql just created already has the column.
+                if (!HasColumn("sent", "project_id"))
+                {
+                    Execute("ALTER TABLE sent ADD COLUMN project_id TEXT");
+                }
+
+                Execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -229,21 +242,22 @@ public sealed class Database : IDisposable
             """
             INSERT OR IGNORE INTO inbox (id, to_device, kind, from_person, from_device, seq, reply_to, origin, hop, thread,
                                          body, sent_at, received_at, updated_at, state, handled_by, handled_at,
-                                         draft, note, auto_attempts)
+                                         draft, note, auto_attempts, project_id)
             VALUES ($id, $to_device, $kind, $from_person, $from_device, $seq, $reply_to, $origin, $hop, $thread,
                     $body, $sent_at, $received_at, $updated_at, $state, $handled_by, $handled_at,
-                    $draft, $note, $auto_attempts)
+                    $draft, $note, $auto_attempts, $project_id)
             """,
             ("$id", m.Id), ("$to_device", m.ToDevice), ("$from_person", m.FromPerson), ("$from_device", m.FromDevice),
             ("$seq", m.Seq), ("$reply_to", m.ReplyTo), ("$origin", m.Origin), ("$hop", (long)m.Hop), ("$thread", m.Thread),
             ("$body", m.Body), ("$sent_at", Time(m.SentAt)), ("$received_at", Timestamps.Format(m.ReceivedAt)),
             ("$updated_at", Timestamps.Format(m.UpdatedAt)), ("$state", m.State), ("$handled_by", m.HandledBy),
-            ("$handled_at", Time(m.HandledAt)), ("$draft", m.Draft), ("$note", m.Note), ("$auto_attempts", (long)m.AutoAttempts), ("$kind", m.Kind));
+            ("$handled_at", Time(m.HandledAt)), ("$draft", m.Draft), ("$note", m.Note), ("$auto_attempts", (long)m.AutoAttempts), ("$kind", m.Kind),
+            ("$project_id", m.ProjectId));
         return affected == 1;
     }
 
     private const string MessageColumns =
-        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, note, auto_attempts, kind";
+        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, note, auto_attempts, kind, project_id";
 
     /// <summary>The kinds the messaging surface shows: people's messages and rtfc's own notices. Source items (spec §10) are Phase 8.</summary>
     private const string MessageKinds = "kind IN ('person', 'notice')";
@@ -252,7 +266,7 @@ public sealed class Database : IDisposable
         r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt64(4), StringOrNull(r, 5), r.GetString(6),
         (int)r.GetInt64(7), StringOrNull(r, 8), r.GetString(9), Timestamps.ParseOrNull(StringOrNull(r, 10)),
         Timestamps.Parse(r.GetString(11)), Timestamps.Parse(r.GetString(12)), r.GetString(13), StringOrNull(r, 14),
-        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18), r.GetString(19));
+        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18), r.GetString(19), StringOrNull(r, 20));
 
     public InboxMessage? GetMessage(string id) =>
         QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE id = $id AND {MessageKinds}", ReadMessage, ("$id", id));
@@ -333,19 +347,19 @@ public sealed class Database : IDisposable
 
     public void InsertSent(SentRow s) => Execute(
         """
-        INSERT OR REPLACE INTO sent (id, to_person, to_device, thread, reply_to, origin, kind, body, sent_at, delivered_at, read_at, expires_at, state)
-        VALUES ($id, $to_person, $to_device, $thread, $reply_to, $origin, $kind, $body, $sent_at, $delivered_at, $read_at, $expires_at, $state)
+        INSERT OR REPLACE INTO sent (id, to_person, to_device, thread, reply_to, origin, kind, body, sent_at, delivered_at, read_at, expires_at, state, project_id)
+        VALUES ($id, $to_person, $to_device, $thread, $reply_to, $origin, $kind, $body, $sent_at, $delivered_at, $read_at, $expires_at, $state, $project_id)
         """,
         ("$id", s.Id), ("$to_person", s.ToPerson), ("$to_device", s.ToDevice), ("$thread", s.Thread), ("$reply_to", s.ReplyTo), ("$origin", s.Origin),
         ("$kind", s.Kind), ("$body", s.Body), ("$sent_at", Timestamps.Format(s.SentAt)), ("$delivered_at", Time(s.DeliveredAt)), ("$read_at", Time(s.ReadAt)),
-        ("$expires_at", Time(s.ExpiresAt)), ("$state", s.State));
+        ("$expires_at", Time(s.ExpiresAt)), ("$state", s.State), ("$project_id", s.ProjectId));
 
-    private const string SentColumns = "id, to_person, to_device, thread, reply_to, origin, kind, body, sent_at, delivered_at, read_at, expires_at, state";
+    private const string SentColumns = "id, to_person, to_device, thread, reply_to, origin, kind, body, sent_at, delivered_at, read_at, expires_at, state, project_id";
 
     private static SentRow ReadSent(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), StringOrNull(r, 2), StringOrNull(r, 3), StringOrNull(r, 4), r.GetString(5), r.GetString(6), r.GetString(7),
         Timestamps.Parse(r.GetString(8)), Timestamps.ParseOrNull(StringOrNull(r, 9)), Timestamps.ParseOrNull(StringOrNull(r, 10)),
-        Timestamps.ParseOrNull(StringOrNull(r, 11)), r.GetString(12));
+        Timestamps.ParseOrNull(StringOrNull(r, 11)), r.GetString(12), StringOrNull(r, 13));
 
     public SentRow? GetSent(string id) => QuerySingle($"SELECT {SentColumns} FROM sent WHERE id = $id", ReadSent, ("$id", id));
 
@@ -361,6 +375,35 @@ public sealed class Database : IDisposable
         WHERE id = $id
         """,
         ("$state", state), ("$delivered_at", Time(deliveredAt)), ("$read_at", Time(readAt)), ("$id", id));
+
+    // ---- projects (spec §10.2) ----
+
+    /// <summary>Records a project root, or refreshes its name if the root is known. Returns the stored row, whose id is stable.</summary>
+    public ProjectRow UpsertProject(ProjectRow project)
+    {
+        lock (_lock)
+        {
+            Execute(
+                "INSERT INTO projects (id, root_path, name) VALUES ($id, $root, $name) ON CONFLICT (root_path) DO UPDATE SET name = excluded.name",
+                ("$id", project.Id), ("$root", project.RootPath), ("$name", project.Name));
+            return GetProjectByRoot(project.RootPath)!;
+        }
+    }
+
+    private static ProjectRow ReadProject(SqliteDataReader r) => new(r.GetString(0), r.GetString(1), r.GetString(2));
+
+    public ProjectRow? GetProject(string id) =>
+        QuerySingle("SELECT id, root_path, name FROM projects WHERE id = $id", ReadProject, ("$id", id));
+
+    public ProjectRow? GetProjectByRoot(string rootPath) =>
+        QuerySingle("SELECT id, root_path, name FROM projects WHERE root_path = $root", ReadProject, ("$root", rootPath));
+
+    /// <summary>Every project with this folder name, compared case-insensitively. More than one means the name is ambiguous here.</summary>
+    public IReadOnlyList<ProjectRow> FindProjectsByName(string name) =>
+        Query("SELECT id, root_path, name FROM projects WHERE name = $name COLLATE NOCASE", ReadProject, ("$name", name));
+
+    public IReadOnlyList<ProjectRow> ListProjects() =>
+        Query("SELECT id, root_path, name FROM projects ORDER BY name COLLATE NOCASE", ReadProject);
 
     // ---- retention (spec §13) ----
 
@@ -477,6 +520,9 @@ public sealed class Database : IDisposable
 
         return command;
     }
+
+    private bool HasColumn(string table, string column) =>
+        Scalar<long>($"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $column", ("$column", column)) > 0;
 
     private static byte[] Blob(SqliteDataReader r, int i) => (byte[])r.GetValue(i);
 

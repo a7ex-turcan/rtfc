@@ -140,13 +140,31 @@ public static class DaemonHost
                 return Results.Json(new IpcError("A JSON body with 'to' and 'text' is required."), IpcJson.Default.IpcError, statusCode: 400);
             }
 
-            return Results.Json(await node.SendAsync(request.To, request.Text, request.Leave, context.RequestAborted), IpcJson.Default.SendResult);
+            return Results.Json(
+                await node.SendAsync(request.To, request.Text, new SendOptions(request.Leave, request.Project, request.From), context.RequestAborted),
+                IpcJson.Default.SendResult);
         });
 
+        // ?state=parked|all, and ?project=<session directory> to see only the shared inbox and that project (spec §7.6).
         app.MapGet(IpcRoutes.Inbox, IResult (HttpContext context) =>
         {
             var state = context.Request.Query["state"].ToString();
-            return Results.Json(node.ListInbox(state is "" or "parked" ? InboxState.Parked : state == "all" ? null : state), IpcJson.Default.InboxSummaryArray);
+            var project = context.Request.Query["project"].ToString();
+            return Results.Json(
+                node.ListInbox(state is "" or "parked" ? InboxState.Parked : state == "all" ? null : state, project is "" ? null : project, allProjects: project is ""),
+                IpcJson.Default.InboxListing);
+        });
+
+        app.MapPost(IpcRoutes.Projects, async Task<IResult> (HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.ProjectRequest, context.RequestAborted);
+            if (request is null || string.IsNullOrWhiteSpace(request.Directory))
+            {
+                return Results.Json(new IpcError("A JSON body with 'directory' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            var project = node.RegisterProject(request.Directory);
+            return Results.Json(new ProjectView(project.Name, ProjectPaths.Root(request.Directory)), IpcJson.Default.ProjectView);
         });
 
         app.MapPost(IpcRoutes.Inbox + "/{id}/open", IResult (string id) =>

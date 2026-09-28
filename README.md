@@ -128,8 +128,9 @@ Add to `~/.claude/settings.json`:
 { "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }
 ```
 
-You'll see `📨 1 · sasha` when something is waiting, `📤 2` when replies wait in your
-outbox, `💤 away` when you are away, and nothing otherwise. If you already have a status
+You'll see `📨 1 · sasha` when something is waiting, `📨 1 · sasha → payments-api` when it
+waits in another of your projects, `📤 2` when replies wait in your outbox, `💤 away` when
+you are away, and nothing otherwise. If you already have a status
 line script, call `rtfc statusline` from it and append its output; `refreshInterval`
 (seconds) keeps the counter current while you're idle.
 
@@ -153,6 +154,12 @@ have no session open, they're told nobody's home and the token stays valid for l
   and Claude can open one and answer it. *"Reply that we use a dead-letter queue after
   five attempts."*
 - **Who's home:** `/rtfc:contacts`.
+- **To a project:** *"Send this to sasha, in payments-api"* addresses the folder of that name
+  among the projects Sasha has had a session in. It lands in her status line and inbox there,
+  and her other sessions show a pointer: `📨 1 · alex → payments-api`. Her answer lands in the
+  project you asked from, and the thread stays put from then on. If she has no project by
+  that name, it lands in her shared inbox with a note; you get the same result either way.
+  Without a project, nothing changes.
 
 Messages are delivered only while the other person has Claude Code open. If they don't,
 you're told `nobody_home` right away and nothing is queued, unless you say *"leave it for
@@ -296,6 +303,7 @@ they never touch your real one.
 | A message shows an odd `</contact_message​>` inside | Someone tried to close the untrusted wrapper from inside a message. It was defused; treat the message with suspicion. |
 | Auto-answer never answers | `rtfc inbox` shows the note: scope missing, limit reached, or the run failed. `rtfcd.log` has the details. Is `claude` on the daemon's `PATH`? Set `claudePath` in `config.json` otherwise. A message from an automatic reply, or a thread two replies deep, is parked on purpose. |
 | A queued reply never arrives | Both of you need Claude Code open at the same time for a moment: your daemon delivers, theirs receives. `rtfc outbox` shows attempts; after a week it expires with a notice. |
+| A message sent to a project landed in the shared inbox | Its note says why: no project by that name, or several. A project is known once a Claude Code session with the plugin has run in it; the name is its git root's folder name (or the folder's, outside git). `rtfc inbox` shows which project each message went to. |
 
 ### Limitations
 
@@ -309,6 +317,9 @@ they never touch your real one.
   overlays are Phase 3 and need no code beyond hints.
 - On Windows the daemon is started without a proper detach; if it dies with your session,
   `rtfc daemon run --stay` in a separate terminal is the workaround.
+- Projects are addressed by folder name. Two of yours with the same name can't be told
+  apart, so a message for that name lands in the shared inbox with a note. Projects are
+  never forgotten yet; `rtfc project forget` comes with sources (Phase 8).
 - Fingerprints are hex groups, not words.
 
 ### Roadmap

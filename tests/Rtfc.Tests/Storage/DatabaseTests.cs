@@ -57,9 +57,43 @@ public class DatabaseTests
         }
 
         using var migrated = Database.Open(temp.Home.DatabasePath);
-        Assert.Equal(3, migrated.SchemaVersion);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
         Assert.True(migrated.InsertMessage(Message("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", seq: 1) with { Note = "kept" }));
         Assert.Equal("kept", migrated.GetMessage("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!.Note);
+    }
+
+    [Fact]
+    public void A_version_3_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.3.x left it: sent rows without a project.
+            db.Execute("ALTER TABLE sent DROP COLUMN project_id");
+            db.Execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        migrated.InsertSent(new SentRow("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "p_x", null, null, null, "human", "message", "hi", Now, Now, null, null, "delivered", ProjectId: "01J8ZQ4Y7K3M9V2T6H0XWBNC5S"));
+        Assert.Equal("01J8ZQ4Y7K3M9V2T6H0XWBNC5S", migrated.GetSent("01J8ZQ4Y7K3M9V2T6H0XWBNC5R")!.ProjectId);
+    }
+
+    [Fact]
+    public void Projects_are_keyed_by_root_and_found_by_name_regardless_of_case()
+    {
+        using var db = Database.OpenInMemory();
+
+        var first = db.UpsertProject(new ProjectRow("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "/src/payments-api", "payments-api"));
+        var again = db.UpsertProject(new ProjectRow("01J8ZQ4Y7K3M9V2T6H0XWBNC5S", "/src/payments-api", "Payments-API"));
+        db.UpsertProject(new ProjectRow("01J8ZQ4Y7K3M9V2T6H0XWBNC5T", "/work/payments-api", "payments-api"));
+
+        Assert.Equal(first.Id, again.Id);
+        Assert.Equal("Payments-API", db.GetProject(first.Id)!.Name);
+        Assert.Equal(2, db.FindProjectsByName("PAYMENTS-api").Count);
+        Assert.Empty(db.FindProjectsByName("billing"));
+        Assert.Equal(2, db.ListProjects().Count);
     }
 
     [Fact]

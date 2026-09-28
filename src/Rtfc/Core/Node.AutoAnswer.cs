@@ -169,15 +169,14 @@ public sealed partial class Node
             answer = answer[..Math.Min(answer.Length, MessageFrame.MaxBodyBytes / 4)] + "\n[truncated]";
         }
 
-        var replyId = Ulid.NewUlid(_clock.GetUtcNow());
-        var delivery = await DeliverAsync(
-            contact, deviceName: null, replyId, message.Thread ?? message.Id, replyTo: id, message.Hop + 1, answer, MessageOrigin.Auto, cancellationToken)
-            .ConfigureAwait(false);
+        var reply = new Outgoing(
+            Ulid.NewUlid(_clock.GetUtcNow()), message.Thread ?? message.Id, ReplyTo: id, message.Hop + 1, answer, MessageOrigin.Auto, ReplyProject: message.ProjectId);
+        var delivery = await DeliverAsync(contact, deviceName: null, reply, cancellationToken).ConfigureAwait(false);
 
         if (delivery.Status == SendStatus.NobodyHome)
         {
             // They left while the answer was being written: it waits in the outbox like any reply (spec §7.2).
-            delivery = Queue(contact, deviceId: null, replyId, message.Thread ?? message.Id, replyTo: id, message.Hop + 1, answer, MessageOrigin.Auto);
+            delivery = Queue(contact, deviceId: null, reply);
         }
 
         if (delivery.Status is SendStatus.Delivered or SendStatus.Partial or SendStatus.Queued)

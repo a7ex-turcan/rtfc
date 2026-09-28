@@ -65,7 +65,14 @@ public sealed class DaemonClient : IDisposable
         GetAsync($"{IpcRoutes.Contacts}?probe={(probe ? "true" : "false")}", IpcJson.Default.ContactViewArray, cancellationToken);
 
     public Task<SendResult> SendAsync(string to, string text, bool leave, CancellationToken cancellationToken) =>
-        PostAsync(IpcRoutes.Send, new SendRequest(to, text, leave), IpcJson.Default.SendRequest, IpcJson.Default.SendResult, cancellationToken);
+        SendAsync(new SendRequest(to, text, leave), cancellationToken);
+
+    public Task<SendResult> SendAsync(SendRequest request, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.Send, request, IpcJson.Default.SendRequest, IpcJson.Default.SendResult, cancellationToken);
+
+    /// <summary>Tells the daemon which project a session runs in (spec §10.2).</summary>
+    public Task<ProjectView> RegisterProjectAsync(string directory, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.Projects, new ProjectRequest(directory), IpcJson.Default.ProjectRequest, IpcJson.Default.ProjectView, cancellationToken);
 
     /// <summary>False when there is no such message.</summary>
     public async Task<bool> DismissAsync(string id, CancellationToken cancellationToken)
@@ -92,8 +99,13 @@ public sealed class DaemonClient : IDisposable
     public Task<ManagementResult> ReceiptsAsync(string handle, bool on, CancellationToken cancellationToken) =>
         PostAsync(IpcRoutes.ContactReceipts(handle), new ToggleRequest(on), IpcJson.Default.ToggleRequest, IpcJson.Default.ManagementResult, cancellationToken);
 
-    public Task<InboxSummary[]> InboxAsync(string state, CancellationToken cancellationToken) =>
-        GetAsync($"{IpcRoutes.Inbox}?state={Uri.EscapeDataString(state)}", IpcJson.Default.InboxSummaryArray, cancellationToken);
+    public Task<InboxListing> InboxAsync(string state, CancellationToken cancellationToken) => InboxAsync(state, projectDirectory: null, cancellationToken);
+
+    /// <summary>Every project's messages, or with <paramref name="projectDirectory"/>, the shared inbox and that project's, plus counts for the others.</summary>
+    public Task<InboxListing> InboxAsync(string state, string? projectDirectory, CancellationToken cancellationToken) =>
+        GetAsync(
+            $"{IpcRoutes.Inbox}?state={Uri.EscapeDataString(state)}" + (projectDirectory is null ? "" : $"&project={Uri.EscapeDataString(projectDirectory)}"),
+            IpcJson.Default.InboxListing, cancellationToken);
 
     public async Task<InboxOpened?> OpenAsync(string id, CancellationToken cancellationToken)
     {

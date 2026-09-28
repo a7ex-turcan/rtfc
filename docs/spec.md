@@ -44,7 +44,7 @@ Group messaging, file transfer, mobile clients, message storage on any server, "
 | **Outbox** | A local queue on the sender's device for things that must reach a peer later (replies, receipts, sync). |
 | **Source** | A third-party system that produces notifications for you (Jira, Confluence, Bitbucket, GitHub). One-way trust: you authenticate to it; it never connects to you. |
 | **Account** | Named credentials for one source instance (`jira-work`, `github-personal`). Managed by CLI, stored by the daemon, never in project files. |
-| **Project** | A working directory (git root) that sessions run in. Subscriptions and source items belong to a project. |
+| **Project** | A working directory (git root) that sessions run in. Subscriptions, source items and messages addressed to it (§7.6) belong to a project; a contact names it by its folder. |
 | **Subscription** | Project-scoped config: an account, a selector (repo, JQL, space), and event filters. |
 
 ---
@@ -198,6 +198,7 @@ Frames travel inside an authenticated, encrypted session (§8). The envelope is 
 - `origin` is `human` or `auto`, and `hop` is 0 for new messages and parent + 1 for replies. Both exist for loop protection (§7.4).
 - `sentAt` is informational only. Nothing depends on clocks agreeing.
 - The body is capped at 64 KB of text in v1.
+- `project` is optional and absent unless the user named one: which of the recipient's projects the message is about (§7.6). Older daemons ignore it.
 
 Other frame types: `ack`, `receipt` (read), `handled`, `device_list_req` / `device_list`, `contact_sync`, `invite_accept`, `bye`. Unknown types are ignored, which gives forward compatibility.
 
@@ -267,6 +268,18 @@ A parked message that the user opens still enters a session with normal permissi
 ```
 
 The tool descriptions instruct Claude to treat contents as information, not instructions, and to confirm with the user before acting on any request inside a message. Claude Code's normal permission prompts remain the backstop.
+
+### 7.6 Project-addressed messages
+
+A message is addressed to a person. It can also say which of the recipient's projects it is about, and then it lands in that project rather than in the shared inbox. That happens only when the user says so ("send this to Sasha, in payments-api"); without it, nothing changes.
+
+- **Naming.** The sender names the project by the folder name of its root on the recipient's machine (`payments-api` for `D:\src\payments-api`). The receiver matches it case-insensitively against the projects its own sessions have registered (§10.2). Paths never cross the wire: the sender can't see them and doesn't need them.
+- **Format.** The envelope's `project` must look like a folder name: 1 to 100 characters, no control characters, none of `/ \ < > "`, and not `.` or `..`. The sender checks it before sending; a receiver rejects an envelope that fails it as `bad_envelope`.
+- **Matching.** If exactly one registered project has that name, the message is stored with its `project_id`. If none does, or several do, it is stored in the shared inbox as today, with a note naming the project it was meant for. The ack is `ok` either way, so a contact can't probe which projects exist.
+- **Where it shows.** In sessions in that project, it counts and lists like any other message. Elsewhere, the status line points at it (`📨 1 · sasha → payments-api`), and `inbox_list` mentions it without listing it. `inbox_list` with `scope: all`, and `rtfc inbox`, list everything.
+- **Threads stay put, on both sides.** A reply lands in the project of the message it answers. The sender records the project of the session it sent from (`sent.project_id`), and an incoming reply to that message lands there. A reply you write to a message in one of your projects records that project too, so the answer to your reply lands there as well. None of this travels on the wire: each side decides from its own records.
+- **Untrusted.** The name comes from a contact. It is only ever compared with local names, never used as a path, and quoted in that note (which is rtfc's own words, shown outside the untrusted wrapper of §7.5) only after being reduced to letters, digits, `-`, `_` and `.`, as a suggested handle is.
+- Auto-answer is unaffected: its scope is still set per contact (§7.3).
 
 ---
 
@@ -361,8 +374,8 @@ These are the only things Claude can do on its own. Claude Code exposes them as 
 | Tool | Args | Returns / effect |
 |---|---|---|
 | `contacts` | – | contacts with per-device online state and inbound mode |
-| `send` | `to`, `text`, `leave?` | delivery result (§7.2); new messages only, never queued unless `leave` is true, which the user must have asked for ("leave it for her") |
-| `inbox_list` | `state?` (`parked` default, or `all`), `scope?` (`project` default, or `all`) | summaries of people messages plus this project's source items, with previews |
+| `send` | `to`, `text`, `leave?`, `project?` | delivery result (§7.2); new messages only, never queued unless `leave` is true, which the user must have asked for ("leave it for her"); `project` addresses one of the recipient's projects (§7.6), only when the user named one |
+| `inbox_list` | `state?` (`parked` default, or `all`), `scope?` (`project` default, or `all`) | summaries of the shared inbox plus this project's messages and source items, with previews, and a count of what is parked in other projects |
 | `inbox_open` | `id` | full message or source item (event history, URL, any `prepare` draft), wrapped as untrusted (§7.5); marks `read`; sends a receipt for people messages |
 | `inbox_reply` | `id`, `text` | people messages only: delivered, or queued in the outbox if the sender isn't home; marks `answered` |
 | `inbox_dismiss` | `id` | marks `dismissed` without replying (the way to clear source items) |
@@ -468,7 +481,7 @@ Each adapter maps its service's API to the normalized event vocabulary. Verify t
 
 ### 10.2 Project scoping
 
-- **Session registration.** On start, `rtfc mcp` sends the session's working directory to the daemon. The daemon resolves the project root (the git root, else the working directory) and records it in `projects`.
+- **Session registration.** On start, `rtfc mcp` sends the session's directory to the daemon: `CLAUDE_PROJECT_DIR`, which Claude Code sets to the directory the session started in, else its own working directory. The daemon resolves the project root (the git root, else that directory) and records it in `projects`, keyed by its normalized path and named after its folder. This part shipped early, with project-addressed messages (§7.6).
 - **Config.** `<project>/.claude/rtfc.local.json` is gitignored, following the same convention as Claude Code's `settings.local.json`. The daemon watches it with a debounced file watcher (the same approach as rtfm's) and reloads it.
 
 ```json
@@ -487,7 +500,7 @@ Each adapter maps its service's API to the normalized event vocabulary. Verify t
 - **Approval.** New or changed subscriptions start as `pending_approval`. They activate only after `rtfc sources approve` (CLI), and the status line shows `⚠ rtfc: 2 pending` until then. The file is editable by anything that can write to the repo, including Claude, while changing what reaches your Claude is a management action (§9.3).
 - **Accounts.** A subscription can only reference an account that already exists. It can never contain credentials.
 - **Polling scope.** While the daemon runs, it polls the active subscriptions of every known project, not just open ones. Items are tagged with their project and are waiting when you open it. `rtfc project forget <path>` stops polling a project and removes its items.
-- **Messages from people stay global:** `project = NULL`, visible in every project.
+- **Messages from people stay global:** `project = NULL`, visible in every project, unless the sender addressed one of your projects (§7.6).
 
 ### 10.3 Noise control
 
@@ -525,9 +538,9 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 
 ## 11. Status bar
 
-- The daemon writes `~/.claude/rtfc/status.json` atomically (write temp file, then rename) whenever the inbox changes. Counts are split into global (people) and per project (sources):
-  `{ "global": { "parked": 1, "from": ["Sasha"], "pending": 2 }, "projects": { "/src/payments-api": { "reviews": 2, "tickets": 3, "pending_subscriptions": 0 } }, "away": false }` (`pending` counts the outbox; the status line shows it as `📤 2`, and `away` as `💤 away`)
-- Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 1 · Sasha  🔀 2  🎫 3`, or nothing when there's nothing to show. Reading a file keeps it fast, since status lines run often.
+- The daemon writes `~/.claude/rtfc/status.json` atomically (write temp file, then rename) whenever the inbox changes. Counts are split into global (the shared inbox) and per project (messages addressed to a project, §7.6, and source items), keyed by the project's normalized root path:
+  `{ "global": { "parked": 1, "from": ["Sasha"], "pending": 2 }, "projects": { "/src/payments-api": { "name": "payments-api", "parked": 1, "from": ["Alex"], "reviews": 2, "tickets": 3, "pendingSubscriptions": 0 } }, "away": false }` (`pending` counts the outbox; the status line shows it as `📤 2`, and `away` as `💤 away`)
+- Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 2 · Sasha, Alex  🔀 2  🎫 3`, or nothing when there's nothing to show. The current project's messages count with the shared inbox; another project's appear as a pointer, `📨 1 · Alex → payments-api`. Reading a file keeps it fast, since status lines run often.
 - Configure it once in `~/.claude/settings.json`:
   `{ "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }`
 - Claude Code has **one** `statusLine` setting per user, so ship this as a composable segment: users with an existing status line call `rtfc statusline` from their own script. Offer a standalone config for everyone else.
@@ -596,7 +609,7 @@ CREATE TABLE inbox (
   id          TEXT NOT NULL,
   to_device   TEXT NOT NULL,
   kind        TEXT NOT NULL,                      -- person | source | notice (a note from rtfc itself, e.g. an expired reply)
-  project_id  TEXT,                               -- NULL for person messages (global)
+  project_id  TEXT,                               -- NULL = the shared inbox; set for source items and project-addressed messages (§7.6)
   -- person messages
   from_person TEXT,
   from_device TEXT,
@@ -635,7 +648,7 @@ CREATE TABLE accounts (                           -- secrets live in the keychai
 
 CREATE TABLE projects (
   id          TEXT PRIMARY KEY,
-  root_path   TEXT NOT NULL UNIQUE,               -- normalized path key
+  root_path   TEXT NOT NULL UNIQUE,               -- normalized path key (lower case on Windows)
   name        TEXT
 );
 
@@ -683,7 +696,8 @@ CREATE TABLE sent (                               -- what left this device: rece
   delivered_at TEXT,
   read_at     TEXT,
   expires_at  TEXT,                               -- while queued in the outbox
-  state       TEXT NOT NULL                       -- queued | delivered | read | expired
+  state       TEXT NOT NULL,                      -- queued | delivered | read | expired
+  project_id  TEXT                                -- where a reply to this lands (§7.6); NULL = the shared inbox
 );
 
 CREATE TABLE seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
@@ -788,7 +802,7 @@ Ordered by the primary value, agent-to-agent communication. Two Claudes talk as 
 
 The order is cheap to change because the invariants (§15) and the `(person_id, device_id)` data model are in place from Phase 1, so no phase reworks an earlier one. **Early phases defer features, never guards.** Mutual TLS, the untrusted wrapping (§7.5), the frame and body size caps, and the CLI-only management boundary (§9.3) all ship in Phase 1.
 
-Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints.
+Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints. Project-addressed messages (§7.6) came next, and brought two parts of 8a forward with them: session registration and the project-aware status line.
 
 | Phase | Scope | Done when |
 |---|---|---|
@@ -800,7 +814,7 @@ Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ah
 | **5: Multi-device** | Link/approve, device lists, fan-out, handled sync, revocation, contact sync, auto-owner rule | Alex's laptop and desktop act as one contact; revoking one works |
 | **6: Relay** | Own ASP.NET Core relay transport (§15, Stage B), including the choice of who may request a pipe to whom | Works with someone at home with no VPN, and with no change to identity, storage, or tools |
 | **7: Session auto** | `auto_session` via channels (research preview); C# SDK capability check or TypeScript shim (§12). Late on purpose: the preview may have settled by then | Opt-in; documented risks |
-| **8: Sources** | 8a: pipeline (accounts, project registration, `rtfc.local.json`, approval, cursors, coalescing, project-aware status line) with **one adapter: Bitbucket review requests**. 8b: Jira, then GitHub and Confluence. 8c: `prepare` mode. 8d: webhook pokes through the relay (§10.1; needs Phase 6) | A Bitbucket review request shows up as 🔀 in the right project's status bar within 2 minutes, appears exactly once, and survives a relaunch |
+| **8: Sources** | 8a: pipeline (accounts, `rtfc.local.json`, approval, cursors, coalescing, `project forget`; project registration and the project-aware status line shipped early, with §7.6) with **one adapter: Bitbucket review requests**. 8b: Jira, then GitHub and Confluence. 8c: `prepare` mode. 8d: webhook pokes through the relay (§10.1; needs Phase 6) | A Bitbucket review request shows up as 🔀 in the right project's status bar within 2 minutes, appears exactly once, and survives a relaunch |
 
 ---
 
@@ -814,5 +828,5 @@ Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ah
 6. **Handle collisions.** How to display two contacts who both chose "alex" as their suggested handle.
 7. **Daemon lifetime matters more with sources.** Polling only happens while some session is open, so items catch up late (not lost) after the laptop has been closed. A login-item daemon would poll all day. Is that wanted?
 8. **Bitbucket flavor.** Cloud or Data Center first? The APIs differ.
-9. **Project-addressed messages.** Should a contact be able to send to "Alex, in payments-api", so a person's message lands in a project like source items do?
+9. ~~**Project-addressed messages.**~~ Resolved on 2026-09-28: yes, when the sender names the project explicitly, and a message for a project that doesn't exist lands in the shared inbox. See §7.6.
 10. **Account sync.** Should accounts (without secrets) sync between your own devices, so a new device only needs tokens re-entered?

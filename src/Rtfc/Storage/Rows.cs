@@ -138,7 +138,8 @@ public sealed record InboxMessage(
     string? Draft = null,
     string? Note = null,
     int AutoAttempts = 0,
-    string Kind = InboxKind.Person);
+    string Kind = InboxKind.Person,
+    string? ProjectId = null);
 
 /// <summary>Something that must reach a peer later (spec §7.2). The envelope is the frame as it will be sent, minus the sequence number and device, which are filled at delivery.</summary>
 public sealed record OutboxRow(
@@ -152,7 +153,7 @@ public sealed record OutboxRow(
     int Attempts,
     string State);
 
-/// <summary>A message that left this device, so a receipt or an expiry has something to update.</summary>
+/// <summary>A message that left this device, so a receipt or an expiry has something to update, and a reply knows which project it belongs in (spec §7.6).</summary>
 public sealed record SentRow(
     string Id,
     string ToPerson,
@@ -166,4 +167,8 @@ public sealed record SentRow(
     DateTimeOffset? DeliveredAt,
     DateTimeOffset? ReadAt,
     DateTimeOffset? ExpiresAt,
-    string State);
+    string State,
+    string? ProjectId = null);
+
+/// <summary>A project a session has run in (spec §10.2): its root, keyed by the normalized path, and the folder name contacts address it by.</summary>
+public sealed record ProjectRow(string Id, string RootPath, string Name);

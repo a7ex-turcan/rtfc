@@ -73,6 +73,53 @@ public class EntryPointTests
         Assert.Equal("📨 2 · Sasha, alex", ctx.Out.ToString()!.Trim());
     }
 
+    [Fact]
+    public void The_status_line_counts_this_project_with_the_shared_inbox_and_points_at_the_others()
+    {
+        using var temp = new TempHome();
+        var payments = Path.Combine(temp.Home.Root, "payments-api");
+        var billing = Path.Combine(temp.Home.Root, "billing");
+        StatusFile.Write(temp.Home.StatusPath, new StatusSnapshot(
+            new StatusGlobal(1, ["Sasha"], Pending: 2),
+            new Dictionary<string, ProjectStatus>
+            {
+                [ProjectPaths.Key(payments)] = new("payments-api", 1, ["alex"]),
+                [ProjectPaths.Key(billing)] = new("billing", 2, ["Sasha", "dan"]),
+            },
+            Away: false));
+
+        string Line(string json)
+        {
+            var ctx = new Cli.CommandContext(temp.Home, new StringWriter(), new StringWriter(), CancellationToken.None);
+            Assert.Equal(EntryPoint.Ok, Cli.Commands.Statusline(ctx, new StringReader(json), stdinRedirected: true));
+            return ctx.Out.ToString()!.Trim();
+        }
+
+        static string Json(string path) => path.Replace("\\", "\\\\", StringComparison.Ordinal);
+
+        Assert.Equal(
+            "📨 2 · Sasha, alex  📨 2 · Sasha, dan → billing  📤 2",
+            Line($$$"""{"cwd":"{{{Json(Path.Combine(payments, "src"))}}}","workspace":{"project_dir":"{{{Json(payments)}}}"}}"""));
+        Assert.Equal(
+            "📨 2 · Sasha, alex  📨 2 · Sasha, dan → billing  📤 2",
+            Line($$"""{"cwd":"{{Json(Path.Combine(payments, "src", "Client"))}}"}"""));
+        Assert.Equal(
+            "📨 1 · Sasha  📨 2 · Sasha, dan → billing  📨 1 · alex → payments-api  📤 2",
+            Line($$"""{"cwd":"{{Json(Path.Combine(temp.Home.Root, "payments-api-v2"))}}"}"""));
+        Assert.Equal("📨 1 · Sasha  📨 2 · Sasha, dan → billing  📨 1 · alex → payments-api  📤 2", Line("not json"));
+    }
+
+    [Fact]
+    public void The_tool_list_is_unchanged_and_send_can_name_a_project()
+    {
+        var tools = Mcp.Tools.List().Select(t => t!.AsObject()).ToDictionary(t => t["name"]!.GetValue<string>());
+
+        Assert.Equal(["contacts", "send", "inbox_list", "inbox_open", "inbox_reply", "inbox_dismiss"], tools.Keys);
+        Assert.NotNull(tools["send"]["inputSchema"]!["properties"]!["project"]);
+        Assert.DoesNotContain("project", tools["send"]["inputSchema"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
+        Assert.NotNull(tools["inbox_list"]["inputSchema"]!["properties"]!["scope"]);
+    }
+
     private static (int Code, string Stdout, string Stderr) Run(params string[] args) => Run(null, args);
 
     private static (int Code, string Stdout, string Stderr) Run(RtfcHome? home, params string[] args)

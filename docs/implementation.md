@@ -22,6 +22,8 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §7.3 inbound modes | park in `Node.Receive`; `auto_headless` in `Node.AutoAnswer.cs` with `Core/ClaudeRunner.cs`; receipts in `Node.Open`, `QueueReceipt`, `ReceiveReceipt` |
 | §7.4 loop and abuse protection | `Node.AutoAnswer.SkipReason`; the inbound rate limit and size checks in `Node.Receive` |
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
+| §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
+| §10.2 session registration | `McpServer` (`CLAUDE_PROJECT_DIR`, registered once it holds a lease) → `POST /v1/projects` → `Node.RegisterProject` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs`, `PeerSession.cs`, `EndpointHint.cs` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
@@ -95,6 +97,18 @@ SessionStart hook's pipe for the daemon's lifetime, and the session hung. Since 
 `Spawn` clears the inherit flag on its own three stdio handles before starting the child
 (`SetHandleInformation`), and `DaemonTests` runs the real `rtfc daemon ensure` with piped
 output and requires the pipes to close when it exits.
+
+**Project-addressed messages route on the receiver, and threads route locally (§7.6).**
+Only the folder name crosses the wire, and the receiver's ack is the same whether it
+matched or not, so nothing about a machine's projects leaks to a contact. The reply side
+needs no wire field at all: `sent.project_id` records where an answer should land, set from
+the sending session's project for a message with a project, and from the answered
+message's project for a reply. A name that matches nothing is quoted in the note only in
+handle form (`ProjectName.ForDisplay`), because notes are rtfc's words and sit outside the
+untrusted wrapper; otherwise a contact could put a sentence in front of Claude there.
+Registration happens in `rtfc mcp` rather than the SessionStart hook, because the hook
+leaves the process as soon as the daemon is up, and the MCP server is the one that also
+needs the directory for `send` and `inbox_list`.
 
 **Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
 status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the
@@ -183,6 +197,7 @@ they were checked; versions are what they were checked against.
 | `rtfc` is free on nuget.org | `dotnet package search` | 2026-09-27 |
 | On Windows a process started with redirected stdio still inherits its parent's inheritable handles, so a daemon spawned from a hook held the hook's stdout open and Claude Code 2.1.283 stayed busy on it | two Windows 11 machines, a session stuck on start; reproduced with a piped `daemon ensure` whose stdout closed only when the daemon stopped | 2026-09-28 |
 | A console process started with no window gets a fresh console in the system's OEM code page, and .NET uses that code page for redirected stdio too, so Claude Code saw `?? 1 � alex` | the status line on a Windows 11 VM; `PipeEncodingTests` with and without the fix | 2026-09-28 |
+| Claude Code starts a plugin's MCP server in the directory the session started in (not the git root) and sets `CLAUDE_PROJECT_DIR` to the same path | a probe plugin whose server wrote down its directory, run with `claude -p` from a subdirectory of a git repository, Claude Code 2.1.283 | 2026-09-28 |
 
 ## Schema history
 
@@ -194,6 +209,7 @@ block per version.
 | 1 | 0.1.0 | The spec's §13 schema verbatim, plus a `meta` table |
 | 2 | 0.2.0 | `inbox.auto_note`, `inbox.auto_attempts` for auto-answer |
 | 3 | 0.3.0 | `auto_note` renamed to `note` (it serves every kind of message); the `sent` table; the `notice` inbox kind |
+| 4 | 0.4.0 | `sent.project_id`: where an answer to something sent lands (project-addressed messages, spec §7.6); `projects` and `inbox.project_id`, in the schema since v1, come into use |
 
 ## Known gaps
 
@@ -201,6 +217,11 @@ block per version.
   open. The login-item daemon of spec §18.1 would change that.
 - **Windows detach.** `daemon run` does not leave its parent's process group on Windows;
   whether Claude Code takes it down with the MCP server is unknown.
+- **Projects are never forgotten.** A registered project stays in `projects` and stays
+  addressable; `rtfc project forget` arrives with Phase 8. Two projects with the same folder
+  name are ambiguous, and messages for that name land in the shared inbox.
+- **The e2e story does not cover project-addressed messages**; `ProjectMessageTests` do,
+  between two nodes over real TLS.
 - **The e2e story does not run on Windows** (bash, Unix socket paths); the Windows binary
   is covered by the unit tests.
 - **`Grep` in auto-answer** can search files `Read` is denied.

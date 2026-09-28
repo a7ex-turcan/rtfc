@@ -28,8 +28,18 @@ public class DaemonTests
         // Every read endpoint answers with a body, not an empty 200.
         Assert.Empty(await client.ContactsAsync(probe: true, Ct));
         Assert.Empty(await client.ContactsAsync(probe: false, Ct));
-        Assert.Empty(await client.InboxAsync("parked", Ct));
-        Assert.Empty(await client.InboxAsync("all", Ct));
+        Assert.Empty((await client.InboxAsync("parked", Ct)).Messages);
+        Assert.Empty((await client.InboxAsync("all", Ct)).Messages);
+
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(temp.Home.Root, "payments-api", "src")).FullName;
+        Directory.CreateDirectory(Path.Combine(temp.Home.Root, "payments-api", ".git"));
+        var project = await client.RegisterProjectAsync(projectDirectory, Ct);
+        Assert.Equal("payments-api", project.Name);
+        Assert.Equal(Path.Combine(temp.Home.Root, "payments-api"), project.Root);
+        var scoped = await client.InboxAsync("parked", projectDirectory, Ct);
+        Assert.Empty(scoped.Messages);
+        Assert.Empty(scoped.Elsewhere);
+        Assert.Equal(SendStatus.Rejected, (await client.SendAsync(new SendRequest("nobody", "hi", Project: "../etc", From: projectDirectory), Ct)).Status);
         Assert.Null(await client.OpenAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", Ct));
 
         var invite = await client.InviteAsync(Ct);

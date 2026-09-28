@@ -52,10 +52,53 @@ public sealed record MessageFrame(
     string Origin,
     int Hop,
     string SentAt,
-    MessageBody Body) : Frame(FrameType.Message)
+    MessageBody Body,
+    string? Project = null) : Frame(FrameType.Message)
 {
     /// <summary>The body cap of spec §7.1, in UTF-8 bytes.</summary>
     public const int MaxBodyBytes = 64 * 1024;
+}
+
+/// <summary>
+/// What an envelope's <c>project</c> may look like (spec §7.6): a folder name, nothing that
+/// could be a path or close a tag. It comes from a contact, so the receiver checks it too.
+/// </summary>
+public static class ProjectName
+{
+    public const int MaxLength = 100;
+
+    public static bool IsValid(string? name) =>
+        name is { Length: > 0 and <= MaxLength }
+        && name is not ("." or "..")
+        && name.Trim().Length == name.Length
+        && !name.Any(c => char.IsControl(c) || c is '/' or '\\' or '<' or '>' or '"');
+
+    /// <summary>
+    /// A contact's project name as rtfc may quote it in its own words, outside the untrusted wrapper: letters, digits,
+    /// <c>-</c>, <c>_</c> and <c>.</c>, whitespace as <c>-</c>, at most 64 characters. The same bar as a suggested handle.
+    /// </summary>
+    public static string ForDisplay(string name)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var c in name.Trim())
+        {
+            if (char.IsLetterOrDigit(c) || c is '-' or '_' or '.')
+            {
+                builder.Append(c);
+            }
+            else if (char.IsWhiteSpace(c) && builder.Length > 0 && builder[^1] != '-')
+            {
+                builder.Append('-');
+            }
+
+            if (builder.Length == 64)
+            {
+                break;
+            }
+        }
+
+        return builder.ToString().TrimEnd('-');
+    }
 }
 
 public static class AckStatus

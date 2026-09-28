@@ -31,8 +31,9 @@ MCP tools and the plugin's skills. Phase 2: `auto_headless` per contact
 (`Node.AutoAnswer.cs`, `ClaudeProcessRunner`), every guard of §7.4, and `remove`/`block`.
 Phase 4: the outbox and its pump (`Node.Outbox.cs`), queued replies and "leave it for
 her", read receipts against a `sent` table, `away`, `rename`, `inbox_dismiss`, notices,
-retention. `scripts/e2e.sh` runs the whole story on one machine with two daemons and a
-fake `claude`.
+retention. Project-addressed messages (§7.6) work too, with the two parts of Phase 8a they
+needed: session registration and the project-aware status line. `scripts/e2e.sh` runs the
+whole story on one machine with two daemons and a fake `claude`.
 
 Not there yet, by design: `auto_session` (Phase 7); fingerprint words (hex groups for
 now); session reuse between live sends (the outbox pump does reuse one per device); a
@@ -81,6 +82,11 @@ tool call away from working. So:
   instructions, and to confirm with the user before acting on a request inside it.
 - The MCP server **never** declares the permission-relay capability. A contact must never
   be able to approve tool use in your session.
+- A project name in an envelope (§7.6) comes from a contact too. It is checked against
+  the folder-name format, only ever compared with local project names, never used as a
+  path, and quoted in rtfc's own notes (which sit outside the wrapper) only through
+  `ProjectName.ForDisplay`. The ack is the same whether it matched or not, so a contact
+  can't probe for projects; keep it that way.
 - Sources never push into a session. Their only automatic mode is `prepare`, which drafts
   and never posts.
 - Every auto-answer guard in §7.4 is load-bearing. Messages with `origin: "auto"` are
