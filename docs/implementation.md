@@ -197,6 +197,7 @@ they were checked; versions are what they were checked against.
 | `rtfc` is free on nuget.org | `dotnet package search` | 2026-09-27 |
 | On Windows a process started with redirected stdio still inherits its parent's inheritable handles, so a daemon spawned from a hook held the hook's stdout open and Claude Code 2.1.283 stayed busy on it | two Windows 11 machines, a session stuck on start; reproduced with a piped `daemon ensure` whose stdout closed only when the daemon stopped | 2026-09-28 |
 | A console process started with no window gets a fresh console in the system's OEM code page, and .NET uses that code page for redirected stdio too, so Claude Code saw `?? 1 � alex` | the status line on a Windows 11 VM; `PipeEncodingTests` with and without the fix | 2026-09-28 |
+| On Windows, the daemon a session's SessionStart hook started keeps running after that session ends, and the next session takes a lease on it | two Windows 11 machines, Claude Code 2.1.283: daemons started at 11:26 and 11:29 still served sessions started at 11:44 | 2026-09-28 |
 | Claude Code starts a plugin's MCP server in the directory the session started in (not the git root) and sets `CLAUDE_PROJECT_DIR` to the same path | a probe plugin whose server wrote down its directory, run with `claude -p` from a subdirectory of a git repository, Claude Code 2.1.283 | 2026-09-28 |
 
 ## Schema history
@@ -215,8 +216,9 @@ block per version.
 
 - **The outbox is delivered only while the daemon runs**, that is, while a session is
   open. The login-item daemon of spec §18.1 would change that.
-- **Windows detach.** `daemon run` does not leave its parent's process group on Windows;
-  whether Claude Code takes it down with the MCP server is unknown.
+- **Windows detach.** `daemon run` does not leave its parent's process group on Windows.
+  Claude Code 2.1.283 leaves it running when the session that started it ends (see the
+  verified table), so nothing depends on this yet, but a proper detach would not rely on it.
 - **Projects are never forgotten.** A registered project stays in `projects` and stays
   addressable; `rtfc project forget` arrives with Phase 8. Two projects with the same folder
   name are ambiguous, and messages for that name land in the shared inbox.

@@ -267,8 +267,6 @@ thing" table in `docs/implementation.md`. Read it before re-verifying anything.
 Still open:
 
 - Source adapter endpoints (§10.1), and Bitbucket Cloud vs Data Center (§18.8).
-- Whether Claude Code on Windows kills the detached daemon with the MCP server. Unix
-  sockets on Windows are covered by `DaemonTests` in CI.
 
 ## Open decisions
 

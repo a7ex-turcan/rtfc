@@ -315,8 +315,9 @@ they never touch your real one.
   Keep secrets out of scopes.
 - LAN only, or any network where the hosts in your hints are reachable. Tailscale-style
   overlays are Phase 3 and need no code beyond hints.
-- On Windows the daemon is started without a proper detach; if it dies with your session,
-  `rtfc daemon run --stay` in a separate terminal is the workaround.
+- On Windows the daemon is started without a proper detach. Claude Code 2.1.283 leaves it
+  running when the session that started it ends; if yours doesn't, `rtfc daemon run --stay`
+  in a separate terminal is the workaround.
 - Projects are addressed by folder name. Two of yours with the same name can't be told
   apart, so a message for that name lands in the shared inbox with a note. Projects are
   never forgotten yet; `rtfc project forget` comes with sources (Phase 8).
