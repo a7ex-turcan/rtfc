@@ -20,6 +20,11 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
+one person on several devices.
+
+## [0.3.3] - 2026-09-28
+
 ### Fixed
 
 - **On Windows, the status line shows 📨 again, and what you send keeps its accents.** rtfc
@@ -205,7 +210,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.2.0...v0.3.0
