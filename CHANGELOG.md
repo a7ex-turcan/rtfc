@@ -20,6 +20,11 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
+one person on several devices.
+
+## [0.5.1] - 2026-09-28
+
 ### Fixed
 
 - **An open session keeps the daemon alive across a restart.** If the daemon was restarted
@@ -259,7 +264,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/a7ex-turcan/rtfc/compare/v0.3.2...v0.3.3
