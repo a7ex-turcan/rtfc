@@ -20,7 +20,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Phase 7, experimental: answers from inside your own session.
+Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
+one person on several devices.
+
+## [0.6.0] - 2026-09-29
+
+Phase 7, experimental: a contact's message comes into your own session, you accept or
+decline, and Claude acts.
 
 ### Added
 
@@ -304,7 +310,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.4.0...v0.5.0
