@@ -93,6 +93,10 @@ public sealed class TestNode : IAsyncDisposable
     public FakeSessionChannel Sessions { get; }
     public RtfcHome Home => _temp.Home;
 
+    /// <summary>An accept that did not go through says why: a slow CI runner once failed handshakes and left only "failed" behind.</summary>
+    public static void AssertAccepted(AcceptResult result) =>
+        Assert.True(result.Status == AcceptStatus.Accepted, $"Accept: {result.Status}{(result.Reason is null ? "" : ": " + result.Reason)}");
+
     /// <summary>Tests want the pump to run often and entries to live long unless a test says otherwise.</summary>
     public static readonly OutboxSettings DefaultOutbox = new(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(500), TimeSpan.FromDays(30));
 

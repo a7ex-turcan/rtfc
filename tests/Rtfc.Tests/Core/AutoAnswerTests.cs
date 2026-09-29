@@ -31,7 +31,7 @@ public class AutoAnswerTests : IAsyncLifetime
     private async Task BecomeContactsAsync()
     {
         var accepted = await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct);
-        Assert.Equal(AcceptStatus.Accepted, accepted.Status);
+        TestNode.AssertAccepted(accepted);
     }
 
     private ManagementResult AlexAnswersSashaAutomatically(string? scope = null) =>

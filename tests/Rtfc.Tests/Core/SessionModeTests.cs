@@ -17,7 +17,7 @@ public class SessionModeTests : IAsyncLifetime
     {
         _alex = await TestNode.StartAsync("alex", "desktop", new AutoAnswerConfig(PerContactPerHour: 2));
         _sasha = await TestNode.StartAsync("sasha", "laptop");
-        Assert.Equal(AcceptStatus.Accepted, (await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct)).Status);
+        TestNode.AssertAccepted(await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct));
         Assert.Equal(ManagementStatus.Ok, _alex.Node.SetAutoMode("sasha", "session", null, Session).Status);
         _alex.Sessions.Open.Add(Session);
     }

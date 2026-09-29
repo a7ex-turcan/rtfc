@@ -17,7 +17,7 @@ public class ProjectMessageTests : IAsyncLifetime
         _alex = await TestNode.StartAsync("alex", "desktop");
         _sasha = await TestNode.StartAsync("sasha", "laptop");
         var invite = _alex.Node.CreateInvite();
-        Assert.Equal(AcceptStatus.Accepted, (await _sasha.Node.AcceptAsync(invite.Token, Ct)).Status);
+        TestNode.AssertAccepted(await _sasha.Node.AcceptAsync(invite.Token, Ct));
     }
 
     public async ValueTask DisposeAsync()

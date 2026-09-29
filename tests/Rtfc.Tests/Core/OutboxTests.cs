@@ -16,7 +16,7 @@ public class OutboxTests : IAsyncLifetime
     {
         _alex = await TestNode.StartAsync("alex", "desktop");
         _sasha = await TestNode.StartAsync("sasha", "laptop");
-        Assert.Equal(AcceptStatus.Accepted, (await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct)).Status);
+        TestNode.AssertAccepted(await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct));
     }
 
     public async ValueTask DisposeAsync()
@@ -64,15 +64,17 @@ public class OutboxTests : IAsyncLifetime
         _alex.Node.KickOutbox();
         await UntilAsync(() => _sasha.Node.ListInbox(InboxState.Parked).Length == 1, "the reply to arrive");
 
+        // The delivery note is checked before sasha opens the reply: her read receipt replaces it with "read".
+        await UntilAsync(() => _alex.Node.Open(question.MessageId!)!.Note?.Contains("delivered to sasha/laptop", StringComparison.Ordinal) == true, "the delivery note");
+        Assert.Equal(0, _alex.Node.Status().Global.Pending);
+        var delivered = Assert.Single(_alex.Node.Open(question.MessageId!)!.YourReplies!);
+        Assert.Equal(SentState.Delivered, delivered.State);
+        Assert.NotNull(delivered.DeliveredAt);
+
         var arrived = _sasha.Node.Open(Assert.Single(_sasha.Node.ListInbox(InboxState.Parked)).Id)!;
         Assert.Equal("Dead-letter queue after 5 attempts.", arrived.Body);
         Assert.Equal(question.MessageId, arrived.ReplyTo);
         Assert.Equal(1, arrived.Hop);
-        await UntilAsync(() => _alex.Node.Status().Global.Pending == 0, "the outbox to empty");
-        var delivered = Assert.Single(_alex.Node.Open(question.MessageId!)!.YourReplies!);
-        Assert.Contains(delivered.State, new[] { SentState.Delivered, SentState.Read });
-        Assert.NotNull(delivered.DeliveredAt);
-        Assert.Contains("delivered to sasha/laptop", _alex.Node.Open(question.MessageId!)!.Note!);
     }
 
     [Fact]
@@ -83,7 +85,7 @@ public class OutboxTests : IAsyncLifetime
         await _sasha.DisposeAsync();
         _alex = await TestNode.StartAsync("alex", "desktop", outbox: new OutboxSettings(TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(300), TimeSpan.FromDays(30)));
         _sasha = await TestNode.StartAsync("sasha", "laptop");
-        Assert.Equal(AcceptStatus.Accepted, (await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct)).Status);
+        TestNode.AssertAccepted(await _sasha.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct));
         var question = await _sasha.Node.SendAsync("alex", "Ping?", Ct);
         await _sasha.Node.SetAwayAsync(true, Ct);
 
@@ -199,7 +201,7 @@ public class OutboxTests : IAsyncLifetime
     public async Task Rename_changes_the_local_petname_only()
     {
         await using var third = await TestNode.StartAsync("mallory", "phone");
-        Assert.Equal(AcceptStatus.Accepted, (await third.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct)).Status);
+        TestNode.AssertAccepted(await third.Node.AcceptAsync(_alex.Node.CreateInvite().Token, Ct));
 
         Assert.Equal(ManagementStatus.Ok, _alex.Node.Rename("sasha", "Sasha K").Status);
         Assert.Contains((await _alex.Node.ContactsAsync(false, Ct)), c => c.Handle == "Sasha-K");

@@ -142,7 +142,7 @@ public class DaemonTests
         using var client = new DaemonClient(temp.Home);
         await WaitForStatusAsync(client, daemon);
         await using var sasha = await TestNode.StartAsync("sasha", "laptop");
-        Assert.Equal(AcceptStatus.Accepted, (await sasha.Node.AcceptAsync((await client.InviteAsync(Ct)).Token, Ct)).Status);
+        TestNode.AssertAccepted(await sasha.Node.AcceptAsync((await client.InviteAsync(Ct)).Token, Ct));
 
         // The session's own rtfc mcp, holding a lease that names it, as Claude Code starts it.
         const string session = "1e93547f-1aaf-4ed0-b5b7-7ed9cfdab94c";

@@ -26,7 +26,7 @@ public class NodeTests : IAsyncLifetime
     {
         var invite = _alex.Node.CreateInvite();
         var accepted = await _sasha.Node.AcceptAsync(invite.Token, Ct);
-        Assert.Equal(AcceptStatus.Accepted, accepted.Status);
+        TestNode.AssertAccepted(accepted);
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public class NodeTests : IAsyncLifetime
 
         var accepted = await _sasha.Node.AcceptAsync(invite.Token, Ct);
 
-        Assert.Equal(AcceptStatus.Accepted, accepted.Status);
+        TestNode.AssertAccepted(accepted);
         Assert.Equal("alex", accepted.Handle);
         Assert.Equal(_alex.Node.Self.PersonId, accepted.PersonId);
 
@@ -59,7 +59,7 @@ public class NodeTests : IAsyncLifetime
     public async Task A_token_works_once()
     {
         var invite = _alex.Node.CreateInvite();
-        Assert.Equal(AcceptStatus.Accepted, (await _sasha.Node.AcceptAsync(invite.Token, Ct)).Status);
+        TestNode.AssertAccepted(await _sasha.Node.AcceptAsync(invite.Token, Ct));
 
         await using var third = await TestNode.StartAsync("mallory", "phone");
         var second = await third.Node.AcceptAsync(invite.Token, Ct);
