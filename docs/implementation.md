@@ -263,6 +263,7 @@ they were checked; versions are what they were checked against.
 | `CLAUDE_CODE_SESSION_ID` is the same in a plugin's MCP server, its hooks' input (`session_id`) and a skill's `!` command; `CLAUDE_PROJECT_DIR` is set for the MCP server but not for the `!` command, whose working directory is the session's | the probe plugin's server log, hook log and `/probe:where` | 2026-09-29 |
 | Claude Code starts a plugin's MCP server in the directory the session started in (not the git root) and sets `CLAUDE_PROJECT_DIR` to the same path | a probe plugin whose server wrote down its directory, run with `claude -p` from a subdirectory of a git repository, Claude Code 2.1.283 | 2026-09-28 |
 | `SslStream.ReadAsync` fills one read from every TLS record it has already buffered, so a reader that must stop exactly at the end of one frame cannot: the old hello-only reader ate the first bytes of a frame that arrived right behind the hello, and the session died with a bogus frame length (`closed_before_ack` for the sender). Seen on a busy macOS CI runner; `PeerSessionTests.Frames_sent_right_behind_the_hello_reach_a_peer_whose_reads_lag` recreates it on every OS | the release and CI runs of v0.7.0, then the test against the code before the fix | 2026-09-29 |
+| On Windows, a daemon started by `rtfc daemon ensure` from a Win32-OpenSSH command session dies when that session ends (the session's job is killed; the launcher does not break away), so a host probing it a few seconds later sees `away` and pktmon on the receiver reports "transport endpoint was not found" for the SYNs. With the session kept open the same probe and a message both succeed | the rebuilt test VM, an ssh session running `daemon ensure` then sleeping, `rtfc contacts` and a send from the host meanwhile | 2026-09-29 |
 
 ## Schema history
 
@@ -281,9 +282,11 @@ block per version.
 
 - **The outbox is delivered only while the daemon runs**, that is, while a session is
   open. The login-item daemon of spec §18.1 would change that.
-- **Windows detach.** `daemon run` does not leave its parent's process group on Windows.
-  Claude Code 2.1.283 leaves it running when the session that started it ends (see the
-  verified table), so nothing depends on this yet, but a proper detach would not rely on it.
+- **Windows detach.** `daemon run` does not leave its parent's process group or job on
+  Windows. Claude Code 2.1.283 leaves it running when the session that started it ends, but
+  a Win32-OpenSSH command session kills it the moment the session closes (both in the
+  verified table). Nothing in normal use depends on this yet; a proper detach would break
+  away from the job.
 - **Projects are never forgotten.** A registered project stays in `projects` and stays
   addressable; `rtfc project forget` arrives with Phase 8. Two projects with the same folder
   name are ambiguous, and messages for that name land in the shared inbox.
