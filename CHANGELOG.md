@@ -20,8 +20,30 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+Phase 3, beyond the office: contacts on a VPN or Tailscale.
+
+### Added
+
+- **`rtfc hints`** (and `/rtfc:hints`) shows the addresses your invites tell people to
+  connect to, and `add`, `remove` and `auto` change them: add a VPN address or a Tailscale
+  name, drop one nobody can reach, or go back to auto-detection. Changes apply to the running
+  daemon at once and go into new invites.
+- **Contacts refresh each other's addresses whenever they talk.** Every session's `hello` now
+  carries the sender's hints, so a contact who moves to a VPN is reachable the next time
+  either side sends, with no new invite.
+- `rtfc contacts` shows each device's hints.
+
+### Changed
+
+- **All of a device's addresses are tried at once**, a quarter second apart, and the first to
+  answer wins. They used to be tried one after another with a three-second timeout each, so a
+  contact's office address timed out before their VPN address was tried, and the "who's home"
+  check called them away.
+- **Auto-detected hints no longer include link-local addresses** (`169.254.x.x`, one per idle
+  adapter on Windows) or loopback, each of which cost contacts a connection attempt.
+
+A 0.6.x daemon ignores the hints in a hello and keeps working; the wire protocol stays at
+version 1.
 
 ## [0.6.0] - 2026-09-29
 

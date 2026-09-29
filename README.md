@@ -101,8 +101,8 @@ new person and every contact has to re-invite you.
   can change; it is never your identity.
 - `--device` names this machine (`laptop`, `desktop`). Defaults to the hostname.
 - `--hint-host` sets the hostnames or IPs your invites tell people to connect to. By
-  default it is your hostname plus every non-loopback IPv4 address. If the other person
-  can't reach any of those, set the right one here or in `config.json` (see below).
+  default it is your hostname plus every IPv4 address that isn't loopback or link-local.
+  `rtfc hints` shows and changes them later (see *Beyond the office* under step 5).
 
 ### 3. Install the plugin in Claude Code
 
@@ -133,7 +133,7 @@ The plugin adds:
   you accept it (step 7). For anything else it does nothing.
 - Slash commands: `/rtfc:init`, `/rtfc:invite`, `/rtfc:accept <token>`, `/rtfc:contacts`,
   `/rtfc:inbox`, `/rtfc:auto`, `/rtfc:remove`, `/rtfc:block`, `/rtfc:away`, `/rtfc:rename`,
-  `/rtfc:receipts`.
+  `/rtfc:receipts`, `/rtfc:hints`.
 
 ### 4. Show parked messages in the status line
 
@@ -158,6 +158,25 @@ line script, call `rtfc statusline` from it and append its output; `refreshInter
 
 Tokens are single-use and expire after 24 hours. If the other person accepts while you
 have no session open, they're told nobody's home and the token stays valid for later.
+
+#### Beyond the office: VPN and Tailscale
+
+Your invites carry the addresses your machine detects, and a contact tries all of them at
+once, so a colleague on the office LAN and one on the company VPN can both reach you. An
+overlay network like Tailscale gives you an address that is detected too; add its stable
+name instead, or a VPN address the detection can't see:
+
+```bash
+rtfc hints                              # what you advertise now
+rtfc hints add alex.tailnet.ts.net      # or a VPN address; also /rtfc:hints add ...
+rtfc hints remove 192.168.121.1         # something contacts can never reach
+rtfc hints auto                         # back to auto-detection
+```
+
+Changes apply to the running daemon at once, go into new invites, and reach existing
+contacts the next time you talk to them: both sides tell each other their addresses
+whenever they connect. The other side needs the same: their hints must include an address
+you can reach. `rtfc contacts` shows the hints you have for each of their devices.
 
 ### 6. Talk
 
@@ -308,7 +327,8 @@ her, from either side. Neither needs her cooperation.
   open and the other side is home at the same time.
 - **Identity is keys, not addresses.** Contacts are pinned by their person CA. Hostnames
   and IPs are only hints for where to try; the TLS handshake is the only proof of who
-  answered.
+  answered. All of a device's hints are tried at once, and contacts refresh each other's
+  hints whenever they talk.
 - **Every connection is mutual TLS**, including on the LAN. The OS trust store is never
   consulted. Someone on your network who reaches the port gets a session that can do
   exactly one thing: present an invite token you issued.
@@ -350,11 +370,12 @@ nobody can reach you.
 }
 ```
 
-Only `port` is required. `hintHosts` is what your future invites and accepts advertise.
-Changes take effect when the daemon restarts: `rtfc daemon stop`, then `rtfc daemon ensure`
-(or any command that talks to the daemon, such as `rtfc contacts`) starts it with the new
-settings, and open sessions take a lease on it. Contacts you already have keep the hints they learned; a new invite,
-accepted by them, refreshes them.
+Only `port` is required. `hintHosts` is what your invites, accepts and every session
+advertise; `rtfc hints` edits it and applies it to the running daemon, and contacts learn
+your current hints whenever you talk to them. Other changes take effect when the daemon
+restarts: `rtfc daemon stop`, then `rtfc daemon ensure` (or any command that talks to the
+daemon, such as `rtfc contacts`) starts it with the new settings, and open sessions take a
+lease on it.
 
 `RTFC_HOME` moves the whole directory somewhere else. Tests and the e2e script use it so
 they never touch your real one.
@@ -363,7 +384,7 @@ they never touch your real one.
 
 | Symptom | Look at |
 | --- | --- |
-| `nobody_home` but they say they're online | Do they have a Claude Code session open *with the plugin loaded*? `rtfc daemon status` on their side. Can you reach their port: `nc -vz their-host 47821`? Firewall prompt dismissed? |
+| `nobody_home` but they say they're online | Do they have a Claude Code session open *with the plugin loaded*? `rtfc daemon status` on their side. `rtfc contacts` shows the hints you have for them; can you reach one of them: `nc -vz their-host 47821`? If not, they should `rtfc hints add` an address you can reach and send you a message, or a new invite. Firewall prompt dismissed? |
 | `/rtfc:accept` says nobody's home | The inviter needs a session open. Check the hints in their token reach you: the invite output lists them. If hostnames don't resolve on your LAN, they should `rtfc init --hint-host <ip>` (or edit `config.json`) and invite again. |
 | `rtfc: no identity yet` | `rtfc init` on this machine. |
 | The plugin's tools say the daemon could not be started | `~/.claude/rtfc/rtfcd.log`. Common cause: `rtfc` isn't on the `PATH` Claude Code sees. |
@@ -384,8 +405,8 @@ they never touch your real one.
   §18).
 - Auto-answer's `Grep` can search any file in the scope, including ones `Read` is denied.
   Keep secrets out of scopes.
-- LAN only, or any network where the hosts in your hints are reachable. Tailscale-style
-  overlays are Phase 3 and need no code beyond hints.
+- Reaching someone needs a network path to one of their hints: the office LAN, a VPN, or an
+  overlay such as Tailscale. A relay for people with no shared network is Phase 6.
 - On Windows the daemon is started without a proper detach. Claude Code 2.1.283 leaves it
   running when the session that started it ends; if yours doesn't, `rtfc daemon run --stay`
   in a separate terminal is the workaround.
@@ -402,7 +423,7 @@ they never touch your real one.
 | --- | --- |
 | 1 ✅ | Two people exchange messages |
 | 2 ✅ | Auto-answer: a scoped, read-only, headless Claude answers a contact for you. `remove`, `block`. |
-| 3 | Beyond the office: VPN and Tailscale addresses as hints |
+| 3 ✅ | Beyond the office: VPN and Tailscale addresses as hints, tried together and refreshed whenever contacts talk |
 | 4 ✅ | Async: the reply outbox, read receipts, `away`, `rename`, dismiss, retention |
 | 5 | Multi-device: one person, several machines |
 | 6 | A self-hosted relay, for people with no shared network |

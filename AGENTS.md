@@ -35,13 +35,14 @@ retention. Project-addressed messages (§7.6) work too, with the two parts of Ph
 needed: session registration and the project-aware status line. Phase 7's `auto_session`
 works as well, experimentally: a contact's messages pushed into a designated interactive
 session as Claude Code channel events (§7.3), behind an accept gate: the plugin's hooks deny
-every tool until the user accepts the message. `scripts/e2e.sh` runs the whole story on one machine
-with two daemons and a fake `claude`.
+every tool until the user accepts the message. Phase 3 too: a device's hints tried together,
+`rtfc hints`, and hints in every hello (§8.3, §8.4). `scripts/e2e.sh` runs the whole story on
+one machine with two daemons and a fake `claude`.
 
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows
-(`daemon run` calls `setsid` on Unix only). Next is **Phase 3**, VPN hints, then
-**Phase 5**, multi-device. Third-party sources come last (Phase 8).
+(`daemon run` calls `setsid` on Unix only). Next is **Phase 5**, multi-device. Third-party
+sources come last (Phase 8).
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
 and the CLI-only management boundary all shipped in Phase 1. Update this section when a

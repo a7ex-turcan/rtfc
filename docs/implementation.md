@@ -24,7 +24,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
 | §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
 | §10.2 session registration | `McpServer` (`CLAUDE_PROJECT_DIR`, registered once it holds a lease) → `POST /v1/projects` → `Node.RegisterProject` |
-| §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs`, `PeerSession.cs`, `EndpointHint.cs` |
+| §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
 | §11 status bar | `Core/StatusFile.cs`, `Node.Status`, `Commands.Statusline` |
@@ -150,6 +150,23 @@ undeliverable channel events silently: the note says where it went, never that i
 The channel tag's attributes come from rtfc's event, not from the contact, which is why the
 hook may trust `rtfc_id` there, and why the body defuses `</channel` as well as
 `</contact_message`.
+
+**Beyond the office is three small things, not a transport (§8.3, §8.4, Phase 3).** The
+spec promised "almost no code", and the code bears it out. Hints were already lists carried
+in tokens; what broke away from the LAN was trying them one after another: the "who's home"
+probe allows two seconds and a connect three, so a contact whose office address came first
+was called away before their VPN address was ever tried. `TcpTransport.ConnectAsync` now
+races every hint, started 250 ms apart in the listed order, so a reachable first hint still
+wins alone and a dead one costs only the stagger. Contacts learn new hints from the `hello`
+of every session rather than from a sync frame, because both sides already exchange one on
+every connection and the claim is only about the sender's own device; Phase 5's contact and
+device sync will carry the rest. `rtfc hints` writes `config.json` and asks the daemon to
+re-read it, which keeps the file the one source of truth and the CLI the only writer of it,
+as `rtfc init` already was. Auto-detection drops link-local addresses because this machine
+advertised five of them. There is no Tailscale CLI probe: the tailnet's IPv4 address sits on
+an ordinary adapter and is detected anyway, and the MagicDNS name is one `rtfc hints add`
+away. IPv6 is left to `rtfc hints add` too, since most IPv6 addresses a machine has are
+temporary.
 
 **Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
 status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the

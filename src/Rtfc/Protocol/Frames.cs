@@ -18,8 +18,11 @@ public static class FrameType
 
 public abstract record Frame(string Type);
 
-/// <summary>Exchanged first on every session. Protocol version negotiation lives here.</summary>
-public sealed record HelloFrame(int V, long DeviceListVersion) : Frame(FrameType.Hello)
+/// <summary>
+/// Exchanged first on every session. Protocol version negotiation lives here. <c>Hints</c> is where the sender's device can be
+/// reached (spec §8.4), so contacts refresh each other's addresses whenever they talk; older peers ignore it.
+/// </summary>
+public sealed record HelloFrame(int V, long DeviceListVersion, string[]? Hints = null) : Frame(FrameType.Hello)
 {
     public const int CurrentVersion = 1;
 }

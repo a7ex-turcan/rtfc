@@ -70,7 +70,7 @@ public static class DaemonHost
         var logger = app.Services.GetRequiredService<ILogger<Node>>();
         var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 
-        MapEndpoints(app, node, leases, sessions, lifetime, options);
+        MapEndpoints(app, node, leases, sessions, home, lifetime, options);
 
         await node.StartAsync(cancellationToken).ConfigureAwait(false);
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -105,7 +105,7 @@ public static class DaemonHost
     /// AOT needs, once turned an <c>async (HttpContext) => …</c> lambda without one into an
     /// endpoint that answered 200 with an empty body; the IPC test guards against a repeat.
     /// </summary>
-    private static void MapEndpoints(WebApplication app, Node node, Leases leases, SessionChannels sessions, IHostApplicationLifetime lifetime, DaemonOptions options)
+    private static void MapEndpoints(WebApplication app, Node node, Leases leases, SessionChannels sessions, RtfcHome home, IHostApplicationLifetime lifetime, DaemonOptions options)
     {
         app.MapGet(IpcRoutes.Status, IResult () => Results.Json(new DaemonStatus(
             EntryPoint.Version, Environment.ProcessId, node.Self.PersonId, node.Self.Handle, node.Self.DeviceId, node.Self.DeviceName,
@@ -294,6 +294,13 @@ public static class DaemonHost
         app.MapPost(IpcRoutes.Contacts + "/{handle}/block", IResult (string handle) =>
             Results.Json(node.Block(handle), IpcJson.Default.ManagementResult));
 
+        // rtfc hints wrote config.json; the daemon re-reads it and advertises the new hints from now on (spec §8.4).
+        app.MapPost(IpcRoutes.Hints, IResult () =>
+        {
+            node.SetHintHosts(HintHosts.Resolve(ConfigFile.Load(home)));
+            return Results.Json(node.AdvertisedHints(), IpcJson.Default.StringArray);
+        });
+
         app.MapPost(IpcRoutes.Shutdown, IResult () =>
         {
             lifetime.StopApplication();
@@ -322,16 +329,14 @@ public static class DaemonHost
     }
 }
 
-/// <summary>The hosts this device advertises in <c>tcp:</c> hints: configured ones, else the hostname plus every non-loopback IPv4 address.</summary>
+/// <summary>The hosts this device advertises in <c>tcp:</c> hints: configured ones, else the hostname plus every IPv4 address worth advertising.</summary>
 public static class HintHosts
 {
-    public static IReadOnlyList<string> Resolve(RtfcConfig config)
-    {
-        if (config.HintHosts is { Length: > 0 })
-        {
-            return config.HintHosts;
-        }
+    public static IReadOnlyList<string> Resolve(RtfcConfig config) => config.HintHosts is { Length: > 0 } ? config.HintHosts : Detect();
 
+    /// <summary>What this machine would advertise on its own: its hostname and its usable IPv4 addresses, in adapter order.</summary>
+    public static IReadOnlyList<string> Detect()
+    {
         var hosts = new List<string>();
         try
         {
@@ -353,7 +358,7 @@ public static class HintHosts
 
                 foreach (var address in nic.GetIPProperties().UnicastAddresses)
                 {
-                    if (address.Address.AddressFamily == AddressFamily.InterNetwork)
+                    if (IsAdvertisable(address.Address))
                     {
                         hosts.Add(address.Address.ToString());
                     }
@@ -364,6 +369,16 @@ public static class HintHosts
         {
         }
 
-        return hosts.Count > 0 ? hosts : ["localhost"];
+        return hosts.Count > 0 ? [.. hosts.Distinct(StringComparer.Ordinal)] : ["localhost"];
     }
+
+    /// <summary>
+    /// IPv4, not loopback, not link-local: a Windows machine has a 169.254 address on every idle adapter, and each one advertised
+    /// costs a contact a connection attempt. IPv6 addresses are usually temporary and are left to <c>rtfc hints add</c>.
+    /// </summary>
+    public static bool IsAdvertisable(System.Net.IPAddress address) =>
+        address.AddressFamily == AddressFamily.InterNetwork
+        && !System.Net.IPAddress.IsLoopback(address)
+        && !address.Equals(System.Net.IPAddress.Any)
+        && address.GetAddressBytes() is not [169, 254, ..];
 }

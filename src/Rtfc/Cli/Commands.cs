@@ -358,7 +358,9 @@ public static class Commands
 
         foreach (var contact in contacts)
         {
-            var devices = string.Join(", ", contact.Devices.Select(d => $"{d.Name} {(d.Online switch { true => "home", false => "away", null => "?" })}"));
+            // The hints are what a send will try, and the first thing to look at when someone seems unreachable.
+            var devices = string.Join(", ", contact.Devices.Select(d =>
+                $"{d.Name} {(d.Online switch { true => "home", false => "away", null => "?" })} ({string.Join(" ", d.Hints)})"));
             var mode = contact.AutoScope is null ? contact.InboundMode : $"{contact.InboundMode} ({contact.AutoScope})";
             var extras = (contact.ReadReceipts ? "" : "  no receipts") + (contact.Pending > 0 ? $"  {contact.Pending} in outbox" : "");
             ctx.Out.WriteLine($"{contact.Handle,-16} {contact.Status,-8} {mode,-14} {devices}{extras}");
@@ -763,6 +765,104 @@ public static class Commands
     // ---- helpers ----
 
     /// <summary>A client to a running daemon, starting one if needed. Null, with the reason on stderr, when that fails.</summary>
+    /// <summary>
+    /// <c>rtfc hints [add &lt;host&gt;… | remove &lt;host&gt;… | auto]</c> (spec §8.4): the hosts this device advertises in invites and in every
+    /// hello, which is how a contact beyond the office learns a VPN address or a Tailscale name. Writes config.json, the one
+    /// source of truth, and asks a running daemon to re-read it; it never starts one.
+    /// </summary>
+    public static async Task<int> HintsAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        if (!IdentityStore.Exists(ctx.Home))
+        {
+            ctx.Error.WriteLine("rtfc hints: no identity yet. Run /rtfc:init first.");
+            return 1;
+        }
+
+        var config = ConfigFile.Load(ctx.Home);
+        var current = config.HintHosts is { Length: > 0 } set ? set : HintHosts.Detect();
+        string[]? hosts;
+        switch (args.ToArray())
+        {
+            case []:
+                return await ShowHintsAsync(ctx, config, changed: false).ConfigureAwait(false);
+
+            case ["auto"]:
+                hosts = null;
+                break;
+
+            case ["add", .. var added] when added.Length > 0:
+                foreach (var host in added)
+                {
+                    if (host.Trim().Length == 0 || host.Any(char.IsWhiteSpace) || host.Contains('/'))
+                    {
+                        ctx.Error.WriteLine($"rtfc hints: '{host}' is not a hostname or an IP address.");
+                        return 1;
+                    }
+                }
+
+                hosts = [.. current.Concat(added.Select(h => h.Trim())).Distinct(StringComparer.OrdinalIgnoreCase)];
+                break;
+
+            case ["remove", .. var removed] when removed.Length > 0:
+                hosts = [.. current.Where(h => !removed.Contains(h, StringComparer.OrdinalIgnoreCase))];
+                if (hosts.Length == 0)
+                {
+                    ctx.Error.WriteLine("rtfc hints: that would leave nothing to advertise. Add a host first, or use `rtfc hints auto`.");
+                    return 1;
+                }
+
+                break;
+
+            default:
+                ctx.Error.WriteLine("usage: rtfc hints [add <host>... | remove <host>... | auto]");
+                return 2;
+        }
+
+        config = config with { HintHosts = hosts };
+        ConfigFile.Save(ctx.Home, config);
+        return await ShowHintsAsync(ctx, config, changed: true).ConfigureAwait(false);
+    }
+
+    private static async Task<int> ShowHintsAsync(CommandContext ctx, RtfcConfig config, bool changed)
+    {
+        using var client = new DaemonClient(ctx.Home);
+        string[] advertised;
+        string status;
+        if (await client.TryStatusAsync(ctx.CancellationToken).ConfigureAwait(false) is not null)
+        {
+            advertised = changed
+                ? await client.ReloadHintsAsync(ctx.CancellationToken).ConfigureAwait(false)
+                : (await client.TryStatusAsync(ctx.CancellationToken).ConfigureAwait(false))!.Hints;
+            status = changed ? "Applied to the running daemon." : "";
+        }
+        else
+        {
+            advertised = [.. HintHosts.Resolve(config).Select(h => EndpointHint.ForTcp(h, config.Port).ToString())];
+            status = "The daemon is not running; these apply when it starts.";
+        }
+
+        ctx.Out.WriteLine("Advertised in your invites, and to contacts every time you talk:");
+        foreach (var hint in advertised)
+        {
+            ctx.Out.WriteLine($"  {hint}");
+        }
+
+        ctx.Out.WriteLine(config.HintHosts is { Length: > 0 }
+            ? "Set by hand in config.json; `rtfc hints auto` returns to auto-detection."
+            : "Auto-detected; `rtfc hints add <host>` adds a VPN address or a Tailscale name.");
+        if (status.Length > 0)
+        {
+            ctx.Out.WriteLine(status);
+        }
+
+        if (changed)
+        {
+            ctx.Out.WriteLine("Contacts learn these the next time you talk to them; new invites carry them.");
+        }
+
+        return 0;
+    }
+
     private static async Task<DaemonClient?> ConnectAsync(CommandContext ctx)
     {
         var outcome = await DaemonLauncher.EnsureAsync(ctx.Home, ctx.CancellationToken).ConfigureAwait(false);

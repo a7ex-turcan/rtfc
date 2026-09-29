@@ -61,6 +61,8 @@ public static class EntryPoint
                     return await Commands.RemoveAsync(ctx, rest, block: false).ConfigureAwait(false);
                 case "block":
                     return await Commands.RemoveAsync(ctx, rest, block: true).ConfigureAwait(false);
+                case "hints":
+                    return await Commands.HintsAsync(ctx, rest).ConfigureAwait(false);
                 case "away":
                     return await Commands.AwayAsync(ctx, rest).ConfigureAwait(false);
                 case "rename":
@@ -119,6 +121,8 @@ public static class EntryPoint
           rename <contact> <handle>   what you call them; only you see it
           receipts <contact> on|off   tell them when you read their messages (default on)
           away on|off                 stop listening; contacts see nobody home, you can still send
+          hints [add <host>...|remove <host>...|auto]
+                                      what your invites tell people to connect to; add a VPN address or a Tailscale name
 
         look:
           contacts                    contacts and whether they are home

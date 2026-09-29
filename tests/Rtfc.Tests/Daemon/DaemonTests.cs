@@ -392,4 +392,26 @@ public class DaemonTests
         public override DateTimeOffset GetUtcNow() => _now;
         public void Advance(TimeSpan by) => _now += by;
     }
+
+    [Fact]
+    public async Task Changing_hints_applies_to_the_running_daemon_at_once()
+    {
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+        var daemon = Task.Run(() => DaemonHost.RunAsync(temp.Home, new DaemonOptions(IdleExit: false, LogToConsole: false), Ct), Ct);
+        using var client = new DaemonClient(temp.Home);
+        var before = await WaitForStatusAsync(client, daemon);
+
+        var ctx = new CommandContext(temp.Home, new StringWriter(), new StringWriter(), Ct);
+        Assert.Equal(0, await Commands.HintsAsync(ctx, ["add", "100.101.5.7"]));
+
+        var after = (await client.TryStatusAsync(Ct))!;
+        Assert.Equal([$"tcp:127.0.0.1:{before.Port}", $"tcp:100.101.5.7:{before.Port}"], after.Hints);
+        Assert.Contains("Applied to the running daemon.", ctx.Out.ToString());
+        Assert.Equal(["127.0.0.1", "100.101.5.7"], ConfigFile.Load(temp.Home).HintHosts!);
+
+        await client.ShutdownAsync(Ct);
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+    }
 }

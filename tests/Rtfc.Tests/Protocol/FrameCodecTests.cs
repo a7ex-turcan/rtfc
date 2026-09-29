@@ -110,4 +110,17 @@ public class FrameCodecTests
         Assert.NotEqual(Ulid.NewUlid(), Ulid.NewUlid());
         Assert.False(Ulid.IsValid("not-a-ulid"));
     }
+
+    [Fact]
+    public void A_hello_carries_hints_and_one_without_them_from_an_older_peer_still_parses()
+    {
+        var hello = new HelloFrame(1, 7, ["tcp:10.0.0.5:47821", "tcp:100.101.5.7:47821"]);
+        var parsed = Assert.IsType<HelloFrame>(Frames.Parse(Frames.Serialize(hello)));
+        Assert.Equal((1, 7L), (parsed.V, parsed.DeviceListVersion));
+        Assert.Equal(hello.Hints, parsed.Hints);
+
+        var older = Assert.IsType<HelloFrame>(Frames.Parse("{\"type\":\"hello\",\"v\":1,\"deviceListVersion\":7}"u8.ToArray()));
+        Assert.Null(older.Hints);
+        Assert.DoesNotContain("hints", System.Text.Encoding.UTF8.GetString(Frames.Serialize(new HelloFrame(1, 7))), StringComparison.Ordinal);
+    }
 }

@@ -28,6 +28,7 @@ public sealed partial class Node : IAsyncDisposable
     private readonly TimeProvider _clock;
     private readonly ILogger _logger;
     private readonly ISessionChannel? _sessions;
+    private IReadOnlyList<string> _hintHosts;
     private readonly CancellationTokenSource _stopping = new();
 
     public Node(
@@ -43,6 +44,7 @@ public sealed partial class Node : IAsyncDisposable
         _clock = clock;
         _logger = logger;
         _sessions = sessions;
+        _hintHosts = options.HintHosts;
 
         _db.SaveSelf(new SelfRow(self.PersonId, self.Handle, self.PersonCa.RawData, self.DeviceId, self.DeviceName, self.DeviceCertificate.RawData, DeviceListVersion));
     }
@@ -102,11 +104,43 @@ public sealed partial class Node : IAsyncDisposable
         return new ManagementResult(ManagementStatus.Ok);
     }
 
-    /// <summary>The <c>tcp:</c> hints this device advertises in invite tokens and accept frames (spec §8.4).</summary>
+    /// <summary>The <c>tcp:</c> hints this device advertises in invite tokens, accept frames and every hello (spec §8.4).</summary>
     public string[] AdvertisedHints()
     {
         var port = (_transport as TcpTransport)?.Port ?? TcpTransport.DefaultPort;
-        return [.. _options.HintHosts.Select(host => EndpointHint.ForTcp(host, port).ToString())];
+        return [.. _hintHosts.Select(host => EndpointHint.ForTcp(host, port).ToString())];
+    }
+
+    /// <summary>Changes what this device advertises from now on, without a restart: <c>rtfc hints</c> wrote config.json and asked.</summary>
+    public void SetHintHosts(IReadOnlyList<string> hosts)
+    {
+        _hintHosts = [.. hosts];
+        _logger.LogInformation("Advertising {Hints}", string.Join(", ", AdvertisedHints()));
+    }
+
+    private const int MaxLearnedHints = 16;
+
+    /// <summary>
+    /// A contact's device says where it can be reached in every hello (spec §8.4), and its record follows, so hints refresh
+    /// whenever we talk instead of only on a new invite. The claim is about the sender's own device and arrives on an
+    /// authenticated session, but it is still input: shape-checked and capped.
+    /// </summary>
+    private void LearnHints(SessionTrust.Authenticated trust, string[]? hints)
+    {
+        if (hints is not { Length: > 0 and <= MaxLearnedHints } || trust.PersonId == Self.PersonId)
+        {
+            return;
+        }
+
+        var usable = hints.Where(h => h.Length <= 128 && ParseHints([h]).Count == 1).Distinct(StringComparer.Ordinal).ToArray();
+        var device = _db.GetDevice(trust.DeviceId);
+        if (usable.Length == 0 || device is null || device.PersonId != trust.PersonId || device.Status != DeviceStatus.Active || device.Endpoints.SequenceEqual(usable))
+        {
+            return;
+        }
+
+        _db.UpsertDevice(device with { Endpoints = usable });
+        _logger.LogInformation("{Person}/{Device} is now reachable at {Hints}", Ids.Fingerprint(trust.PersonId), device.Name, string.Join(", ", usable));
     }
 
     // ---- invite and accept (spec §5.1) ----
@@ -154,7 +188,7 @@ public sealed partial class Node : IAsyncDisposable
 
         try
         {
-            await using var session = await PeerSession.ConnectAsync(stream, Self, Anchors(), DeviceListVersion, cancellationToken).ConfigureAwait(false);
+            await using var session = await PeerSession.ConnectAsync(stream, Self, Anchors(), DeviceListVersion, AdvertisedHints(), cancellationToken).ConfigureAwait(false);
             await session.SendAsync(
                 new InviteAcceptFrame(payload.Nonce, Base64(Self.PersonCa), Self.Handle, Self.DeviceName, AdvertisedHints()),
                 cancellationToken).ConfigureAwait(false);
@@ -405,9 +439,10 @@ public sealed partial class Node : IAsyncDisposable
 
         try
         {
-            var session = await PeerSession.ConnectAsync(stream, Self, [ca], DeviceListVersion, cancellationToken).ConfigureAwait(false);
+            var session = await PeerSession.ConnectAsync(stream, Self, [ca], DeviceListVersion, AdvertisedHints(), cancellationToken).ConfigureAwait(false);
             if (session.Trust is SessionTrust.Authenticated trust && trust.PersonId == contact.PersonId && trust.DeviceId == device.DeviceId)
             {
+                LearnHints(trust, session.RemoteHello.Hints);
                 return session;
             }
 
@@ -467,7 +502,7 @@ public sealed partial class Node : IAsyncDisposable
         PeerSession session;
         try
         {
-            session = await PeerSession.AcceptAsync(stream, Self, Anchors(), DeviceListVersion, cancellationToken).ConfigureAwait(false);
+            session = await PeerSession.AcceptAsync(stream, Self, Anchors(), DeviceListVersion, AdvertisedHints(), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or System.Security.Authentication.AuthenticationException or ProtocolException or OperationCanceledException)
         {
@@ -477,8 +512,9 @@ public sealed partial class Node : IAsyncDisposable
 
         await using (session)
         {
-            if (session.Trust is SessionTrust.Authenticated)
+            if (session.Trust is SessionTrust.Authenticated caller)
             {
+                LearnHints(caller, session.RemoteHello.Hints);
                 // Someone we know is home: whatever waits for them can go now (spec §13, "handshakes trigger it").
                 KickOutbox();
             }

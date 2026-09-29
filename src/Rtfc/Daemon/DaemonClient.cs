@@ -77,6 +77,14 @@ public sealed class DaemonClient : IDisposable
     public Task<SendResult> SendAsync(SendRequest request, CancellationToken cancellationToken) =>
         PostAsync(IpcRoutes.Send, request, IpcJson.Default.SendRequest, IpcJson.Default.SendResult, cancellationToken);
 
+    /// <summary>After <c>rtfc hints</c> wrote config.json: the daemon re-reads it and returns what it advertises now (spec §8.4).</summary>
+    public async Task<string[]> ReloadHintsAsync(CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsync(IpcRoutes.Hints, content: null, cancellationToken).ConfigureAwait(false);
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        return (await response.Content.ReadFromJsonAsync(IpcJson.Default.StringArray, cancellationToken).ConfigureAwait(false)) ?? [];
+    }
+
     /// <summary>Tells the daemon which project a session runs in (spec §10.2).</summary>
     public Task<ProjectView> RegisterProjectAsync(string directory, CancellationToken cancellationToken) =>
         PostAsync(IpcRoutes.Projects, new ProjectRequest(directory), IpcJson.Default.ProjectRequest, IpcJson.Default.ProjectView, cancellationToken);

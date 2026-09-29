@@ -116,55 +116,111 @@ public sealed class TcpTransport(int port, TimeSpan? connectTimeout = null) : IT
         return true;
     }
 
+    private static readonly TimeSpan Stagger = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Tries every <c>tcp</c> hint at once, started a quarter second apart in the order given, and takes the first that connects
+    /// (spec §8.3). A device beyond the office lists its LAN address and its VPN address; trying them one after another would cost
+    /// a whole connect timeout per unreachable hint, and the "who's home" probe would call the device away. The stagger lets a
+    /// reachable first hint win on its own, without a burst of connections. Null when no hint answered; the caller's cancellation
+    /// is reported as cancellation.
+    /// </summary>
     public async Task<Stream?> ConnectAsync(string deviceId, IReadOnlyList<EndpointHint> hints, CancellationToken cancellationToken)
     {
+        var endpoints = new List<(string Host, int Port)>();
         foreach (var hint in hints)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             if (hint.Kind != EndpointHint.Tcp)
             {
                 continue;
             }
 
-            (string host, int port) endpoint;
             try
             {
-                endpoint = hint.TcpEndpoint();
+                endpoints.Add(hint.TcpEndpoint());
             }
             catch (FormatException)
+            {
+                // A hint we cannot read is a hint we cannot use.
+            }
+        }
+
+        if (endpoints.Count == 0)
+        {
+            return null;
+        }
+
+        using var race = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var attempts = new HashSet<Task<TcpClient?>>();
+        for (var i = 0; i < endpoints.Count; i++)
+        {
+            attempts.Add(AttemptAsync(endpoints[i], Stagger * i, race.Token));
+        }
+
+        while (attempts.Count > 0)
+        {
+            var finished = await Task.WhenAny(attempts).ConfigureAwait(false);
+            attempts.Remove(finished);
+            var client = await finished.ConfigureAwait(false);
+            if (client is null)
             {
                 continue;
             }
 
-            var client = new TcpClient();
-            try
+            await race.CancelAsync().ConfigureAwait(false);
+            foreach (var late in attempts)
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(_connectTimeout);
-                await client.ConnectAsync(endpoint.host, endpoint.port, timeout.Token).ConfigureAwait(false);
-                client.NoDelay = true;
-                return new OwningNetworkStream(client);
+                _ = DisposeLateAsync(late);
             }
-            catch (SocketException)
-            {
-                // Refused or unreachable: this hint is no good, try the next. Windows reports a refusal only after about two
-                // seconds of retries, so it can arrive just as the caller gives up; that is still "unreachable", and the check
-                // at the top of the loop reports the caller's cancellation as cancellation, never as a socket error.
-                client.Dispose();
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Our own connect timeout, not the caller's: try the next hint.
-                client.Dispose();
-            }
-            catch
-            {
-                client.Dispose();
-                throw;
-            }
+
+            return new OwningNetworkStream(client);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return null;
+    }
+
+    /// <summary>One hint: waits its turn, then connects with its own timeout. Null when it did not connect, whatever the reason.</summary>
+    private async Task<TcpClient?> AttemptAsync((string Host, int Port) endpoint, TimeSpan delay, CancellationToken race)
+    {
+        TcpClient? client = null;
+        try
+        {
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, race).ConfigureAwait(false);
+            }
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(race);
+            timeout.CancelAfter(_connectTimeout);
+            client = new TcpClient();
+            await client.ConnectAsync(endpoint.Host, endpoint.Port, timeout.Token).ConfigureAwait(false);
+            if (race.IsCancellationRequested)
+            {
+                client.Dispose();
+                return null;
+            }
+
+            client.NoDelay = true;
+            return client;
+        }
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException or ObjectDisposedException)
+        {
+            client?.Dispose();
+            return null;
+        }
+    }
+
+    /// <summary>A loser that connects after the winner was chosen has nobody to hand its socket to.</summary>
+    private static async Task DisposeLateAsync(Task<TcpClient?> attempt)
+    {
+        try
+        {
+            (await attempt.ConfigureAwait(false))?.Dispose();
+        }
+        catch (Exception)
+        {
+        }
     }
 
     /// <summary>A network stream that disposes its client with it, so a caller holding only the stream leaks nothing.</summary>

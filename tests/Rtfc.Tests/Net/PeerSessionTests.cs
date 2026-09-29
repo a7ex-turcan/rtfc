@@ -95,7 +95,7 @@ public class PeerSessionTests : IAsyncLifetime
         {
             try
             {
-                await using var _ = await PeerSession.AcceptAsync(stream, _alex, [_alex.PersonCa], 1, TestContext.Current.CancellationToken);
+                await using var _ = await PeerSession.AcceptAsync(stream, _alex, [_alex.PersonCa], 1, null, TestContext.Current.CancellationToken);
                 accepted.SetResult(null);
             }
             catch (Exception ex)
@@ -154,7 +154,7 @@ public class PeerSessionTests : IAsyncLifetime
         {
             try
             {
-                serverSide.SetResult(await PeerSession.AcceptAsync(stream, _alex, serverAnchors, 1, TestContext.Current.CancellationToken));
+                serverSide.SetResult(await PeerSession.AcceptAsync(stream, _alex, serverAnchors, 1, null, TestContext.Current.CancellationToken));
                 // Keep the stream alive until the session is disposed by the test.
                 await serverSide.Task.ContinueWith(_ => Task.Delay(Timeout.Infinite), TaskScheduler.Default).Unwrap();
             }
@@ -168,7 +168,7 @@ public class PeerSessionTests : IAsyncLifetime
         {
             var raw = await transport.ConnectAsync(_alex.DeviceId, [EndpointHint.ForTcp("127.0.0.1", transport.Port)], TestContext.Current.CancellationToken)
                 ?? throw new InvalidOperationException("The loopback transport did not connect.");
-            var client = await PeerSession.ConnectAsync(raw, _sasha, clientAnchors, 3, TestContext.Current.CancellationToken);
+            var client = await PeerSession.ConnectAsync(raw, _sasha, clientAnchors, 3, null, TestContext.Current.CancellationToken);
             var server = await serverSide.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
             return (server, client);
         }

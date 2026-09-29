@@ -196,4 +196,24 @@ public class NodeTests : IAsyncLifetime
         Assert.Equal("body_too_large", (await _sasha.Node.SendAsync("alex", new string('x', 65 * 1024), Ct)).Reason);
         Assert.Empty(_alex.Node.ListInbox(null));
     }
+
+    [Fact]
+    public async Task Contacts_learn_each_others_current_hints_whenever_they_talk()
+    {
+        await BecomeContactsAsync();
+        string[] AlexAsSashaSeesHim() => [.. Assert.Single(_sasha.Database.ListDevices(_alex.Node.Self.PersonId)).Endpoints];
+        Assert.Equal([$"tcp:127.0.0.1:{_alex.Transport.Port}"], AlexAsSashaSeesHim());
+
+        // Alex adds a VPN address; the hello of the next message he sends tells Sasha, with no new invite.
+        _alex.Node.SetHintHosts(["127.0.0.1", "100.101.5.7"]);
+        Assert.Equal(SendStatus.Delivered, (await _alex.Node.SendAsync("sasha", "I am on the VPN now.", Ct)).Status);
+        Assert.Equal([$"tcp:127.0.0.1:{_alex.Transport.Port}", $"tcp:100.101.5.7:{_alex.Transport.Port}"], AlexAsSashaSeesHim());
+
+        // And the other way round, from the hello Sasha sends when she connects to him.
+        _sasha.Node.SetHintHosts(["127.0.0.1", "sasha.tailnet.ts.net"]);
+        Assert.Equal(SendStatus.Delivered, (await _sasha.Node.SendAsync("alex", "Me too.", Ct)).Status);
+        Assert.Equal(
+            [$"tcp:127.0.0.1:{_sasha.Transport.Port}", $"tcp:sasha.tailnet.ts.net:{_sasha.Transport.Port}"],
+            Assert.Single(_alex.Database.ListDevices(_sasha.Node.Self.PersonId)).Endpoints);
+    }
 }

@@ -53,7 +53,7 @@ public sealed class PeerSession : IAsyncDisposable
 
     /// <summary>The server side: wraps an inbound transport stream. Fails unless the peer presents a certificate.</summary>
     public static Task<PeerSession> AcceptAsync(
-        Stream transport, SelfIdentity self, IReadOnlyCollection<X509Certificate2> anchors, long deviceListVersion, CancellationToken cancellationToken)
+        Stream transport, SelfIdentity self, IReadOnlyCollection<X509Certificate2> anchors, long deviceListVersion, IReadOnlyList<string>? hints, CancellationToken cancellationToken)
     {
         var options = new SslServerAuthenticationOptions
         {
@@ -63,12 +63,12 @@ public sealed class PeerSession : IAsyncDisposable
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             RemoteCertificateValidationCallback = AcceptAnyPresentedCertificate,
         };
-        return HandshakeAsync(transport, anchors, deviceListVersion, tls => tls.AuthenticateAsServerAsync(options, cancellationToken), cancellationToken);
+        return HandshakeAsync(transport, anchors, deviceListVersion, hints, tls => tls.AuthenticateAsServerAsync(options, cancellationToken), cancellationToken);
     }
 
     /// <summary>The client side: wraps an outbound transport stream and offers our device certificate.</summary>
     public static Task<PeerSession> ConnectAsync(
-        Stream transport, SelfIdentity self, IReadOnlyCollection<X509Certificate2> anchors, long deviceListVersion, CancellationToken cancellationToken)
+        Stream transport, SelfIdentity self, IReadOnlyCollection<X509Certificate2> anchors, long deviceListVersion, IReadOnlyList<string>? hints, CancellationToken cancellationToken)
     {
         var options = new SslClientAuthenticationOptions
         {
@@ -80,7 +80,7 @@ public sealed class PeerSession : IAsyncDisposable
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             RemoteCertificateValidationCallback = AcceptAnyPresentedCertificate,
         };
-        return HandshakeAsync(transport, anchors, deviceListVersion, tls => tls.AuthenticateAsClientAsync(options, cancellationToken), cancellationToken);
+        return HandshakeAsync(transport, anchors, deviceListVersion, hints, tls => tls.AuthenticateAsClientAsync(options, cancellationToken), cancellationToken);
     }
 
     /// <summary>
@@ -95,6 +95,7 @@ public sealed class PeerSession : IAsyncDisposable
         Stream transport,
         IReadOnlyCollection<X509Certificate2> anchors,
         long deviceListVersion,
+        IReadOnlyList<string>? hints,
         Func<SslStream, Task> authenticate,
         CancellationToken cancellationToken)
     {
@@ -115,7 +116,7 @@ public sealed class PeerSession : IAsyncDisposable
             var leaf = X509CertificateLoader.LoadCertificate(remote.GetRawCertData());
             var trust = Classify(leaf, anchors);
 
-            var hello = new HelloFrame(HelloFrame.CurrentVersion, deviceListVersion);
+            var hello = new HelloFrame(HelloFrame.CurrentVersion, deviceListVersion, hints is { Count: > 0 } ? [.. hints] : null);
             await tls.WriteAsync(FrameCodec.Encode(Frames.Serialize(hello)), timeout.Token).ConfigureAwait(false);
 
             var session = new PeerSession(tls, leaf, trust, await ReadHelloAsync(tls, timeout.Token).ConfigureAwait(false));

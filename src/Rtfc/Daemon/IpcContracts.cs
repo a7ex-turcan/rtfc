@@ -19,6 +19,7 @@ public static class IpcRoutes
     public const string Outbox = "/v1/outbox";
     public const string Away = "/v1/away";
     public const string Projects = "/v1/projects";
+    public const string Hints = "/v1/hints";
     public const string Shutdown = "/v1/shutdown";
 
     public static string InboxOpen(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/open";
@@ -78,6 +79,7 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(AcceptRequest))]
 [JsonSerializable(typeof(AutoRequest))]
 [JsonSerializable(typeof(GateRequest))]
+[JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(SessionEvent))]
 [JsonSerializable(typeof(ToggleRequest))]
 [JsonSerializable(typeof(RenameRequest))]

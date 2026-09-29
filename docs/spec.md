@@ -342,6 +342,7 @@ There is **no "trusted LAN" shortcut**. The LAN gets the same authentication and
 
 - **No discovery in Phase 1.** On a wired office LAN where machines already find each other by hostname (SMB works), invite tokens and device records carry `tcp:<hostname>:<port>` hints. The default port is fixed (e.g. 47821) and configurable.
 - **Reachability:** a short TCP connect probe to the hints.
+- **Connecting:** every `tcp` hint of a device is tried at once, started a quarter second apart in the order listed, and the first to connect wins; the rest are cancelled. An unreachable hint therefore costs nothing but the stagger, which is what lets a device advertise its LAN address and its VPN address side by side (Phase 3). Tried one after another, each dead hint would cost a whole connect timeout, and the "who's home" probe would call the device away.
 - **mDNS later:** a `mdns` component that advertises `_rtfc._tcp` and produces `tcp:` hints. .NET mDNS libraries are the least mature part of the stack, so evaluate options such as the `Makaretu.Dns.Multicast` forks for maintenance before choosing. Discovery results are only hints; the TLS handshake is the only proof of identity.
 - **First run:** expect an OS firewall prompt the first time `rtfcd` listens.
 
@@ -354,6 +355,8 @@ Devices carry a list of typed hints, and invite tokens include them:
 ```
 
 Adding a new way to reach someone means adding a hint type and a transport, and nothing else.
+
+A device advertises the hosts in `config.json`'s `hintHosts` or, when that is empty, its hostname and every IPv4 address worth advertising: not loopback, not link-local. `rtfc hints` shows them; `rtfc hints add <host>`, `remove <host>` and `auto` change them, write `config.json` and apply to the running daemon at once. Hints travel in three places: invite tokens, the `invite_accept` and `accept_ack` frames, and the `hello` of every session. From a hello on a session that authenticates as a contact's device, the receiver refreshes that device's stored hints, so a contact who moves to a VPN is reachable the next time either side talks, with no new invite. The hello's hints are a device's claim about itself: shape-checked, capped at sixteen, and never used for anything but connecting.
 
 ---
 
@@ -397,7 +400,7 @@ Anything that changes **who can reach you or what your Claude will do automatica
 
 - `init`, `invite`, `accept`
 - `remove`, `block`
-- `auto`, `receipts`, `away`
+- `auto`, `receipts`, `away`, `hints`
 - `link`, `approve-device`, `revoke-device`
 - `export-identity`
 - `account add` / `account remove`, `sources approve`, `project forget`
@@ -430,7 +433,7 @@ Tell the user the result above in one sentence. Do not run any other rtfc comman
 | `/rtfc:contacts` | Prompt: asks Claude to show contacts and who's home via the MCP tools |
 | `/rtfc:init` · `/rtfc:invite` · `/rtfc:accept <token>` | CLI |
 | `/rtfc:rename <contact> <handle>` · `/rtfc:remove <contact>` · `/rtfc:block <contact>` | CLI |
-| `/rtfc:auto <contact>\|--all off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` | CLI |
+| `/rtfc:auto <contact>\|--all off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` · `/rtfc:hints [add\|remove <host>…\|auto]` | CLI |
 | `/rtfc:sources` | Prompt: asks Claude to show this project's subscriptions and their health via the `sources` tool |
 | `/rtfc:sources-approve` · `/rtfc:project-forget` | CLI |
 | *(terminal only)* `rtfc account add` / `remove` | CLI in a real terminal; prompts for a secret, which must never pass through Claude |
@@ -761,7 +764,7 @@ Invariants that v1 must respect. Violating any of them is what would turn intern
 
 ### Evolution path
 
-**Stage A: overlay networks (Tailscale, WireGuard, ZeroTier). Almost no code.** Add `tcp:` hints with VPN addresses or MagicDNS names. Multicast mDNS generally doesn't cross these networks, so rely on the manual hints. Because of invariants 1–3, nothing else changes.
+**Stage A: overlay networks (Tailscale, WireGuard, ZeroTier). Almost no code.** Add `tcp:` hints with VPN addresses or MagicDNS names. Multicast mDNS generally doesn't cross these networks, so rely on the manual hints. Because of invariants 1–3, nothing else changes. Shipped as Phase 3 (§8.3, §8.4).
 
 **Stage B: relay transport.** Each device holds one outbound WSS connection to a relay and authenticates with its device key. When A wants B, the relay pairs the two connections into a pipe and forwards **opaque TLS bytes**. It can't read them and doesn't store them. Presence is simply "B is connected to the relay". The friends' relay can run self-hosted on a homelab. The same relay can accept webhooks from sources and forward them to your devices as polling pokes (§10.1), without storing anything.
 
@@ -811,14 +814,14 @@ Ordered by the primary value, agent-to-agent communication. Two Claudes talk as 
 
 The order is cheap to change because the invariants (§15) and the `(person_id, device_id)` data model are in place from Phase 1, so no phase reworks an earlier one. **Early phases defer features, never guards.** Mutual TLS, the untrusted wrapping (§7.5), the frame and body size caps, and the CLI-only management boundary (§9.3) all ship in Phase 1.
 
-Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints. Project-addressed messages (§7.6) came next, and brought two parts of 8a forward with them: session registration and the project-aware status line.
+Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints. Project-addressed messages (§7.6) came next, and brought two parts of 8a forward with them: session registration and the project-aware status line. Then Phase 7 (§7.3), at the owner's request, and then Phase 3.
 
 | Phase | Scope | Done when |
 |---|---|---|
 | **0: Spike** | ~~Two office laptops: raw TCP connect, mDNS browse, firewall behavior~~ Skipped: wired, same switch, SMB between machines already works | n/a. Only remaining first-run item: OS firewall prompt when `rtfcd` first listens |
 | **1: Thin slice** | Two people, one device each (data model already person/device). `rtfc` binary + plugin wiring, configurable rtfc home, `init`, invite/accept over mutual TLS, `tcp:` hostname hints (no mDNS), daemon lifetime + SQLite, `send` with nobody's-home, park inbox, status bar, `contacts`, `inbox_list`, `inbox_open`, and `inbox_reply` while the sender is home (otherwise it reports `nobody_home`, like `send`) | Alex and Sasha exchange a question and answer without copy-paste, and a parked message survives a relaunch |
 | **2: Auto-answer** | `auto_headless` with scope, deny rules, loop and rate guards. `remove` and `block` arrive here too: until now the worst a contact can do is park a message, but once your Claude answers on its own you need to be able to cut someone off | Sasha's question gets answered by Alex's scoped Claude while Alex is away from the keyboard |
-| **3: Beyond the office** | Overlay networks (§15, Stage A): several `tcp:` hints per device, including VPN addresses and MagicDNS names, a way to choose which hints this device advertises, and invite tokens that carry them. Almost no code | Works with someone at home over Tailscale or similar, with no change to identity, storage, or tools |
+| **3: Beyond the office** | Overlay networks (§15, Stage A): a device's hints tried together, so a VPN address behind an unreachable LAN address still answers in time; `rtfc hints` to choose what a device advertises; hints in every hello, so contacts refresh them without a new invite; auto-detection that skips link-local addresses. Almost no code, as promised | Works with someone at home over Tailscale or similar, with no change to identity, storage, or tools |
 | **4: Async** | Reply outbox with its pump and 7-day expiry notice (§7.2), read receipts, `away`, `rename`, `inbox_dismiss`, retention pruning | A reply written hours later reaches a sender who has since closed Claude Code, as soon as they're next home |
 | **5: Multi-device** | Link/approve, device lists, fan-out, handled sync, revocation, contact sync, auto-owner rule | Alex's laptop and desktop act as one contact; revoking one works |
 | **6: Relay** | Own ASP.NET Core relay transport (§15, Stage B), including the choice of who may request a pipe to whom | Works with someone at home with no VPN, and with no change to identity, storage, or tools |

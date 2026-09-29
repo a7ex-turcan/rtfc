@@ -93,6 +93,10 @@ step "contacts on both sides"
 out=$(RTFC_HOME="$B" "$BIN" contacts); expect "sasha sees alex home" "$out" "^alex .*desktop home"
 out=$(RTFC_HOME="$A" "$BIN" contacts); expect "alex sees sasha home" "$out" "^sasha .*laptop home"
 
+step "hints: alex advertises one more address, applied to the running daemon"
+out=$(RTFC_HOME="$A" "$BIN" hints add 127.0.0.2); expect "applied live" "$out" "Applied to the running daemon"
+out=$(RTFC_HOME="$A" "$BIN" hints); expect "advertised now" "$out" "tcp:127.0.0.2:47901"
+
 step "sasha's Claude: tools/list + send"
 out=$(mcp "$B" \
   '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
@@ -119,6 +123,8 @@ out=$(RTFC_HOME="$A" "$BIN" inbox --all); expect "message marked answered" "$out
 step "sasha: the reply parked"
 out=$(RTFC_HOME="$B" "$BIN" statusline </dev/null); expect "sasha's status line shows one from alex" "$out" "^📨 1 · alex$"
 out=$(RTFC_HOME="$B" "$BIN" inbox); expect "reply parked from alex/desktop" "$out" "parked +alex/desktop: Poison messages go to a dead-letter queue"
+
+out=$(RTFC_HOME="$B" "$BIN" contacts); expect "sasha learned alex's new hint from his hello" "$out" "tcp:127.0.0.2:47901"
 
 step "auto-answer: alex lets a (fake) headless claude answer sasha"
 mkdir -p "$E/scope"; echo "Poison messages go to a dead-letter queue after 5 attempts." > "$E/scope/RETRIES.md"
