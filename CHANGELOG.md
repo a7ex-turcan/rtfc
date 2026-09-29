@@ -20,7 +20,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- A problem recording the addresses a contact sends in its hello no longer closes the
+  session; the message still arrives, and the problem is logged.
 
 ## [0.7.0] - 2026-09-29
 

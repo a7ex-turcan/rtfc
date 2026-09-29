@@ -132,15 +132,23 @@ public sealed partial class Node : IAsyncDisposable
             return;
         }
 
-        var usable = hints.Where(h => h.Length <= 128 && ParseHints([h]).Count == 1).Distinct(StringComparer.Ordinal).ToArray();
-        var device = _db.GetDevice(trust.DeviceId);
-        if (usable.Length == 0 || device is null || device.PersonId != trust.PersonId || device.Status != DeviceStatus.Active || device.Endpoints.SequenceEqual(usable))
+        try
         {
-            return;
-        }
+            var usable = hints.Where(h => h.Length <= 128 && ParseHints([h]).Count == 1).Distinct(StringComparer.Ordinal).ToArray();
+            var device = _db.GetDevice(trust.DeviceId);
+            if (usable.Length == 0 || device is null || device.PersonId != trust.PersonId || device.Status != DeviceStatus.Active || device.Endpoints.SequenceEqual(usable))
+            {
+                return;
+            }
 
-        _db.UpsertDevice(device with { Endpoints = usable });
-        _logger.LogInformation("{Person}/{Device} is now reachable at {Hints}", Ids.Fingerprint(trust.PersonId), device.Name, string.Join(", ", usable));
+            _db.UpsertDevice(device with { Endpoints = usable });
+            _logger.LogInformation("{Person}/{Device} is now reachable at {Hints}", Ids.Fingerprint(trust.PersonId), device.Name, string.Join(", ", usable));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Learning is a courtesy on the way into a session; the session, and the message behind it, must not pay for a failure here.
+            _logger.LogWarning(ex, "Could not record the hints {Person} sent in its hello", Ids.Fingerprint(trust.PersonId));
+        }
     }
 
     // ---- invite and accept (spec §5.1) ----

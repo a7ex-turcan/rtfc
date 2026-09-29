@@ -97,6 +97,10 @@ public sealed class TestNode : IAsyncDisposable
     public static void AssertAccepted(AcceptResult result) =>
         Assert.True(result.Status == AcceptStatus.Accepted, $"Accept: {result.Status}{(result.Reason is null ? "" : ": " + result.Reason)}");
 
+    /// <summary>A send that did not arrive says why, so a flaky runner leaves more than "failed" behind.</summary>
+    public static void AssertDelivered(SendResult result) =>
+        Assert.True(result.Status == SendStatus.Delivered, $"Send: {result.Status}{(result.Reason is null ? "" : ": " + result.Reason)}");
+
     /// <summary>Tests want the pump to run often and entries to live long unless a test says otherwise.</summary>
     public static readonly OutboxSettings DefaultOutbox = new(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(500), TimeSpan.FromDays(30));
 
