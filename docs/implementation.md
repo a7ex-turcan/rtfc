@@ -275,6 +275,7 @@ block per version.
 | 3 | 0.3.0 | `auto_note` renamed to `note` (it serves every kind of message); the `sent` table; the `notice` inbox kind |
 | 4 | 0.4.0 | `sent.project_id`: where an answer to something sent lands (project-addressed messages, spec §7.6); `projects` and `inbox.project_id`, in the schema since v1, come into use |
 | 5 | 0.6.0 | `contacts.auto_session`: the Claude Code session that answers a contact in `auto_session` mode (spec §7.3) |
+| `SslStream.ReadAsync` fills one read from every TLS record it has already buffered, so a reader that must stop exactly at the end of one frame cannot: the old hello-only reader ate the first bytes of a frame that arrived right behind the hello, and the session died with a bogus frame length (`closed_before_ack` for the sender). Seen on a busy macOS CI runner; `PeerSessionTests.Frames_sent_right_behind_the_hello_reach_a_peer_whose_reads_lag` recreates it on every OS | the release and CI runs of v0.7.0, then the test against the code before the fix | 2026-09-29 |
 
 ## Known gaps
 

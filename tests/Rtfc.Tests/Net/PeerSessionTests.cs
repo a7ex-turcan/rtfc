@@ -87,6 +87,32 @@ public class PeerSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Frames_sent_right_behind_the_hello_reach_a_peer_whose_reads_lag()
+    {
+        // A busy macOS runner read a client's hello only after the message behind it had arrived too, and the message lost its
+        // first bytes: SslStream fills one read from every record it has buffered, and the hello's reader was thrown away.
+        // Sixteen bytes is the smallest buffer a pipe reader rents, so a hello that does not end on a multiple of it is the case.
+        var hint = new[] { "tcp:10.0.0.1:1", "tcp:10.0.0.1:12" }
+            .First(h => FrameCodec.Encode(Frames.Serialize(new HelloFrame(HelloFrame.CurrentVersion, 3, [h]))).Length % 16 != 0);
+        var ack = new AckFrame("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", AckStatus.Ok);
+        var (server, client) = await ConnectAsync(
+            serverAnchors: [_alex.PersonCa, _sasha.PersonCa], clientAnchors: [_sasha.PersonCa, _alex.PersonCa],
+            clientHints: [hint], slowServerReads: true,
+            onClientConnected: async c =>
+            {
+                await c.SendAsync(ack, TestContext.Current.CancellationToken);
+                await c.SendAsync(new ByeFrame(), TestContext.Current.CancellationToken);
+            });
+        await using (server)
+        await using (client)
+        {
+            Assert.Equal([hint], server.RemoteHello.Hints!);
+            Assert.Equal(ack, await server.ReceiveAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(new ByeFrame(), await server.ReceiveAsync(TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Fact]
     public async Task A_client_that_speaks_plaintext_is_dropped_by_the_handshake()
     {
         var transport = new TcpTransport(0);
@@ -146,7 +172,8 @@ public class PeerSessionTests : IAsyncLifetime
     }
 
     private async Task<(PeerSession Server, PeerSession Client)> ConnectAsync(
-        X509Certificate2[] serverAnchors, X509Certificate2[] clientAnchors)
+        X509Certificate2[] serverAnchors, X509Certificate2[] clientAnchors,
+        string[]? clientHints = null, bool slowServerReads = false, Func<PeerSession, Task>? onClientConnected = null)
     {
         var transport = new TcpTransport(0);
         var serverSide = new TaskCompletionSource<PeerSession>();
@@ -154,7 +181,8 @@ public class PeerSessionTests : IAsyncLifetime
         {
             try
             {
-                serverSide.SetResult(await PeerSession.AcceptAsync(stream, _alex, serverAnchors, 1, null, TestContext.Current.CancellationToken));
+                var inbound = slowServerReads ? new LaggingReadStream(stream) : stream;
+                serverSide.SetResult(await PeerSession.AcceptAsync(inbound, _alex, serverAnchors, 1, null, TestContext.Current.CancellationToken));
                 // Keep the stream alive until the session is disposed by the test.
                 await serverSide.Task.ContinueWith(_ => Task.Delay(Timeout.Infinite), TaskScheduler.Default).Unwrap();
             }
@@ -168,13 +196,109 @@ public class PeerSessionTests : IAsyncLifetime
         {
             var raw = await transport.ConnectAsync(_alex.DeviceId, [EndpointHint.ForTcp("127.0.0.1", transport.Port)], TestContext.Current.CancellationToken)
                 ?? throw new InvalidOperationException("The loopback transport did not connect.");
-            var client = await PeerSession.ConnectAsync(raw, _sasha, clientAnchors, 3, null, TestContext.Current.CancellationToken);
+            var client = await PeerSession.ConnectAsync(raw, _sasha, clientAnchors, 3, clientHints, TestContext.Current.CancellationToken);
+            if (onClientConnected is not null)
+            {
+                await onClientConnected(client);
+            }
+
             var server = await serverSide.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
             return (server, client);
         }
         finally
         {
             await transport.StopAsync();
+        }
+    }
+
+    /// <summary>
+    /// The far end as a starved runner sees it. The handshake is delivered one TLS record per read, so nothing beyond it sits in
+    /// SslStream's buffer when it ends; the reads after it come late, and bring everything the peer sent in the meantime at once.
+    /// Reads and writes alternate R W R W R through a handshake with client certificates on TLS 1.2 and 1.3 alike, and the third
+    /// R is the hello's, so bulk mode starts with the second read that follows a write.
+    /// </summary>
+    private sealed class LaggingReadStream(Stream inner) : Stream
+    {
+        private const int RecordHeader = 5;
+        private static readonly TimeSpan Lag = TimeSpan.FromMilliseconds(150);
+        private bool _lastWasWrite;
+        private int _readsAfterWrites;
+        private int _recordRemaining;
+
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => inner.CanWrite;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_lastWasWrite)
+            {
+                _lastWasWrite = false;
+                _readsAfterWrites++;
+            }
+
+            if (_readsAfterWrites >= 2)
+            {
+                await Task.Delay(Lag, cancellationToken);
+                return await inner.ReadAsync(buffer, cancellationToken);
+            }
+
+            if (buffer.Length < RecordHeader)
+            {
+                return await inner.ReadAsync(buffer, cancellationToken);
+            }
+
+            if (_recordRemaining == 0)
+            {
+                await inner.ReadExactlyAsync(buffer[..RecordHeader], cancellationToken);
+                _recordRemaining = (buffer.Span[3] << 8) | buffer.Span[4];
+                var body = Math.Min(_recordRemaining, buffer.Length - RecordHeader);
+                await inner.ReadExactlyAsync(buffer.Slice(RecordHeader, body), cancellationToken);
+                _recordRemaining -= body;
+                return RecordHeader + body;
+            }
+
+            var rest = Math.Min(_recordRemaining, buffer.Length);
+            await inner.ReadExactlyAsync(buffer[..rest], cancellationToken);
+            _recordRemaining -= rest;
+            return rest;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException("The session reads asynchronously.");
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            _lastWasWrite = true;
+            return inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            _lastWasWrite = true;
+            inner.Write(buffer, offset, count);
+        }
+
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 }

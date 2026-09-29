@@ -32,10 +32,10 @@ public sealed class PeerSession : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private bool _disposed;
 
-    private PeerSession(SslStream tls, X509Certificate2 remoteCertificate, SessionTrust trust, HelloFrame remoteHello)
+    private PeerSession(SslStream tls, PipeReader reader, X509Certificate2 remoteCertificate, SessionTrust trust, HelloFrame remoteHello)
     {
         _tls = tls;
-        _reader = PipeReader.Create(tls, new StreamPipeReaderOptions(leaveOpen: true));
+        _reader = reader;
         RemoteCertificate = remoteCertificate;
         Trust = trust;
         RemoteHello = remoteHello;
@@ -100,6 +100,10 @@ public sealed class PeerSession : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var tls = new SslStream(transport, leaveInnerStreamOpen: false);
+        // One reader for the whole session, hello included. A reader just for the hello cannot stop exactly at its end: SslStream
+        // fills a read from every record it has already buffered, so a frame that arrived right behind the hello would lose its
+        // first bytes to a reader that was then thrown away. A busy macOS runner did exactly that (PeerSessionTests).
+        var reader = PipeReader.Create(tls, new StreamPipeReaderOptions(leaveOpen: true));
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -119,40 +123,31 @@ public sealed class PeerSession : IAsyncDisposable
             var hello = new HelloFrame(HelloFrame.CurrentVersion, deviceListVersion, hints is { Count: > 0 } ? [.. hints] : null);
             await tls.WriteAsync(FrameCodec.Encode(Frames.Serialize(hello)), timeout.Token).ConfigureAwait(false);
 
-            var session = new PeerSession(tls, leaf, trust, await ReadHelloAsync(tls, timeout.Token).ConfigureAwait(false));
-            return session;
+            return new PeerSession(tls, reader, leaf, trust, await ReadHelloAsync(reader, timeout.Token).ConfigureAwait(false));
         }
         catch
         {
+            await reader.CompleteAsync().ConfigureAwait(false);
             await tls.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
 
-    private static async Task<HelloFrame> ReadHelloAsync(SslStream tls, CancellationToken cancellationToken)
+    private static async Task<HelloFrame> ReadHelloAsync(PipeReader reader, CancellationToken cancellationToken)
     {
-        // A reader just for the hello: it must not buffer past it, or the session's reader loses frames.
-        var reader = PipeReader.Create(tls, new StreamPipeReaderOptions(leaveOpen: true, bufferSize: FrameCodec.HeaderBytes, minimumReadSize: 1));
-        try
+        var payload = await FrameCodec.ReadAsync(reader, cancellationToken).ConfigureAwait(false)
+            ?? throw new ProtocolException("The peer closed the session before saying hello.");
+        if (Frames.Parse(payload) is not HelloFrame hello)
         {
-            var payload = await FrameCodec.ReadAsync(reader, cancellationToken).ConfigureAwait(false)
-                ?? throw new ProtocolException("The peer closed the session before saying hello.");
-            if (Frames.Parse(payload) is not HelloFrame hello)
-            {
-                throw new ProtocolException("The first frame must be a hello.");
-            }
-
-            if (hello.V != HelloFrame.CurrentVersion)
-            {
-                throw new ProtocolException($"The peer speaks protocol version {hello.V}; this build speaks {HelloFrame.CurrentVersion}.");
-            }
-
-            return hello;
+            throw new ProtocolException("The first frame must be a hello.");
         }
-        finally
+
+        if (hello.V != HelloFrame.CurrentVersion)
         {
-            await reader.CompleteAsync().ConfigureAwait(false);
+            throw new ProtocolException($"The peer speaks protocol version {hello.V}; this build speaks {HelloFrame.CurrentVersion}.");
         }
+
+        return hello;
     }
 
     private static SessionTrust Classify(X509Certificate2 leaf, IReadOnlyCollection<X509Certificate2> anchors)

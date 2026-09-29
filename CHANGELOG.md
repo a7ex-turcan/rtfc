@@ -22,6 +22,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ### Fixed
 
+- A message sent the instant a session opened could fail with `closed_before_ack` when the
+  receiver was slow to read the hello: the receiving side lost the first bytes of the frame
+  behind it and dropped the session. The hello now goes through the session's own reader,
+  so nothing behind it is lost.
 - A problem recording the addresses a contact sends in its hello no longer closes the
   session; the message still arrives, and the problem is logged.
 
