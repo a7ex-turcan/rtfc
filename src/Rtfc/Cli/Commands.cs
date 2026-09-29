@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
@@ -144,6 +145,18 @@ public static class Commands
             defaulted = true;
         }
 
+        // Session mode answers in the Claude Code session this runs in (spec §7.3): /rtfc:auto's shell command sees its id.
+        string? session = null;
+        if (target.mode == "session")
+        {
+            session = Environment.GetEnvironmentVariable("CLAUDE_CODE_SESSION_ID");
+            if (string.IsNullOrEmpty(session))
+            {
+                ctx.Error.WriteLine("rtfc auto: session mode answers in the Claude Code session you set it from. Run /rtfc:auto <contact> session inside that session.");
+                return 1;
+            }
+        }
+
         using var client = await ConnectAsync(ctx).ConfigureAwait(false);
         if (client is null)
         {
@@ -162,7 +175,7 @@ public static class Commands
         var changed = new List<string>();
         foreach (var handle in handles)
         {
-            var result = await client.SetAutoAsync(handle, target.mode, scope, ctx.CancellationToken).ConfigureAwait(false);
+            var result = await client.SetAutoAsync(handle, target.mode, scope, session, ctx.CancellationToken).ConfigureAwait(false);
             if (result.Status != ManagementStatus.Ok)
             {
                 ctx.Error.WriteLine($"rtfc auto: {result.Reason}");
@@ -179,11 +192,17 @@ public static class Commands
 
         var who = string.Join(", ", changed);
         var undo = all ? "rtfc auto --all off" : $"rtfc auto {changed[0]} off";
-        ctx.Out.WriteLine(target.mode == "off"
-            ? $"Messages from {who} park until you look at them."
-            : $"Messages from {who} are now answered by a headless, read-only Claude that can see {scope}"
-              + (defaulted ? " (the directory Claude is running in; pass --scope to choose another)" : "")
-              + $" and nothing else. It never writes, never runs commands, and its answers arrive marked as automatic. Turn it off with: {undo}");
+        ctx.Out.WriteLine(target.mode switch
+        {
+            "off" => $"Messages from {who} park until you look at them.",
+            "session" => $"Messages from {who} now come into this Claude Code session as they arrive: Claude gives you the gist and asks Accept or "
+                + "Decline, and nothing runs until you accept. The session receives them only while it is open and was started with "
+                + "--dangerously-load-development-channels plugin:rtfc@rtfc (rtfc is the archive's marketplace; another name changes the part after @); "
+                + $"otherwise they wait in /rtfc:inbox. Turn it off with: {undo}",
+            _ => $"Messages from {who} are now answered by a headless, read-only Claude that can see {scope}"
+                + (defaulted ? " (the directory Claude is running in; pass --scope to choose another)" : "")
+                + $" and nothing else. It never writes, never runs commands, and its answers arrive marked as automatic. Turn it off with: {undo}",
+        });
         if (all && target.mode != "off")
         {
             ctx.Out.WriteLine("Contacts you accept later still park until you turn this on for them.");
@@ -525,6 +544,186 @@ public static class Commands
 
         return 0;
     }
+
+    /// <summary>
+    /// <c>rtfc hook</c>, the plugin's hook for prompts, tool calls and turn ends (spec §7.3): the accept gate. A message rtfc pushed
+    /// into a session, recognised by the channel tag Claude Code wraps it in, opens a gate on that session. While it is open, every
+    /// tool but AskUserQuestion is denied, whatever the session's permission mode, so Claude can only give the user the gist and
+    /// ask; the user's Accept, which Claude Code reports through the PostToolUse event, lifts it, and the turn ending closes it.
+    /// Every prompt and tool call of every session passes through here, so for anything else it is quiet and quick, and it never
+    /// fails a prompt or a tool call of its own accord.
+    /// </summary>
+    public static async Task<int> HookAsync(CommandContext ctx, IReadOnlyList<string> args, TextReader stdin)
+    {
+        if (args.Count > 0)
+        {
+            ctx.Error.WriteLine("usage: rtfc hook   (reads Claude Code's hook event from stdin)");
+            return 2;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(await stdin.ReadToEndAsync(ctx.CancellationToken).ConfigureAwait(false));
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            var session = StringProperty(root, "session_id");
+            if (session is null || SessionGates.PathFor(ctx.Home, session) is null)
+            {
+                return 0;
+            }
+
+            switch (StringProperty(root, "hook_event_name"))
+            {
+                case "UserPromptSubmit":
+                    if (PushedMessage(StringProperty(root, "prompt")) is { } pushed)
+                    {
+                        SessionGates.Write(ctx.Home, session, new SessionGate(pushed.Id, pushed.From, GateState.Pending));
+                    }
+
+                    break;
+
+                case "PreToolUse":
+                    if (SessionGates.Read(ctx.Home, session) is { State: not GateState.Accepted } gate && StringProperty(root, "tool_name") != "AskUserQuestion")
+                    {
+                        ctx.Out.WriteLine(Deny(gate));
+                    }
+
+                    break;
+
+                case "PostToolUse":
+                    if (StringProperty(root, "tool_name") == "AskUserQuestion"
+                        && SessionGates.Read(ctx.Home, session) is { State: GateState.Pending } asked
+                        && Decision(root) is { } accepted)
+                    {
+                        SessionGates.Write(ctx.Home, session, asked with { State = accepted ? GateState.Accepted : GateState.Declined });
+                        if (asked.Id.Length > 0)
+                        {
+                            await NoteDecisionAsync(ctx, asked.Id, accepted).ConfigureAwait(false);
+                        }
+                    }
+
+                    break;
+
+                case "Stop":
+                case "SessionStart":
+                    SessionGates.Clear(ctx.Home, session);
+                    break;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>The user's answer to the Accept/Decline question, read from the answers alone: the echoed options name both.</summary>
+    private static bool? Decision(JsonElement root)
+    {
+        if (!root.TryGetProperty("tool_response", out var response) || response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("answers", out var answers) || answers.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        foreach (var answer in answers.EnumerateObject())
+        {
+            var value = answer.Value.ValueKind == JsonValueKind.String ? answer.Value.GetString()?.Trim() : null;
+            if (string.Equals(value, "Accept", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(value, "Decline", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The PreToolUse denial: the documented form, and the older decision/reason pair that some builds still read.</summary>
+    private static string Deny(SessionGate gate)
+    {
+        var reason = gate.State == GateState.Declined
+            ? $"rtfc: the user declined {gate.From}'s message, so tools stay blocked until this turn ends. Tell the user and stop."
+            : $"rtfc: {gate.From}'s message has not been accepted by the user, so every tool but AskUserQuestion is blocked. "
+                + "Give the user the gist and ask them with AskUserQuestion, options \"Accept\" and \"Decline\".";
+        return new JsonObject
+        {
+            ["decision"] = "block",
+            ["reason"] = reason,
+            ["hookSpecificOutput"] = new JsonObject
+            {
+                ["hookEventName"] = "PreToolUse",
+                ["permissionDecision"] = "deny",
+                ["permissionDecisionReason"] = reason,
+            },
+        }.ToJsonString();
+    }
+
+    private static async Task NoteDecisionAsync(CommandContext ctx, string id, bool accepted)
+    {
+        try
+        {
+            using var client = new DaemonClient(ctx.Home, TimeSpan.FromSeconds(2));
+            await client.GateDecisionAsync(id, accepted, ctx.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or OperationCanceledException or JsonException)
+        {
+            // The gate is what matters; the note on the message is a courtesy.
+        }
+    }
+
+    /// <summary>
+    /// The id and sender of a message rtfc pushed into a session, read from the channel tag Claude Code wraps it in
+    /// (<c>&lt;channel source="plugin:rtfc:rtfc" rtfc_id="…" from="…"&gt;</c>); null for any other prompt. The first such tag wins:
+    /// the tag's attributes come from rtfc's own event, and a contact's text, which follows it, can only ever imitate a later one.
+    /// The sender is cut down to handle characters before anything shows it.
+    /// </summary>
+    public static (string Id, string From)? PushedMessage(string? prompt)
+    {
+        for (var start = prompt?.IndexOf("<channel ", StringComparison.Ordinal) ?? -1; start >= 0; start = prompt!.IndexOf("<channel ", start + 1, StringComparison.Ordinal))
+        {
+            var end = prompt!.IndexOf('>', start);
+            if (end < 0)
+            {
+                return null;
+            }
+
+            var tag = prompt[start..end];
+            if (Attribute(tag, "rtfc_id") is { Length: > 0 } id)
+            {
+                var from = new string([.. (Attribute(tag, "from") ?? "").Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.').Take(32)]);
+                return (id, from.Length > 0 ? from : "a contact");
+            }
+        }
+
+        return null;
+
+        static string? Attribute(string tag, string name)
+        {
+            var marker = $" {name}=\"";
+            var start = tag.IndexOf(marker, StringComparison.Ordinal);
+            if (start < 0)
+            {
+                return null;
+            }
+
+            start += marker.Length;
+            var stop = tag.IndexOf('"', start);
+            return stop < 0 ? null : tag[start..stop];
+        }
+    }
+
+    private static string? StringProperty(JsonElement root, string name) =>
+        root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     /// <summary>The key (<see cref="ProjectPaths.Key"/>) of the session's directory in Claude Code's status line JSON: <c>workspace.project_dir</c>, else <c>cwd</c>.</summary>
     private static string? SessionDirectory(string json)

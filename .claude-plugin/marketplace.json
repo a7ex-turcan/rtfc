@@ -1,0 +1,12 @@
+{
+  "name": "rtfc",
+  "owner": { "name": "Alex Turcan" },
+  "description": "rtfc, Relay Tool For Contacts: the Claude Code plugin, installed from the release archive or from a clone of the repo.",
+  "plugins": [
+    {
+      "name": "rtfc",
+      "source": "./plugin",
+      "description": "Message between people's Claude Code sessions, with a parked inbox and opt-in auto-answer."
+    }
+  ]
+}

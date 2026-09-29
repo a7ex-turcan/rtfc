@@ -1,9 +1,11 @@
+using System.Text.Json.Nodes;
 using Rtfc.Cli;
 using Rtfc.Core;
 using Rtfc.Daemon;
 using Rtfc.Identity;
 using Rtfc.Mcp;
 using Rtfc.Storage;
+using Rtfc.Tests.Core;
 
 namespace Rtfc.Tests.Daemon;
 
@@ -128,6 +130,102 @@ public class DaemonTests
         await WaitUntilAsync(() => Leases(0));
         await client.ShutdownAsync(Ct);
         Assert.Equal(0, await second.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+    }
+
+    [Fact]
+    public async Task A_contact_in_session_mode_reaches_the_designated_session_as_a_channel_event()
+    {
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+        var daemon = Task.Run(() => DaemonHost.RunAsync(temp.Home, new DaemonOptions(IdleExit: false, LogToConsole: false), Ct), Ct);
+        using var client = new DaemonClient(temp.Home);
+        await WaitForStatusAsync(client, daemon);
+        await using var sasha = await TestNode.StartAsync("sasha", "laptop");
+        Assert.Equal(AcceptStatus.Accepted, (await sasha.Node.AcceptAsync((await client.InviteAsync(Ct)).Token, Ct)).Status);
+
+        // The session's own rtfc mcp, holding a lease that names it, as Claude Code starts it.
+        const string session = "1e93547f-1aaf-4ed0-b5b7-7ed9cfdab94c";
+        var input = new System.IO.Pipelines.Pipe();
+        var output = new LockedWriter();
+        var mcp = Task.Run(() => new McpServer(temp.Home, new StreamReader(input.Reader.AsStream()), output, new StringWriter(), temp.Home.Root, session).RunAsync(Ct), Ct);
+        await WaitUntilAsync(async () => (await client.TryStatusAsync(Ct))?.Leases == 1);
+        Assert.Equal(ManagementStatus.Ok, (await client.SetAutoAsync("sasha", "session", null, session, Ct)).Status);
+
+        var sent = await sasha.Node.SendAsync("alex", "Could you review PR 42?", Ct);
+        Assert.Equal(SendStatus.Delivered, sent.Status);
+
+        await WaitUntilAsync(() => Task.FromResult(output.Text.Contains("notifications/claude/channel", StringComparison.Ordinal)));
+        var notification = JsonNode.Parse(output.Text.Split('\n').Single(line => line.Contains("notifications/claude/channel", StringComparison.Ordinal)))!;
+        Assert.Equal(sent.MessageId, notification["params"]!["meta"]!["rtfc_id"]!.GetValue<string>());
+        Assert.Equal("sasha", notification["params"]!["meta"]!["from"]!.GetValue<string>());
+        Assert.Contains("untrusted=\"true\">\nCould you review PR 42?\n</contact_message>", notification["params"]!["content"]!.GetValue<string>());
+        Assert.Contains("Sent into the Claude Code session", Assert.Single((await client.InboxAsync("parked", Ct)).Messages).Note);
+
+        await input.Writer.CompleteAsync();
+        await mcp.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await client.ShutdownAsync(Ct);
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+    }
+
+    [Fact]
+    public void A_push_reaches_the_newest_lease_of_an_open_session_and_nothing_else()
+    {
+        var sessions = new SessionChannels();
+        var pushed = new SessionEvent("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "sasha", "Hello.");
+        Assert.False(sessions.TryPush("s1", pushed));
+
+        var first = sessions.Open("s1");
+        Assert.True(sessions.TryPush("s1", pushed));
+        Assert.True(first.TryRead(out var received));
+        Assert.Equal(pushed, received);
+
+        // A newer lease for the same session takes over; the older one ending does not close it.
+        var second = sessions.Open("s1");
+        Assert.True(first.Completion.IsCompleted);
+        sessions.Close("s1", first);
+        Assert.True(sessions.TryPush("s1", pushed));
+        Assert.True(second.TryRead(out _));
+
+        sessions.Close("s1", second);
+        Assert.False(sessions.TryPush("s1", pushed));
+        Assert.False(sessions.TryPush("s2", pushed));
+    }
+
+    /// <summary>What the MCP server writes, readable while it writes from another thread.</summary>
+    private sealed class LockedWriter : TextWriter
+    {
+        private readonly Lock _lock = new();
+        private readonly System.Text.StringBuilder _text = new();
+
+        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+
+        public string Text
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _text.ToString();
+                }
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (_lock)
+            {
+                _text.Append(value);
+            }
+        }
+
+        public override void Write(string? value)
+        {
+            lock (_lock)
+            {
+                _text.Append(value);
+            }
+        }
     }
 
     [Fact]

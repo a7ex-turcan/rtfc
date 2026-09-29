@@ -70,7 +70,7 @@ jobs:
       - name: JSON is well-formed
         run: |
           set -euo pipefail
-          find plugin -name '*.json' -print0 | xargs -0 -n1 jq empty
+          find plugin .claude-plugin -name '*.json' -print0 | xargs -0 -n1 jq empty
 
       # The version is declared in three places (see CHANGELOG.md); a release that moves
       # one and not the others ships a tool and a plugin that disagree about what they are.

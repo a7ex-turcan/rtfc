@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS contacts (
   auto_owner_device   TEXT,                       -- which of MY devices auto-answers
   read_receipts       INTEGER NOT NULL DEFAULT 1,
   device_list_version INTEGER NOT NULL DEFAULT 0,
-  rev                 INTEGER NOT NULL DEFAULT 0  -- own-device sync, LWW
+  rev                 INTEGER NOT NULL DEFAULT 0, -- own-device sync, LWW
+  auto_session        TEXT                        -- the Claude Code session that answers them in auto_session mode (spec §7.3, schema v5)
 );
 
 CREATE TABLE IF NOT EXISTS devices (             -- contacts' devices AND my own
@@ -145,4 +146,4 @@ CREATE TABLE IF NOT EXISTS sent (                -- what left this device, so re
 CREATE TABLE IF NOT EXISTS seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '5');

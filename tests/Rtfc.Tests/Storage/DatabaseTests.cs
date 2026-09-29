@@ -81,6 +81,26 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void A_version_4_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.5.x left it: contacts without a designated session.
+            db.Execute("ALTER TABLE contacts DROP COLUMN auto_session");
+            db.Execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        migrated.UpsertContact(new ContactRow(
+            "p_x", "sasha", [1, 2, 3], ContactStatus.Active, Now, InboundMode.AutoSession, AutoScope: null, AutoOwnerDevice: null,
+            ReadReceipts: true, DeviceListVersion: 0, Rev: 1, AutoSession: "3f5c2a1e-session"));
+        Assert.Equal("3f5c2a1e-session", migrated.GetContact("p_x")!.AutoSession);
+    }
+
+    [Fact]
     public void Projects_are_keyed_by_root_and_found_by_name_regardless_of_case()
     {
         using var db = Database.OpenInMemory();

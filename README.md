@@ -12,8 +12,9 @@ copy-pasting Claude output between terminals and chat windows.
   until you look. They survive relaunches.
 - **"Nobody's home" is immediate.** If none of the recipient's devices is online, you
   are told straight away. Nothing is queued behind your back.
-- **Auto-answer is opt-in, per contact.** A separate, read-only,
-  scoped Claude run answers for you. It never touches your working session.
+- **Auto-answer is opt-in, per contact.** Either in your own session, where Claude gives
+  you the gist and asks Accept or Decline before it acts, or by a separate, read-only,
+  scoped Claude while you are away.
 - **Sources** (coming last): Jira, Confluence, Bitbucket and GitHub notifications in the
   same inbox, scoped to the project they belong to.
 
@@ -21,10 +22,12 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.5.2, Phases 1, 2 and 4, and messages addressed to a project.** Two people on
-one LAN exchange messages between their Claude Code sessions, a scoped, read-only Claude
-can answer a contact for you, replies to someone who has gone wait until they are back, and
-a message can be sent to one of the other person's projects. See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
+**Status: 0.5.2, Phases 1, 2, 4 and 7, and messages addressed to a project.** Two people on
+one LAN exchange messages between their Claude Code sessions; a contact's message can come
+straight into your live session, where Claude asks you Accept or Decline and then acts; a
+scoped, read-only Claude can answer while you are away; replies to someone who has gone
+wait until they are back; and a message can be sent to one of the other person's projects.
+See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
 [`docs/spec.md`](docs/spec.md) for the design.
 
 ---
@@ -51,7 +54,7 @@ Download the archive for your platform from the
 [latest release](https://github.com/a7ex-turcan/rtfc/releases/latest) (`linux-x64`,
 `osx-arm64` or `win-x64`), extract it somewhere permanent, and put that directory on your
 `PATH`. Keep the files together: `rtfc` loads its SQLite library from its own directory,
-and the `plugin/` folder next to it is what Claude Code loads in step 3.
+and the folder is also the Claude Code marketplace that step 3 installs the plugin from.
 
 ```bash
 mkdir -p ~/.local/share/rtfc
@@ -66,7 +69,7 @@ because it isn't signed; `xattr -dr com.apple.quarantine ~/.local/share/rtfc` cl
 `Path`.
 
 The plugin calls `rtfc` from `PATH`, so this matters. To upgrade, extract the new release
-over the old one.
+over the old one, then `claude plugin marketplace update rtfc && claude plugin update rtfc@rtfc`.
 
 If you have the .NET 10 SDK and prefer the framework-dependent tool, each release also
 carries the nupkg: `dotnet tool install -g rtfc --add-source <folder with the nupkg>`. And
@@ -101,26 +104,33 @@ new person and every contact has to re-invite you.
   default it is your hostname plus every non-loopback IPv4 address. If the other person
   can't reach any of those, set the right one here or in `config.json` (see below).
 
-### 3. Load the plugin in Claude Code
+### 3. Install the plugin in Claude Code
+
+The extracted folder is a Claude Code plugin marketplace with one plugin in it. Register it
+once and install the plugin; every session loads it from then on, in every project:
 
 ```bash
-claude --plugin-dir ~/.local/share/rtfc/plugin
+claude plugin marketplace add ~/.local/share/rtfc      # the folder from step 1
+claude plugin install rtfc@rtfc
 ```
 
-The flag is per session, so an alias saves typing until there is a marketplace entry:
-`alias claude='claude --plugin-dir ~/.local/share/rtfc/plugin'`. (From a clone of this
-repo, `./plugin` works the same.)
-
-Sanity check, inside that session: `/rtfc:contacts` should say you have no contacts yet.
+Sanity check, in a new session: `/rtfc:contacts` should say you have no contacts yet.
 Outside it, `rtfc daemon status` shows the daemon that the session started. **The first
 time the daemon listens, macOS and Windows show a firewall prompt: allow it**, or nobody
 can reach you.
+
+From a clone of this repo, `claude --plugin-dir ./plugin` loads the plugin for one session,
+and `claude plugin marketplace add .` registers the clone as the marketplace instead of the
+release (the two carry the same manifest, so register one or the other). Session mode
+(step 7) needs the installed plugin, not `--plugin-dir`.
 
 The plugin adds:
 
 - An MCP server, `rtfc mcp`, with six tools: `contacts`, `send`, `inbox_list`,
   `inbox_open`, `inbox_reply`, `inbox_dismiss`.
-- A SessionStart hook, `rtfc daemon ensure`, that starts the daemon when a session opens.
+- Hooks: `rtfc daemon ensure` starts the daemon when a session opens, and `rtfc hook` runs
+  on prompts, tool calls and turn ends to hold a contact's message in your session until
+  you accept it (step 7). For anything else it does nothing.
 - Slash commands: `/rtfc:init`, `/rtfc:invite`, `/rtfc:accept <token>`, `/rtfc:contacts`,
   `/rtfc:inbox`, `/rtfc:auto`, `/rtfc:remove`, `/rtfc:block`, `/rtfc:away`, `/rtfc:rename`,
   `/rtfc:receipts`.
@@ -185,7 +195,49 @@ reply expires undelivered after a week, you get a notice in your inbox with its 
 
 ### 7. Let your Claude answer for you
 
-Per contact, opt in:
+This is what rtfc is for: Sasha asks your Claude something, and gets an answer from your
+code, with you deciding how much your Claude may do about it. Two modes, set per contact.
+
+#### In your session: you accept, Claude acts (experimental)
+
+Start the session you work in with rtfc as a channel, and designate it for a contact:
+
+```bash
+claude --dangerously-load-development-channels plugin:rtfc@rtfc    # an alias saves typing
+/rtfc:auto sasha session                                          # or: /rtfc:auto --all session
+```
+
+From then on Sasha's messages come into that session as they arrive, even while you are
+idle, and this happens:
+
+1. Claude tells you the gist of the message in a sentence or two.
+2. It asks you **Accept** or **Decline**. Until you answer, every tool is blocked, whatever
+   mode the session runs in: `--dangerously-skip-permissions`, auto mode, accept edits, all
+   the same. The message cannot make Claude do anything on its own.
+3. **Accept**, and Claude does what the message asks with the session's normal permissions
+   and everything it already has: your repo, your context, `git`, `gh`. Then it answers
+   Sasha with `inbox_reply`. **Decline**, and it says so and stops; the message stays in
+   `/rtfc:inbox` for you.
+
+The gate is the plugin's hooks, not a request to the model: they deny every tool but the
+question until Claude Code reports your Accept, and the turn ending closes it again. A
+contact can never approve anything in your session. The message also waits in your inbox
+with a note, because rtfc cannot tell whether the session received it.
+
+Good to know:
+
+- Channels are a Claude Code **research preview**: the flag is per session and hidden from
+  `claude --help`, and a Team or Enterprise organisation has to allow channels first
+  (`channelsEnabled` in managed settings). `plugin:rtfc@rtfc` is the plugin as step 3
+  installed it; a marketplace registered under another name changes the part after `@`.
+- Only an interactive session receives messages; `claude -p` does not.
+- The same guards as the headless mode below apply: an answer written by a Claude is never
+  pushed, nor a thread more than two replies deep, nor anything past the hourly caps. Those
+  park with a note instead.
+- `/rtfc:auto sasha off` turns it off; running `/rtfc:auto sasha session` in another session
+  moves it there.
+
+#### Headless: a read-only Claude answers while you're away
 
 ```bash
 rtfc auto sasha headless --scope ~/src/payments-api      # or /rtfc:auto sasha headless --scope ...
@@ -204,9 +256,8 @@ cap on automatic answers.
 While it's on, a message from Sasha is answered by a **fresh, headless Claude** that can
 read the files under the scope directory and nothing else, and the answer goes back to
 her marked as automatic. You see the exchange in your inbox as `auto_done`, with the
-answer attached. This is the feature that makes rtfc more than chat: Sasha asks how your
-retry policy handles poison messages, and gets an answer from your code while you're at
-lunch.
+answer attached. Sasha asks how your retry policy handles poison messages, and gets an
+answer from your code while you're at lunch.
 
 What the answering Claude can and cannot do:
 
@@ -265,7 +316,8 @@ her, from either side. Neither needs her cooperation.
   database.
 - **Messages from contacts are data, not instructions.** Claude sees them wrapped as
   `<contact_message untrusted="true">` and is told to confirm with you before doing
-  anything a message asks. Claude Code's normal permission prompts remain the backstop.
+  anything a message asks. Claude Code's normal permission prompts remain the backstop, and
+  in session mode the plugin's hooks block every tool until you accept the message.
 - **Changing who can reach you is never a tool.** Invite, accept, auto-answer, remove and
   block are CLI commands that only run when you type the slash command. Don't pre-approve
   `Bash(rtfc:*)` in your permissions, or Claude could run them for you. A message saying
@@ -321,6 +373,8 @@ they never touch your real one.
 | Auto-answer never answers | `rtfc inbox` shows the note: scope missing, limit reached, or the run failed. `rtfcd.log` has the details. Is `claude` on the daemon's `PATH`? Set `claudePath` in `config.json` otherwise. A message from an automatic reply, or a thread two replies deep, is parked on purpose. |
 | A queued reply never arrives | Both of you need Claude Code open at the same time for a moment: your daemon delivers, theirs receives. `rtfc outbox` shows attempts; after a week it expires with a notice. |
 | A message sent to a project landed in the shared inbox | Its note says why: no project by that name, or several. A project is known once a Claude Code session with the plugin has run in it; the name is its git root's folder name (or the folder's, outside git). `rtfc inbox` shows which project each message went to. |
+| Session mode: a contact's message never shows up in the session | Was the session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`, and did you run `/rtfc:auto <contact> session` in that same session? Claude Code drops a channel event it cannot deliver without a word; the message still waits in `/rtfc:inbox`. Team/Enterprise organisations must allow channels. |
+| Session mode: Claude says rtfc blocked a tool | You have not accepted the contact's message yet, or you declined it. Answer the Accept/Decline question; the gate lifts for the rest of that turn and closes when the turn ends. |
 
 ### Limitations
 
@@ -338,6 +392,8 @@ they never touch your real one.
 - Projects are addressed by folder name. Two of yours with the same name can't be told
   apart, so a message for that name lands in the shared inbox with a note. Projects are
   never forgotten yet; `rtfc project forget` comes with sources (Phase 8).
+- Session mode rests on Claude Code's channels research preview, and rtfc cannot tell
+  whether a pushed message reached the session, so it also waits in the inbox.
 - Fingerprints are hex groups, not words.
 
 ### Roadmap
@@ -350,7 +406,7 @@ they never touch your real one.
 | 4 ✅ | Async: the reply outbox, read receipts, `away`, `rename`, dismiss, retention |
 | 5 | Multi-device: one person, several machines |
 | 6 | A self-hosted relay, for people with no shared network |
-| 7 | Auto-answer inside a live session, via Claude Code channels |
+| 7 ✅ | Auto-answer inside a live session, via Claude Code channels (experimental) |
 | 8 | Sources: Jira, Confluence, Bitbucket, GitHub |
 
 ---
@@ -380,7 +436,8 @@ See `CHANGELOG.md` for the versioning rules.
 | --- | --- |
 | `src/Rtfc/` | The single `rtfc` executable: `Identity/` keys and certificates · `Storage/` SQLite · `Protocol/` frames · `Net/` transport and TLS · `Core/` the node · `Daemon/` IPC · `Mcp/` the stdio server · `Cli/` the commands |
 | `tests/Rtfc.Tests/` | xUnit v3 |
-| `plugin/` | The Claude Code plugin: manifest, `.mcp.json`, the hook, one skill per slash command |
+| `plugin/` | The Claude Code plugin: manifest, `.mcp.json`, the hooks, one skill per slash command |
+| `.claude-plugin/marketplace.json` | Makes the repo root, and the release archive, a Claude Code marketplace named `rtfc` with the plugin in it |
 | `docs/spec.md` | The design spec, the source of truth |
 | `docs/implementation.md` | How the code realizes it, what was verified, departures and why |
 | `AGENTS.md` | Guidance for AI agents working in this repo; `CLAUDE.md` points at it |

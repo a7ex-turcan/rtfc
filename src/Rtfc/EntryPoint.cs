@@ -75,6 +75,8 @@ public static class EntryPoint
                     return await Commands.InboxAsync(ctx, rest).ConfigureAwait(false);
                 case "daemon":
                     return await Commands.DaemonAsync(ctx, rest).ConfigureAwait(false);
+                case "hook":
+                    return await Commands.HookAsync(ctx, rest, stdin ?? Console.In).ConfigureAwait(false);
                 case "statusline":
                     return Commands.Statusline(ctx, stdin ?? Console.In, Console.IsInputRedirected);
                 case "mcp":
@@ -127,6 +129,7 @@ public static class EntryPoint
           daemon run [--stay] | ensure | status | stop
           mcp                         stdio MCP server, launched by Claude Code
           statusline                  the status-bar segment
+          hook                        the plugin's hook, fed Claude Code's event JSON: the accept gate for a contact's message
           --version
         """;
 

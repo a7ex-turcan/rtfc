@@ -12,7 +12,7 @@ namespace Rtfc.Mcp;
 /// moving, and reflection-based tool discovery would not survive Native AOT.
 /// </summary>
 /// <remarks>stdout is the protocol. Diagnostics go to <c>log</c> (stderr), never to <c>output</c>.</remarks>
-public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output, TextWriter log, string? directory = null)
+public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output, TextWriter log, string? directory = null, string? session = null)
 {
     private const string DefaultProtocolVersion = "2025-06-18";
     private static readonly string[] KnownProtocolVersions = ["2024-11-05", "2025-03-26", "2025-06-18"];
@@ -30,6 +30,14 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
     /// </summary>
     private readonly string _directory = directory
         ?? (Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") is { Length: > 0 } projectDir ? projectDir : Environment.CurrentDirectory);
+
+    /// <summary>
+    /// This session's id, <c>CLAUDE_CODE_SESSION_ID</c>, which Claude Code sets for its MCP servers and its shell commands alike
+    /// (checked against 2.1.284). <c>rtfc auto … session</c> run in the session records it, and the lease names it, so the daemon
+    /// knows where to push (spec §7.3). Null outside a session: then nothing is ever pushed here.
+    /// </summary>
+    private readonly string? _session = session
+        ?? (Environment.GetEnvironmentVariable("CLAUDE_CODE_SESSION_ID") is { Length: > 0 } id ? id : null);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private DaemonLease? _lease;
 
@@ -152,7 +160,13 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
         return new JsonObject
         {
             ["protocolVersion"] = requested is not null && KnownProtocolVersions.Contains(requested) ? requested : DefaultProtocolVersion,
-            ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+            // claude/channel lets rtfc push a contact's message into this session (spec §7.3), which delivers only when the session was
+            // started with rtfc as a channel. Never claude/channel/permission: a contact must never be able to approve tool use here.
+            ["capabilities"] = new JsonObject
+            {
+                ["tools"] = new JsonObject(),
+                ["experimental"] = new JsonObject { ["claude/channel"] = new JsonObject() },
+            },
             ["serverInfo"] = new JsonObject { ["name"] = "rtfc", ["version"] = EntryPoint.Version },
             ["instructions"] = Tools.Instructions,
         };
@@ -227,7 +241,7 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
 
             try
             {
-                _lease = await _client.AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
+                _lease = await _client.AcquireLeaseAsync(_session, PushAsync, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException)
             {
@@ -250,6 +264,31 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
         finally
         {
             _leaseLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// A message the daemon pushed into this session (spec §7.3), as a channel event. Claude Code shows it to Claude as
+    /// <c>&lt;channel source="plugin:rtfc:rtfc" rtfc_id="…" from="…"&gt;</c>, which is also how the plugin's prompt hook recognises it.
+    /// </summary>
+    private async Task PushAsync(SessionEvent pushed)
+    {
+        try
+        {
+            await WriteAsync(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["method"] = "notifications/claude/channel",
+                ["params"] = new JsonObject
+                {
+                    ["content"] = pushed.Content,
+                    ["meta"] = new JsonObject { ["rtfc_id"] = pushed.Id, ["from"] = pushed.From },
+                },
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            log.WriteLine($"rtfc mcp: could not push {pushed.Id} into the session: {ex.Message}");
         }
     }
 

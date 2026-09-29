@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -53,6 +54,7 @@ public static class DaemonHost
         });
 
         var leases = new Leases(TimeProvider.System);
+        var sessions = new SessionChannels();
         builder.Services.AddSingleton(leases);
         builder.Services.AddSingleton(self);
         builder.Services.AddSingleton(db);
@@ -61,14 +63,14 @@ public static class DaemonHost
         builder.Services.AddSingleton(sp => new Node(
             home, self, db, transport,
             new NodeOptions(HintHosts.Resolve(config), config.AutoAnswer ?? new AutoAnswerConfig(), (config.Outbox ?? new OutboxConfig()).ToSettings()), claude,
-            TimeProvider.System, sp.GetRequiredService<ILogger<Node>>()));
+            TimeProvider.System, sp.GetRequiredService<ILogger<Node>>(), sessions));
 
         var app = builder.Build();
         var node = app.Services.GetRequiredService<Node>();
         var logger = app.Services.GetRequiredService<ILogger<Node>>();
         var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 
-        MapEndpoints(app, node, leases, lifetime, options);
+        MapEndpoints(app, node, leases, sessions, lifetime, options);
 
         await node.StartAsync(cancellationToken).ConfigureAwait(false);
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -103,7 +105,7 @@ public static class DaemonHost
     /// AOT needs, once turned an <c>async (HttpContext) => …</c> lambda without one into an
     /// endpoint that answered 200 with an empty body; the IPC test guards against a repeat.
     /// </summary>
-    private static void MapEndpoints(WebApplication app, Node node, Leases leases, IHostApplicationLifetime lifetime, DaemonOptions options)
+    private static void MapEndpoints(WebApplication app, Node node, Leases leases, SessionChannels sessions, IHostApplicationLifetime lifetime, DaemonOptions options)
     {
         app.MapGet(IpcRoutes.Status, IResult () => Results.Json(new DaemonStatus(
             EntryPoint.Version, Environment.ProcessId, node.Self.PersonId, node.Self.Handle, node.Self.DeviceId, node.Self.DeviceName,
@@ -111,21 +113,45 @@ public static class DaemonHost
 
         // Held open for as long as the caller keeps the connection: that is the lease. It also ends the moment the daemon starts
         // stopping, so a session notices at once and shutdown does not wait out the host's timeout on every open session.
-        app.MapGet(IpcRoutes.Lease, async Task (HttpContext context) =>
+        // ?session=<Claude Code session id> also makes it the way messages are pushed into that session (spec §7.3), one JSON line each.
+        app.MapGet(IpcRoutes.Lease, async Task<IResult> (HttpContext context) =>
         {
             using var lease = leases.Acquire();
             using var held = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lifetime.ApplicationStopping);
-            context.Response.ContentType = "text/plain";
-            await context.Response.StartAsync(context.RequestAborted);
-            await context.Response.WriteAsync("lease\n", context.RequestAborted);
-            await context.Response.Body.FlushAsync(context.RequestAborted);
+            var session = context.Request.Query["session"].ToString();
+            var events = session.Length > 0 ? sessions.Open(session) : null;
             try
             {
-                await Task.Delay(Timeout.Infinite, held.Token);
+                context.Response.ContentType = "text/plain";
+                await context.Response.StartAsync(context.RequestAborted);
+                await context.Response.WriteAsync("lease\n", context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+                if (events is null)
+                {
+                    await Task.Delay(Timeout.Infinite, held.Token);
+                }
+                else
+                {
+                    await foreach (var pushed in events.ReadAllAsync(held.Token))
+                    {
+                        await context.Response.WriteAsync(JsonSerializer.Serialize(pushed, IpcJson.Default.SessionEvent) + "\n", held.Token);
+                        await context.Response.Body.FlushAsync(held.Token);
+                    }
+                }
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is OperationCanceledException or IOException)
             {
             }
+            finally
+            {
+                if (events is not null)
+                {
+                    sessions.Close(session, events);
+                }
+            }
+
+            // The response was written above; this only states the handler's type, which the request delegate generator needs.
+            return Results.Empty;
         });
 
         app.MapGet(IpcRoutes.Contacts, async Task<IResult> (HttpContext context) =>
@@ -190,6 +216,19 @@ public static class DaemonHost
                 ? Results.StatusCode(204)
                 : Results.Json(new IpcError($"No message with id '{id}'."), IpcJson.Default.IpcError, statusCode: 404));
 
+        app.MapPost(IpcRoutes.Inbox + "/{id}/gate", async Task<IResult> (string id, HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.GateRequest, context.RequestAborted);
+            if (request is null)
+            {
+                return Results.Json(new IpcError("A JSON body with 'accepted' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return node.RecordGateDecision(id, request.Accepted)
+                ? Results.StatusCode(204)
+                : Results.Json(new IpcError($"No message with id '{id}'."), IpcJson.Default.IpcError, statusCode: 404);
+        });
+
         app.MapGet(IpcRoutes.Outbox, IResult () => Results.Json(node.ListOutbox(), IpcJson.Default.OutboxViewArray));
 
         app.MapPost(IpcRoutes.Away, async Task<IResult> (HttpContext context) =>
@@ -246,7 +285,7 @@ public static class DaemonHost
                 return Results.Json(new IpcError("A JSON body with 'mode' and optional 'scope' is required."), IpcJson.Default.IpcError, statusCode: 400);
             }
 
-            return Results.Json(node.SetAutoMode(handle, request.Mode, request.Scope), IpcJson.Default.ManagementResult);
+            return Results.Json(node.SetAutoMode(handle, request.Mode, request.Scope, request.Session), IpcJson.Default.ManagementResult);
         });
 
         app.MapPost(IpcRoutes.Contacts + "/{handle}/remove", IResult (string handle) =>

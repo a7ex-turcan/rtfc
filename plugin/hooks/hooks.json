@@ -3,12 +3,22 @@
     "SessionStart": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "rtfc daemon ensure"
-          }
+          { "type": "command", "command": "rtfc daemon ensure" },
+          { "type": "command", "command": "rtfc hook" }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
     ]
   }
 }

@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -100,6 +100,18 @@ public sealed class Database : IDisposable
                 }
 
                 Execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'");
+                version = 4;
+            }
+
+            if (version < 5)
+            {
+                // v5 (auto_session, spec §7.3): which Claude Code session answers a contact.
+                if (!HasColumn("contacts", "auto_session"))
+                {
+                    Execute("ALTER TABLE contacts ADD COLUMN auto_session TEXT");
+                }
+
+                Execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -134,27 +146,27 @@ public sealed class Database : IDisposable
     public void UpsertContact(ContactRow contact) => Execute(
         """
         INSERT INTO contacts (person_id, handle, person_ca_cert, status, accepted_at, inbound_mode, auto_scope,
-                              auto_owner_device, read_receipts, device_list_version, rev)
+                              auto_owner_device, read_receipts, device_list_version, rev, auto_session)
         VALUES ($person_id, $handle, $person_ca_cert, $status, $accepted_at, $inbound_mode, $auto_scope,
-                $auto_owner_device, $read_receipts, $device_list_version, $rev)
+                $auto_owner_device, $read_receipts, $device_list_version, $rev, $auto_session)
         ON CONFLICT (person_id) DO UPDATE SET
           handle = excluded.handle, person_ca_cert = excluded.person_ca_cert, status = excluded.status,
           accepted_at = excluded.accepted_at, inbound_mode = excluded.inbound_mode, auto_scope = excluded.auto_scope,
           auto_owner_device = excluded.auto_owner_device, read_receipts = excluded.read_receipts,
-          device_list_version = excluded.device_list_version, rev = excluded.rev
+          device_list_version = excluded.device_list_version, rev = excluded.rev, auto_session = excluded.auto_session
         """,
         ("$person_id", contact.PersonId), ("$handle", contact.Handle), ("$person_ca_cert", contact.PersonCaCert),
         ("$status", contact.Status), ("$accepted_at", Time(contact.AcceptedAt)), ("$inbound_mode", contact.InboundMode),
         ("$auto_scope", contact.AutoScope), ("$auto_owner_device", contact.AutoOwnerDevice),
         ("$read_receipts", contact.ReadReceipts ? 1L : 0L), ("$device_list_version", contact.DeviceListVersion),
-        ("$rev", contact.Rev));
+        ("$rev", contact.Rev), ("$auto_session", contact.AutoSession));
 
     private const string ContactColumns =
-        "person_id, handle, person_ca_cert, status, accepted_at, inbound_mode, auto_scope, auto_owner_device, read_receipts, device_list_version, rev";
+        "person_id, handle, person_ca_cert, status, accepted_at, inbound_mode, auto_scope, auto_owner_device, read_receipts, device_list_version, rev, auto_session";
 
     private static ContactRow ReadContact(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), Blob(r, 2), r.GetString(3), Timestamps.ParseOrNull(StringOrNull(r, 4)),
-        r.GetString(5), StringOrNull(r, 6), StringOrNull(r, 7), r.GetInt64(8) != 0, r.GetInt64(9), r.GetInt64(10));
+        r.GetString(5), StringOrNull(r, 6), StringOrNull(r, 7), r.GetInt64(8) != 0, r.GetInt64(9), r.GetInt64(10), StringOrNull(r, 11));
 
     public ContactRow? GetContact(string personId) =>
         QuerySingle($"SELECT {ContactColumns} FROM contacts WHERE person_id = $id", ReadContact, ("$id", personId));

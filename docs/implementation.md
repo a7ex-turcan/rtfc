@@ -19,7 +19,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §5 contact lifecycle | `Node.CreateInvite`, `AcceptAsync`, `HandleInviteAcceptAsync`, `Pin`; `Core/InviteToken.cs`; remove and block in `Node.SetStatus` |
 | §7.1 envelope and frames | `Protocol/Frames.cs`, `FrameCodec.cs`, `Ulid.cs` |
 | §7.2 sending, nobody's home, the outbox | `Node.SendAsync`, `DeliverAsync`, `DeliverToDeviceAsync`; `Node.Outbox.cs` for the queue, the pump, expiry and notices |
-| §7.3 inbound modes | park in `Node.Receive`; `auto_headless` in `Node.AutoAnswer.cs` with `Core/ClaudeRunner.cs`; `rtfc auto` (`--all`, the default scope) in `Commands.AutoAsync` and `Cli/AutoScope.cs`; receipts in `Node.Open`, `QueueReceipt`, `ReceiveReceipt` |
+| §7.3 inbound modes | park in `Node.Receive`; `auto_headless` in `Node.AutoAnswer.cs` with `Core/ClaudeRunner.cs`; `auto_session` in `Node.AutoAnswer.PushToSession`/`SessionPrompt`/`KeptOutOfSession`, `Daemon/SessionChannels.cs` (the lease's `?session=`), `McpServer.PushAsync` and the accept gate in `Commands.HookAsync` with `Core/SessionGates.cs`; `rtfc auto` (`--all`, the default scope, `session`) in `Commands.AutoAsync` and `Cli/AutoScope.cs`; receipts in `Node.Open`, `QueueReceipt`, `ReceiveReceipt` |
 | §7.4 loop and abuse protection | `Node.AutoAnswer.SkipReason`; the inbound rate limit and size checks in `Node.Receive` |
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
 | §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
@@ -72,7 +72,7 @@ output. rtfc does the same, without Spectre.Console until it is shown to be AOT-
 **GitHub Releases only (§16, 0.1.1).** The spec planned `dotnet tool install` from NuGet
 for Phase 1. The owner decided against NuGet and against a plugin marketplace for now:
 colleagues download an archive from GitHub Releases. Each release still carries the
-dotnet-tool package for people with the SDK.
+dotnet-tool package for people with the SDK. Since 0.6.0 the archive is itself a local Claude Code marketplace (`.claude-plugin/marketplace.json` beside `plugin/`, the same file as at the repo root): session mode names the plugin as `plugin:rtfc@rtfc`, which needs an installed plugin, not `--plugin-dir`, and an installed plugin also spares every launch a flag.
 
 **`RTFC_HOME` (§3.1, 0.1.0).** Every path derives from `RtfcHome`, whose root is
 `~/.claude/rtfc` unless the environment variable says otherwise. It exists so tests, the
@@ -112,10 +112,9 @@ needs the directory for `send` and `inbox_list`.
 
 **Auto-answer's default scope is the session's directory, with a floor (§7.3).** `rtfc auto`
 resolves it in the CLI (`Cli/AutoScope.cs`), because the directory is the caller's, not
-the daemon's: `CLAUDE_PROJECT_DIR`, else the working directory. That Claude Code sets
-`CLAUDE_PROJECT_DIR` for a skill's `!` command was not confirmed (a headless `claude -p
-"/skill"` ran no turn); the working directory is the session's either way, and the command
-prints the directory it chose. The default refuses roots, the home folder and its
+the daemon's: `CLAUDE_PROJECT_DIR`, else the working directory. A skill's `!` command turns
+out not to get `CLAUDE_PROJECT_DIR` (see the verified table), so from `/rtfc:auto` it is the
+working directory, which is the session's; the command prints the directory it chose. The default refuses roots, the home folder and its
 ancestors, and `~/.claude`, because `Grep` has no path rules and a forgotten `cd ~` would
 otherwise expose SSH keys and credentials. `--all` is a loop in the CLI over the active
 contacts, so the management surface on the socket did not grow.
@@ -130,6 +129,27 @@ daemon restarted by the CLI (after a config change, say) idled out 30 seconds la
 an open session. The loop never starts a daemon itself, so `rtfc daemon stop` keeps its
 meaning. `DaemonTests` covers both halves against real daemons, and the session test fails
 without the loop.
+
+**Session auto-answer rides the lease, and the accept gate sits in hooks (§7.3, Phase 7).**
+Each `rtfc mcp` already held one open request to the daemon, so naming the session on it
+(`/v1/lease?session=`) made it the push path too, one JSON line per message, with no new
+connection and nothing to clean up when a session dies. The designation is the
+`CLAUDE_CODE_SESSION_ID` of the session `/rtfc:auto … session` ran in, which is also what the
+session's MCP server sees. The first design kept pushed messages out of any session that
+does not ask before using tools; the owner's colleagues all run in bypass mode, so it would
+have kept them out of every real session. The gate replaced it with one human decision per
+message that works in any mode: the hooks deny every tool but `AskUserQuestion` from the
+moment the pushed message becomes a prompt until Claude Code reports the user's Accept. It
+had to be hooks and not the MCP server, because only a hook sees the tool calls, and a hard
+gate and not an instruction, because in the spike Claude ran an unrequested `pwd` before
+asking anything. The gate's state is a file per session under `gates/`, not daemon state,
+because the `PreToolUse` hook runs on every tool call of every session and has to be fast,
+work with no daemon, and survive a daemon restart; the turn's `Stop` and the session's next
+`SessionStart` clear it. A pushed message stays parked because Claude Code drops
+undeliverable channel events silently: the note says where it went, never that it arrived.
+The channel tag's attributes come from rtfc's event, not from the contact, which is why the
+hook may trust `rtfc_id` there, and why the body defuses `</channel` as well as
+`</contact_message`.
 
 **Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
 status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the
@@ -219,6 +239,11 @@ they were checked; versions are what they were checked against.
 | On Windows a process started with redirected stdio still inherits its parent's inheritable handles, so a daemon spawned from a hook held the hook's stdout open and Claude Code 2.1.283 stayed busy on it | two Windows 11 machines, a session stuck on start; reproduced with a piped `daemon ensure` whose stdout closed only when the daemon stopped | 2026-09-28 |
 | A console process started with no window gets a fresh console in the system's OEM code page, and .NET uses that code page for redirected stdio too, so Claude Code saw `?? 1 � alex` | the status line on a Windows 11 VM; `PipeEncodingTests` with and without the fix | 2026-09-28 |
 | On Windows, the daemon a session's SessionStart hook started keeps running after that session ends, and the next session takes a lease on it | two Windows 11 machines, Claude Code 2.1.283: daemons started at 11:26 and 11:29 still served sessions started at 11:44 | 2026-09-28 |
+| Channels in Claude Code 2.1.284: `--dangerously-load-development-channels` works (hidden from `--help`), including `plugin:<name>@<marketplace>` for a plugin installed from a local directory marketplace; the event reaches an interactive session only, never `claude -p` nor `--input-format stream-json`; an idle session starts a turn on its own; an event sent right after `initialize` is dropped silently; Claude sees it as a user turn `<channel source="plugin:<plugin>:<server>" key="value"…>`; the connection opens with a `server/discover` request before `initialize` | throwaway probe servers and plugins, headless runs and two interactive sessions, transcripts and logs read afterwards | 2026-09-29 |
+| A `UserPromptSubmit` hook receives channel events like typed prompts, with `permission_mode` (`bypassPermissions` under `--dangerously-skip-permissions`), and `{"decision":"block"}` keeps the event from Claude; the user sees the reason and the original text. `SessionStart` input has no `permission_mode` | the probe plugin's hook, interactive session | 2026-09-29 |
+| In bypass mode a `PreToolUse` hook's deny (`hookSpecificOutput.permissionDecision: "deny"`, sent with the older `decision: "block"` beside it) stops the tool call, and Claude sees the reason as a tool error; `AskUserQuestion` still renders and waits for the human; its `PostToolUse` event carries `tool_response.answers` (question → chosen label) beside the echoed `questions`; `Stop` fires at the end of the turn with `session_id` | the accept-gate spike: a throwaway plugin with all four hooks, one interactive bypass-mode session | 2026-09-29 |
+| Handed a contact's message in a session, Claude ran an unrequested `pwd` before asking anything | the same spike's hook log | 2026-09-29 |
+| `CLAUDE_CODE_SESSION_ID` is the same in a plugin's MCP server, its hooks' input (`session_id`) and a skill's `!` command; `CLAUDE_PROJECT_DIR` is set for the MCP server but not for the `!` command, whose working directory is the session's | the probe plugin's server log, hook log and `/probe:where` | 2026-09-29 |
 | Claude Code starts a plugin's MCP server in the directory the session started in (not the git root) and sets `CLAUDE_PROJECT_DIR` to the same path | a probe plugin whose server wrote down its directory, run with `claude -p` from a subdirectory of a git repository, Claude Code 2.1.283 | 2026-09-28 |
 
 ## Schema history
@@ -232,6 +257,7 @@ block per version.
 | 2 | 0.2.0 | `inbox.auto_note`, `inbox.auto_attempts` for auto-answer |
 | 3 | 0.3.0 | `auto_note` renamed to `note` (it serves every kind of message); the `sent` table; the `notice` inbox kind |
 | 4 | 0.4.0 | `sent.project_id`: where an answer to something sent lands (project-addressed messages, spec §7.6); `projects` and `inbox.project_id`, in the schema since v1, come into use |
+| 5 | 0.6.0 | `contacts.auto_session`: the Claude Code session that answers a contact in `auto_session` mode (spec §7.3) |
 
 ## Known gaps
 
@@ -243,8 +269,17 @@ block per version.
 - **Projects are never forgotten.** A registered project stays in `projects` and stays
   addressable; `rtfc project forget` arrives with Phase 8. Two projects with the same folder
   name are ambiguous, and messages for that name land in the shared inbox.
-- **The e2e story does not cover project-addressed messages**; `ProjectMessageTests` do,
-  between two nodes over real TLS.
+- **The e2e story does not cover project-addressed messages or session mode**;
+  `ProjectMessageTests`, `SessionModeTests` and `DaemonTests` do, with real daemons and
+  real TLS. Delivery into a live Claude Code session was checked by hand (see the verified
+  table); no test can start an interactive session.
+- **Session mode cannot confirm delivery.** Claude Code drops a channel event it cannot
+  deliver without telling the server, so a pushed message stays parked and its note says
+  where it was sent, not that it arrived. It rests on the channels research preview and on
+  a launch flag with `dangerously` in its name.
+- **The accept gate is a process per event.** `rtfc hook` starts on every prompt, tool call
+  and turn end of every session with the plugin. With the Native AOT binary that is a few
+  milliseconds; with the framework-dependent build about 100 ms.
 - **The e2e story does not run on Windows** (bash, Unix socket paths); the Windows binary
   is covered by the unit tests.
 - **`Grep` in auto-answer** can search files `Read` is denied.

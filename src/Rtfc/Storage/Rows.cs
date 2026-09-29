@@ -92,7 +92,8 @@ public sealed record ContactRow(
     string? AutoOwnerDevice,
     bool ReadReceipts,
     long DeviceListVersion,
-    long Rev);
+    long Rev,
+    string? AutoSession = null);
 
 public sealed record DeviceRow(
     string DeviceId,

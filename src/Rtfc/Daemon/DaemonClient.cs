@@ -53,12 +53,19 @@ public sealed class DaemonClient : IDisposable
     }
 
     /// <summary>Holds a lease until the returned object is disposed, or until the daemon lets go of it (<see cref="DaemonLease.Ended"/>).</summary>
-    public async Task<DaemonLease> AcquireLeaseAsync(CancellationToken cancellationToken)
+    public Task<DaemonLease> AcquireLeaseAsync(CancellationToken cancellationToken) => AcquireLeaseAsync(session: null, onPush: null, cancellationToken);
+
+    /// <summary>
+    /// A lease that names its Claude Code <paramref name="session"/>: messages the daemon pushes into that session (spec §7.3)
+    /// arrive on it and are handed to <paramref name="onPush"/>, in order.
+    /// </summary>
+    public async Task<DaemonLease> AcquireLeaseAsync(string? session, Func<SessionEvent, Task>? onPush, CancellationToken cancellationToken)
     {
-        var response = await _http.GetAsync(IpcRoutes.Lease, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        var route = string.IsNullOrEmpty(session) ? IpcRoutes.Lease : $"{IpcRoutes.Lease}?session={Uri.EscapeDataString(session)}";
+        var response = await _http.GetAsync(route, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return new DaemonLease(response, stream);
+        return new DaemonLease(response, stream, onPush);
     }
 
     public Task<ContactView[]> ContactsAsync(bool probe, CancellationToken cancellationToken) =>
@@ -133,7 +140,24 @@ public sealed class DaemonClient : IDisposable
         PostAsync(IpcRoutes.Accept, new AcceptRequest(token), IpcJson.Default.AcceptRequest, IpcJson.Default.AcceptResult, cancellationToken);
 
     public Task<ManagementResult> SetAutoAsync(string handle, string mode, string? scope, CancellationToken cancellationToken) =>
-        PostAsync(IpcRoutes.ContactAuto(handle), new AutoRequest(mode, scope), IpcJson.Default.AutoRequest, IpcJson.Default.ManagementResult, cancellationToken);
+        SetAutoAsync(handle, mode, scope, session: null, cancellationToken);
+
+    public Task<ManagementResult> SetAutoAsync(string handle, string mode, string? scope, string? session, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.ContactAuto(handle), new AutoRequest(mode, scope, session), IpcJson.Default.AutoRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    /// <summary>For the plugin's hook: the user accepted or declined a pushed message in their session (spec §7.3). False when there is no such message.</summary>
+    public async Task<bool> GateDecisionAsync(string id, bool accepted, CancellationToken cancellationToken)
+    {
+        using var content = JsonContent.Create(new GateRequest(accepted), IpcJson.Default.GateRequest);
+        using var response = await _http.PostAsync(IpcRoutes.InboxGate(id), content, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
 
     public async Task<ManagementResult> RemoveAsync(string handle, CancellationToken cancellationToken)
     {
@@ -200,18 +224,21 @@ public sealed class DaemonClient : IDisposable
 
 /// <summary>
 /// One session's hold on the daemon (spec §3.1): an IPC request the daemon keeps open. <see cref="Ended"/> completes when the
-/// daemon lets go of it, because it stopped or the connection broke, so the holder can tell a live lease from a dead one.
+/// daemon lets go of it, because it stopped or the connection broke, so the holder can tell a live lease from a dead one. A lease
+/// that names its session also carries the messages pushed into it (spec §7.3), one JSON line each after the first line.
 /// </summary>
 public sealed class DaemonLease : IAsyncDisposable
 {
     private readonly HttpResponseMessage _response;
     private readonly Stream _stream;
+    private readonly Func<SessionEvent, Task>? _onPush;
     private readonly CancellationTokenSource _stop = new();
 
-    internal DaemonLease(HttpResponseMessage response, Stream stream)
+    internal DaemonLease(HttpResponseMessage response, Stream stream, Func<SessionEvent, Task>? onPush = null)
     {
         _response = response;
         _stream = stream;
+        _onPush = onPush;
         Ended = WatchAsync();
     }
 
@@ -219,11 +246,30 @@ public sealed class DaemonLease : IAsyncDisposable
 
     private async Task WatchAsync()
     {
-        var buffer = new byte[64];
         try
         {
-            while (await _stream.ReadAsync(buffer, _stop.Token).ConfigureAwait(false) > 0)
+            using var reader = new StreamReader(_stream, leaveOpen: true);
+            while (await reader.ReadLineAsync(_stop.Token).ConfigureAwait(false) is { } line)
             {
+                if (_onPush is null || !line.StartsWith('{'))
+                {
+                    continue;
+                }
+
+                SessionEvent? pushed;
+                try
+                {
+                    pushed = JsonSerializer.Deserialize(line, IpcJson.Default.SessionEvent);
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+
+                if (pushed is not null)
+                {
+                    await _onPush(pushed).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or OperationCanceledException or ObjectDisposedException)

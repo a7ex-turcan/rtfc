@@ -27,9 +27,12 @@ public sealed partial class Node : IAsyncDisposable
     private readonly IClaudeRunner _claude;
     private readonly TimeProvider _clock;
     private readonly ILogger _logger;
+    private readonly ISessionChannel? _sessions;
     private readonly CancellationTokenSource _stopping = new();
 
-    public Node(RtfcHome home, SelfIdentity self, Database db, ITransport transport, NodeOptions options, IClaudeRunner claude, TimeProvider clock, ILogger logger)
+    public Node(
+        RtfcHome home, SelfIdentity self, Database db, ITransport transport, NodeOptions options, IClaudeRunner claude, TimeProvider clock, ILogger logger,
+        ISessionChannel? sessions = null)
     {
         _home = home;
         Self = self;
@@ -39,6 +42,7 @@ public sealed partial class Node : IAsyncDisposable
         _claude = claude;
         _clock = clock;
         _logger = logger;
+        _sessions = sessions;
 
         _db.SaveSelf(new SelfRow(self.PersonId, self.Handle, self.PersonCa.RawData, self.DeviceId, self.DeviceName, self.DeviceCertificate.RawData, DeviceListVersion));
     }
@@ -726,8 +730,11 @@ public sealed partial class Node : IAsyncDisposable
 
     // ---- management (spec §5.2, §7.3): reached only through the CLI, never through an MCP tool ----
 
-    /// <summary>Sets a contact's inbound mode. Headless auto-answer needs an existing scope directory; session mode is Phase 7.</summary>
-    public ManagementResult SetAutoMode(string handle, string mode, string? scope)
+    /// <summary>
+    /// Sets a contact's inbound mode (spec §7.3). Headless auto-answer needs an existing scope directory; session mode needs the
+    /// id of the Claude Code session that will answer, which is the session the command was run from.
+    /// </summary>
+    public ManagementResult SetAutoMode(string handle, string mode, string? scope, string? session = null)
     {
         var contact = _db.FindContactByHandle(handle.Trim());
         if (contact is null || contact.Status != ContactStatus.Active)
@@ -738,7 +745,7 @@ public sealed partial class Node : IAsyncDisposable
         switch (mode)
         {
             case "off":
-                _db.UpsertContact(contact with { InboundMode = InboundMode.Park, AutoScope = null, AutoOwnerDevice = null, Rev = contact.Rev + 1 });
+                _db.UpsertContact(contact with { InboundMode = InboundMode.Park, AutoScope = null, AutoOwnerDevice = null, AutoSession = null, Rev = contact.Rev + 1 });
                 _logger.LogInformation("Auto-answer off for {Handle}", contact.Handle);
                 return new ManagementResult(ManagementStatus.Ok, contact.Handle);
 
@@ -754,12 +761,20 @@ public sealed partial class Node : IAsyncDisposable
                     return new ManagementResult(ManagementStatus.Invalid, contact.Handle, $"'{full}' is not a directory.");
                 }
 
-                _db.UpsertContact(contact with { InboundMode = InboundMode.AutoHeadless, AutoScope = full, AutoOwnerDevice = Self.DeviceId, Rev = contact.Rev + 1 });
+                _db.UpsertContact(contact with { InboundMode = InboundMode.AutoHeadless, AutoScope = full, AutoOwnerDevice = Self.DeviceId, AutoSession = null, Rev = contact.Rev + 1 });
                 _logger.LogInformation("Auto-answer headless for {Handle}, scope {Scope}", contact.Handle, full);
                 return new ManagementResult(ManagementStatus.Ok, contact.Handle);
 
             case "session":
-                return new ManagementResult(ManagementStatus.Invalid, contact.Handle, "Session auto-answer is not available yet (Phase 7). Use headless.");
+                if (string.IsNullOrWhiteSpace(session))
+                {
+                    return new ManagementResult(ManagementStatus.Invalid, contact.Handle,
+                        "Session auto-answer is set from inside the Claude Code session that should answer: run /rtfc:auto there.");
+                }
+
+                _db.UpsertContact(contact with { InboundMode = InboundMode.AutoSession, AutoScope = null, AutoOwnerDevice = Self.DeviceId, AutoSession = session.Trim(), Rev = contact.Rev + 1 });
+                _logger.LogInformation("Auto-answer in session {Session} for {Handle}", session.Trim(), contact.Handle);
+                return new ManagementResult(ManagementStatus.Ok, contact.Handle);
 
             default:
                 return new ManagementResult(ManagementStatus.Invalid, contact.Handle, $"Unknown mode '{mode}'. Use off, headless or session.");
@@ -813,7 +828,7 @@ public sealed partial class Node : IAsyncDisposable
             return new ManagementResult(ManagementStatus.NotAContact, Reason: $"'{handle}' is not an active contact.");
         }
 
-        _db.UpsertContact(contact with { Status = status, InboundMode = InboundMode.Park, AutoScope = null, AutoOwnerDevice = null, Rev = contact.Rev + 1 });
+        _db.UpsertContact(contact with { Status = status, InboundMode = InboundMode.Park, AutoScope = null, AutoOwnerDevice = null, AutoSession = null, Rev = contact.Rev + 1 });
         _logger.LogInformation("Contact {Handle} is now {Status}", contact.Handle, status);
         return new ManagementResult(ManagementStatus.Ok, contact.Handle);
     }

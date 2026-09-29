@@ -213,7 +213,7 @@ public class AutoAnswerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Headless_needs_a_real_scope_and_session_mode_waits_for_phase_7()
+    public async Task Headless_needs_a_real_scope_and_session_mode_needs_its_session()
     {
         await BecomeContactsAsync();
 
@@ -225,10 +225,15 @@ public class AutoAnswerTests : IAsyncLifetime
         Assert.Equal(InboundMode.Park, Assert.Single(await _alex.Node.ContactsAsync(false, Ct)).InboundMode);
 
         Assert.Equal(ManagementStatus.Ok, _alex.Node.SetAutoMode("sasha", "headless", _scope).Status);
+        Assert.Equal(ManagementStatus.Ok, _alex.Node.SetAutoMode("sasha", "session", null, "session-1").Status);
+        var contact = _alex.Database.FindContactByHandle("sasha")!;
+        Assert.Equal((InboundMode.AutoSession, "session-1", null), (contact.InboundMode, contact.AutoSession, contact.AutoScope));
+
         Assert.Equal(ManagementStatus.Ok, _alex.Node.SetAutoMode("sasha", "off", null).Status);
         var view = Assert.Single(await _alex.Node.ContactsAsync(false, Ct));
         Assert.Equal(InboundMode.Park, view.InboundMode);
         Assert.Null(view.AutoScope);
+        Assert.Null(_alex.Database.FindContactByHandle("sasha")!.AutoSession);
     }
 
     [Fact]

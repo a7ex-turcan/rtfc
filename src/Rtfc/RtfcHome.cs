@@ -25,6 +25,9 @@ public sealed class RtfcHome
     public string StatusPath => Path.Combine(Root, "status.json");
     public string LogPath => Path.Combine(Root, "rtfcd.log");
 
+    /// <summary>One small file per Claude Code session: the accept gate for a contact's message pushed into it (spec §7.3).</summary>
+    public string GatesDirectory => Path.Combine(Root, "gates");
+
     public static RtfcHome Resolve()
     {
         var env = Environment.GetEnvironmentVariable(EnvironmentVariable);

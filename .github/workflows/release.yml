@@ -105,6 +105,8 @@ jobs:
           # so one download is all a colleague needs.
           find publish -maxdepth 1 -type f ! -name '*.dbg' ! -name '*.pdb' ! -name '*.dsym' -exec cp {} "stage/$name/" \;
           cp -R plugin "stage/$name/plugin"
+          # The archive is also a Claude Code marketplace, so `claude plugin marketplace add <dir>` installs the plugin.
+          mkdir -p "stage/$name/.claude-plugin" && cp .claude-plugin/marketplace.json "stage/$name/.claude-plugin/"
           cp LICENSE README.md CHANGELOG.md "stage/$name/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             (cd stage && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)

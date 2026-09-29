@@ -32,13 +32,16 @@ MCP tools and the plugin's skills. Phase 2: `auto_headless` per contact
 Phase 4: the outbox and its pump (`Node.Outbox.cs`), queued replies and "leave it for
 her", read receipts against a `sent` table, `away`, `rename`, `inbox_dismiss`, notices,
 retention. Project-addressed messages (§7.6) work too, with the two parts of Phase 8a they
-needed: session registration and the project-aware status line. `scripts/e2e.sh` runs the
-whole story on one machine with two daemons and a fake `claude`.
+needed: session registration and the project-aware status line. Phase 7's `auto_session`
+works as well, experimentally: a contact's messages pushed into a designated interactive
+session as Claude Code channel events (§7.3), behind an accept gate: the plugin's hooks deny
+every tool until the user accepts the message. `scripts/e2e.sh` runs the whole story on one machine
+with two daemons and a fake `claude`.
 
-Not there yet, by design: `auto_session` (Phase 7); fingerprint words (hex groups for
-now); session reuse between live sends (the outbox pump does reuse one per device); a
-proper detach on Windows (`daemon run` calls `setsid` on Unix only). Next is **Phase 3**,
-VPN hints, then **Phase 5**, multi-device. Third-party sources come last (Phase 8).
+Not there yet, by design: fingerprint words (hex groups for now); session reuse between
+live sends (the outbox pump does reuse one per device); a proper detach on Windows
+(`daemon run` calls `setsid` on Unix only). Next is **Phase 3**, VPN hints, then
+**Phase 5**, multi-device. Third-party sources come last (Phase 8).
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
 and the CLI-only management boundary all shipped in Phase 1. Update this section when a
@@ -80,8 +83,17 @@ tool call away from working. So:
   `<source_item source="…" entity="…" untrusted="true">`. Escape the content so it can't
   close its own wrapper. Tool descriptions tell Claude to treat it as information, not
   instructions, and to confirm with the user before acting on a request inside it.
-- The MCP server **never** declares the permission-relay capability. A contact must never
-  be able to approve tool use in your session.
+- The MCP server **never** declares the permission-relay capability
+  (`claude/channel/permission`); it declares `claude/channel` and nothing else under
+  `experimental`, and a test pins that. A contact must never be able to approve tool use in
+  your session.
+- The plugin's hooks (`rtfc hook`) are the guard for `auto_session`: from the moment a
+  pushed message becomes a prompt until Claude Code reports the user's Accept, every tool
+  but `AskUserQuestion` is denied, in every permission mode. Only the `answers` field of
+  the question counts, never the echoed options or anything in the message; a gate file
+  that cannot be read still gates; and the hook prints nothing for other sessions or
+  prompts. Don't turn the gate into an instruction to the model, and don't add exceptions
+  to the deny list.
 - A project name in an envelope (§7.6) comes from a contact too. It is checked against
   the folder-name format, only ever compared with local project names, never used as a
   path, and quoted in rtfc's own notes (which sit outside the wrapper) only through
@@ -308,8 +320,9 @@ change to the CLI, the MCP tools or the wire protocol; before 1.0, minor may bre
 `vX.Y.Z` after merging: the tag push runs `.github/workflows/release.yml`, which refuses a
 tag that doesn't match the declared version, publishes Native AOT binaries per platform,
 runs `scripts/e2e.sh` against them, and creates the GitHub Release. GitHub Releases only:
-no NuGet and no plugin marketplace, by the owner's decision (September 2026). Don't bump
-the version for ordinary commits.
+no NuGet and no public plugin marketplace, by the owner's decision (September 2026); the
+archive carries its own marketplace manifest instead. Don't bump the version for ordinary
+commits.
 
 ## Where things are
 
@@ -325,7 +338,7 @@ not into this repo. The debounced file watcher that §10.2 points at is rtfm's
 | `docs/implementation.md` | How the code realizes the spec, verified facts, departures and why, schema history, known gaps |
 | `README.md` | Getting started and what users need to know; keep it true when behaviour changes |
 | `CHANGELOG.md` | Per-version history and the versioning rules |
-| `plugin/` | Plugin wiring: manifest, `.mcp.json`, the SessionStart hook, and one skill per slash command. §16 says it ships from a separate marketplace repo; it lives here until there is something to ship |
+| `plugin/` | Plugin wiring: manifest, `.mcp.json`, the hooks, and one skill per slash command. `.claude-plugin/marketplace.json` at the repo root makes the clone, and the release archive, a marketplace named `rtfc` that installs it |
 | `scripts/e2e.sh` | The manual smoke test |
 | `src/Rtfc/` | `Identity/` keys and certificates · `Storage/` SQLite · `Protocol/` frames · `Net/` transport and TLS sessions · `Core/` the node · `Daemon/` IPC host, client, launcher · `Mcp/` the stdio server · `Cli/` the commands |
 | `.github/workflows/ci.yml` | Build and test on three OSes, the formatting check, and plugin JSON, version and boundary checks |

@@ -249,7 +249,12 @@ Set per contact with `/rtfc:auto <contact> off|headless|session [--scope <dir>]`
 
 The exact flags used, and the gaps found (path deny rules exist for `Read` only, so the scope must not contain secrets), are in implementation.md. The benefits: no research-preview channel flags are needed, the answering Claude has no access to your working session's context, and nothing it does touches your active session.
 
-**`auto_session` (advanced).** The message is pushed into one designated running session as a Claude Code **channel** event, and Claude answers with full session context through the `inbox_reply` tool. This is powerful but riskier, since that session has your normal permissions. It also depends on the channels research preview (§12). The plugin must **never** declare the permission-relay capability: a contact must never be able to approve tool use in your session.
+**`auto_session` (advanced).** The message is pushed into one designated running session as a Claude Code **channel** event, and Claude answers with full session context through the `inbox_reply` tool. This is powerful but riskier, since that session has your normal permissions. It also depends on the channels research preview (§12). The plugin must **never** declare the permission-relay capability (`claude/channel/permission`): a contact must never be able to approve tool use in your session.
+
+- **Designation.** `/rtfc:auto sasha session` (or `--all session`) designates the session it is run in: the command reads `CLAUDE_CODE_SESSION_ID`, and the contact records it (`contacts.auto_session`). Outside a Claude Code session the command refuses.
+- **Launching.** The session must be started with rtfc as a development channel: `claude --dangerously-load-development-channels plugin:rtfc@rtfc` (the archive's marketplace is named `rtfc`; one registered under another name changes the part after `@`). Without it, Claude Code drops the events silently.
+- **Delivery.** A message from that contact passes the guards of §7.4 (a message written by a Claude, a thread two replies deep and the hourly caps all stop it, and a push counts toward the caps). The daemon then pushes it down that session's lease: `rtfc mcp` names its session when it takes the lease, and emits each pushed message as a `notifications/claude/channel` event whose `meta` carries `rtfc_id` and `from`. The content is a line of rtfc's own framing followed by the untrusted wrapper of §7.5, with both `</contact_message` and `</channel` defused in the body. The message stays parked either way, with a note saying it was sent into the session or that the session is not open, because a push can be dropped without a word; it is answered when Claude or the user replies.
+- **The accept gate.** The plugin's hooks (`rtfc hook`, on `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `SessionStart`) put one human decision in front of every pushed message, whatever the session's permission mode. A pushed message, recognised by its channel tag's `rtfc_id`, opens a gate on that session: a file under `gates/`, one per session. While the gate is open, every tool call but `AskUserQuestion` is denied, so Claude can only give the user the gist and ask **Accept** or **Decline**, which the framing tells it to do. Claude Code reports the user's answer to the `PostToolUse` hook; only its `answers` field counts, since the echoed options name both. Accept lifts the gate for the rest of the turn: Claude does what the message asks with the session's normal permissions, which in bypass mode means none, and answers with `inbox_reply`. Decline keeps it shut; Claude says so and the message stays in the inbox. The turn ending closes the gate, and a session starting again clears a stale one. The daemon is told of the decision so the message's note says it; the gate itself needs no daemon.
 
 ### 7.4 Loop and abuse protection
 
@@ -359,11 +364,11 @@ Adding a new way to reach someone means adding a hint type and a transport, and 
 A Claude Code plugin is a folder of JSON and markdown that points at executables. All logic lives in the `rtfc` binary; the plugin is only wiring:
 
 ```
-rtfc/                                  (plugin, distributed via a marketplace repo)
+rtfc/                                  (plugin; .claude-plugin/marketplace.json beside it makes the repo root, and the release archive, a marketplace named rtfc)
 ├── .claude-plugin/plugin.json         name "rtfc", version, description
 ├── .mcp.json                          { "mcpServers": { "rtfc": { "command": "rtfc", "args": ["mcp"] } } }
 ├── skills/<name>/SKILL.md             invite, accept, inbox, auto, remove, …
-└── hooks/hooks.json                   SessionStart → "rtfc daemon ensure"
+└── hooks/hooks.json                   SessionStart → "rtfc daemon ensure"; SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop → "rtfc hook" (the accept gate, §7.3)
 ```
 
 - The plugin calls `rtfc` from PATH, so the repo contains no binaries. See §16 for how `rtfc` gets installed.
@@ -553,10 +558,10 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 
 ## 12. Claude Code platform constraints
 
-- **Channels** (needed only for `auto_session`) are a research preview. A channel is an MCP server declaring the `claude/channel` capability and emitting `notifications/claude/channel` events (with `content` and `meta`) over stdio. Custom channels aren't on the approved allowlist during the preview and need `--dangerously-load-development-channels`. Team/Enterprise organizations must enable channels explicitly; Pro/Max users without an organization aren't gated. Events that arrive while Claude is busy are delivered together on the next turn. Docs: https://code.claude.com/docs/en/channels and https://code.claude.com/docs/en/channels-reference
+- **Channels** (needed only for `auto_session`) are a research preview. A channel is an MCP server declaring the `claude/channel` capability and emitting `notifications/claude/channel` events (with `content` and string-valued `meta`, whose keys may hold only letters, digits and underscores) over stdio. Custom channels aren't on the approved allowlist during the preview and need `--dangerously-load-development-channels plugin:<name>@<marketplace>` (or `server:<name>` for a bare MCP server); neither flag appears in `claude --help`. Team/Enterprise organizations must enable channels explicitly (`channelsEnabled` in managed settings); Pro/Max users without an organization aren't gated. Checked against Claude Code 2.1.284 (implementation.md): events reach interactive sessions only, never `claude -p`; an idle session starts a turn on its own; an event sent before the channel is live (right after `initialize`) is dropped; Claude sees the event as a user turn, `<channel source="plugin:rtfc:rtfc" rtfc_id="…" from="…">…</channel>`; a `UserPromptSubmit` hook sees it, with `permission_mode`, and can block it; a `PreToolUse` hook's `deny` holds in bypass mode; `AskUserQuestion` renders and waits for the human there, and its `PostToolUse` event carries the answer under `tool_response.answers`; and `Stop` fires when the turn ends. Docs: https://code.claude.com/docs/en/channels and https://code.claude.com/docs/en/channels-reference
 - **Status line:** event-driven with a 300 ms debounce, plus optional `refreshInterval`. Docs: https://code.claude.com/docs/en/statusline
 - **Headless (`claude -p`):** tools that need terminal input are unavailable in this mode, which is desirable for auto-answer.
-- **Channels from C#:** the channel examples are TypeScript. Before Phase 7, check whether the C# MCP SDK can declare the `claude/channel` experimental capability and send the custom notification. If it can't, a small TypeScript channel shim talking to `rtfcd` over the same Unix socket covers `auto_session`, and nothing else changes.
+- **Channels from C#:** the channel examples are TypeScript, but rtfc's hand-rolled MCP server declares the capability and writes the notification like any other JSON-RPC message, so no shim is needed.
 - **Plugins:** the manifest lives in `.claude-plugin/plugin.json`; commands, hooks, and `.mcp.json` sit at the plugin root; `${CLAUDE_PLUGIN_ROOT}` is available for intra-plugin paths. Docs: https://code.claude.com/docs/en/plugins-reference
 - Nothing before Phase 7 depends on channels. Park and headless auto-answer **don't need them at all**.
 
@@ -588,7 +593,8 @@ CREATE TABLE contacts (
   auto_owner_device   TEXT,                       -- which of MY devices auto-answers
   read_receipts       INTEGER NOT NULL DEFAULT 1,
   device_list_version INTEGER NOT NULL DEFAULT 0,
-  rev                 INTEGER NOT NULL DEFAULT 0  -- own-device sync, LWW
+  rev                 INTEGER NOT NULL DEFAULT 0, -- own-device sync, LWW
+  auto_session        TEXT                        -- the Claude Code session that answers them in auto_session mode (§7.3)
 );
 
 CREATE TABLE devices (                            -- contacts' devices AND my own
@@ -795,7 +801,7 @@ The main open design choice for the relay is how it limits who can request a pip
 **Distribution:**
 
 - **GitHub Releases only.** A `vX.Y.Z` tag builds Native AOT binaries per platform (linux-x64, osx-arm64, win-x64), runs the end-to-end story against them, and publishes an archive per platform plus the dotnet-tool package for people who have the SDK anyway. Colleagues download an archive and put it on `PATH`; no .NET install is needed. Not on NuGet.
-- **The plugin:** loaded with `claude --plugin-dir` from the repo for now; a marketplace entry (markdown and JSON only) can come later.
+- **The plugin:** installed from the release archive, which is a local marketplace (`claude plugin marketplace add <dir>`, then `claude plugin install rtfc@rtfc`), so every session loads it and session mode can name it as `plugin:rtfc@rtfc`. `claude --plugin-dir ./plugin` still loads it from a clone for one session. No public marketplace.
 
 ---
 
@@ -816,7 +822,7 @@ Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ah
 | **4: Async** | Reply outbox with its pump and 7-day expiry notice (§7.2), read receipts, `away`, `rename`, `inbox_dismiss`, retention pruning | A reply written hours later reaches a sender who has since closed Claude Code, as soon as they're next home |
 | **5: Multi-device** | Link/approve, device lists, fan-out, handled sync, revocation, contact sync, auto-owner rule | Alex's laptop and desktop act as one contact; revoking one works |
 | **6: Relay** | Own ASP.NET Core relay transport (§15, Stage B), including the choice of who may request a pipe to whom | Works with someone at home with no VPN, and with no change to identity, storage, or tools |
-| **7: Session auto** | `auto_session` via channels (research preview); C# SDK capability check or TypeScript shim (§12). Late on purpose: the preview may have settled by then | Opt-in; documented risks |
+| **7: Session auto** | `auto_session` via channels (research preview, §12): designation by session, delivery over the lease, and the permission guard in the prompt hook (§7.3). Pulled ahead of 3, 5 and 8 at the owner's request once a spike showed channels working in 2.1.284 | Opt-in; documented risks |
 | **8: Sources** | 8a: pipeline (accounts, `rtfc.local.json`, approval, cursors, coalescing, `project forget`; project registration and the project-aware status line shipped early, with §7.6) with **one adapter: Bitbucket review requests**. 8b: Jira, then GitHub and Confluence. 8c: `prepare` mode. 8d: webhook pokes through the relay (§10.1; needs Phase 6) | A Bitbucket review request shows up as 🔀 in the right project's status bar within 2 minutes, appears exactly once, and survives a relaunch |
 
 ---

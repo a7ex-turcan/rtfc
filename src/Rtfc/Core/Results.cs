@@ -193,6 +193,7 @@ public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePat
 [JsonSerializable(typeof(AcceptResult))]
 [JsonSerializable(typeof(ManagementResult))]
 [JsonSerializable(typeof(StatusSnapshot))]
+[JsonSerializable(typeof(SessionGate))]
 [JsonSerializable(typeof(InviteTokenPayload))]
 [JsonSerializable(typeof(RtfcConfig))]
 public sealed partial class CoreJson : JsonSerializerContext;

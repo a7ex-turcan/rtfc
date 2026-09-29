@@ -20,8 +20,28 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 3, VPN and Tailscale addresses as more `tcp:` hints, or Phase 5,
-one person on several devices.
+Phase 7, experimental: answers from inside your own session.
+
+### Added
+
+- **Session mode for auto-answer.** `/rtfc:auto sasha session`, run inside a Claude Code
+  session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`,
+  makes Sasha's messages arrive in that session as they come in, even while it is idle.
+  Claude gives you the gist and asks **Accept** or **Decline**; on Accept it does what the
+  message asks, with your repo, your tools and the session's normal permissions, and answers
+  with `inbox_reply`. `--all session` does it for every contact you have. It uses Claude
+  Code's channels research preview; a Team or Enterprise organisation has to allow channels.
+- **Nothing runs until you accept.** The plugin's new hooks (`rtfc hook`) block every tool
+  but the Accept/Decline question from the moment a contact's message lands in the session
+  until you accept, in bypass and auto mode too, so a message cannot drive your Claude on
+  its own. rtfc still never lets a contact approve anything in your session.
+- The same guards as headless auto-answer apply, and a pushed message also waits in your
+  inbox, because rtfc cannot tell whether the session received it.
+- **Install the plugin once, for every session.** The release archive is now a Claude Code
+  marketplace: `claude plugin marketplace add <the extracted folder>` and
+  `claude plugin install rtfc@rtfc` replace `--plugin-dir` on every launch, and session mode
+  names the plugin as `plugin:rtfc@rtfc`. To upgrade, extract the new release and run
+  `claude plugin marketplace update rtfc && claude plugin update rtfc@rtfc`.
 
 ## [0.5.2] - 2026-09-28
 

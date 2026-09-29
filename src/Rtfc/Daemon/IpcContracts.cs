@@ -24,6 +24,7 @@ public static class IpcRoutes
     public static string InboxOpen(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/open";
     public static string InboxReply(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/reply";
     public static string InboxDismiss(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/dismiss";
+    public static string InboxGate(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/gate";
 
     // Management (spec §9.3). On the user-only socket, reached by the CLI; never an MCP tool.
     public static string ContactAuto(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/auto";
@@ -59,7 +60,11 @@ public sealed record ReplyRequest(string Text);
 
 public sealed record AcceptRequest(string Token);
 
-public sealed record AutoRequest(string Mode, string? Scope);
+/// <summary><c>Session</c> is the Claude Code session that answers in <c>session</c> mode (spec §7.3).</summary>
+public sealed record AutoRequest(string Mode, string? Scope, string? Session = null);
+
+/// <summary>From the plugin's hook: the user accepted or declined a pushed message in their session (spec §7.3).</summary>
+public sealed record GateRequest(bool Accepted);
 
 public sealed record IpcError(string Error);
 
@@ -72,6 +77,8 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(ReplyRequest))]
 [JsonSerializable(typeof(AcceptRequest))]
 [JsonSerializable(typeof(AutoRequest))]
+[JsonSerializable(typeof(GateRequest))]
+[JsonSerializable(typeof(SessionEvent))]
 [JsonSerializable(typeof(ToggleRequest))]
 [JsonSerializable(typeof(RenameRequest))]
 [JsonSerializable(typeof(ManagementResult))]
