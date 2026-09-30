@@ -159,6 +159,11 @@ public sealed partial class Node
                 {
                     _logger.LogInformation("{Account}: {Count} source event(s) landed in {Projects} project(s)", account.Name, delivered, group.Count());
                 }
+                else if (cursorRow is null || cursorRow.LastError is not null)
+                {
+                    // The first poll, or the first good one after an error: worth a line, so a quiet subscription is known to work.
+                    _logger.LogInformation("{Account}: polled, nothing new; seen up to {Watermark}", account.Name, FormatCursor(result.Next));
+                }
             }
             catch (SourceException ex)
             {
