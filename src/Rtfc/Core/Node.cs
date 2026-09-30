@@ -50,7 +50,8 @@ public sealed partial class Node : IAsyncDisposable
         _logger = logger;
         _sessions = sessions;
         _sourceSettings = options.Sources ?? SourceSettings.Default;
-        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp), new Sources.ConfluenceCloudAdapter(SourceHttp)]).ToDictionary(a => a.Type, StringComparer.Ordinal);
+        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp), new Sources.ConfluenceCloudAdapter(SourceHttp), new Sources.BitbucketCloudAdapter(SourceHttp)])
+            .ToDictionary(a => a.Type, StringComparer.Ordinal);
         _hintHosts = options.HintHosts;
 
         _db.SaveSelf(new SelfRow(self.PersonId, self.Handle, self.PersonCa.RawData, self.DeviceId, self.DeviceName, self.DeviceCertificate.RawData, DeviceListVersion));

@@ -1034,11 +1034,12 @@ public static class Commands
         {
             Core.Sources.JiraCloudAdapter.TypeName => new Core.Sources.JiraCloudAdapter(http),
             Core.Sources.ConfluenceCloudAdapter.TypeName => new Core.Sources.ConfluenceCloudAdapter(http),
+            Core.Sources.BitbucketCloudAdapter.TypeName => new Core.Sources.BitbucketCloudAdapter(http),
             _ => null,
         };
         if (adapter is null)
         {
-            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported yet; jira and confluence are. Bitbucket follows in a later release.");
+            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported; jira, confluence and bitbucket are.");
             return 2;
         }
 

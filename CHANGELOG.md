@@ -20,7 +20,16 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Bitbucket Cloud as a source (Phase 8d).
+### Added
+
+- Bitbucket Cloud as a source: `rtfc account add <name> --type bitbucket --url
+  https://api.bitbucket.org --login <email>` with a scoped API token, and one subscription
+  per repository (`"repo": "workspace/slug"`). Pull requests you are asked to review land as
+  `review_requested`; on your own pull requests, other people's comments, approvals,
+  requested changes, merges, declines and failed builds land as `comment_on_mine`,
+  `approved`, `changes_requested`, `merged`, `status_changed` and `build_failed_on_mine`;
+  replies to your comments and comments naming you as `reply_to_me` and `mentioned`. One
+  item per pull request, shown as `🔀 N` in the status line.
 
 ## [0.8.0] - 2026-09-30
 
