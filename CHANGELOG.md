@@ -20,7 +20,21 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Added
+
+- An always-on daemon, opt-in: `rtfc daemon always-on on` (or `/rtfc:always-on on`) starts
+  the daemon when you log in and keeps it running while Claude Code is closed, so contacts
+  can reach you, sources are polled and queued replies are delivered all day. It registers a
+  startup entry on Windows (no window), a LaunchAgent on macOS or a systemd user service on
+  Linux; `off` removes it. With it on, contacts see you home whenever you are logged in, and
+  their messages wait in your inbox.
+
+### Changed
+
+- `rtfc daemon ensure`, which every session runs at start, replaces a running daemon of an
+  older release, so upgrading rtfc no longer leaves the old daemon running until you stop it.
+- `rtfc daemon run` leaves an already running daemon alone instead of taking its socket.
+- `rtfc daemon status` says when the daemon is always on.
 
 ## [0.9.1] - 2026-09-30
 

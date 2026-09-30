@@ -28,6 +28,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
+| §3.1 always on | `Daemon/LoginItems.cs` (the Windows Run value, the LaunchAgent, the systemd unit); `Commands.AlwaysOnAsync`; `DaemonHost.IdleExit`; the `run` guard in `Commands.DaemonAsync`; `DaemonLauncher.IsOlder` and `StopAsync` in `EnsureAsync` |
 | §7.3, §10.4 only into an idle session | `Core/SessionActivity.cs` (the busy marks); the hook's `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `SessionEnd` and `Notification` cases; `Node.SessionPushes.cs` (`PushOrHold`, `FlushHeldPushes`, the loop, `DropHeldPushes`) |
 | §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
@@ -213,6 +214,21 @@ hints, and cost more to get right. See §17's progress line.
 `keys/` (`keys/accounts/<name>.token`, 0600 on Unix, the profile ACL on Windows) and not in
 the OS keychain the spec prefers; the keychain comes for both at once.
 
+**Always on is a setting the daemon re-reads, plus a login item (§3.1).** The owner chose to
+keep the daemon running all day, opt-in. `alwaysOn` in `config.json` is read on every idle
+check (`DaemonHost.IdleExit`), so turning it on or off takes effect within seconds and
+nothing restarts; the login item only makes sure a daemon starts at login. On Windows that is
+a `HKCU\…\Run` value that runs `conhost --headless rtfc daemon ensure`: `rtfc.exe` is a
+console program, and without `--headless` Windows would open a terminal window at every login;
+`daemon ensure` spawns the detached daemon the usual way and exits, so only the daemon stays.
+macOS and Linux run `rtfc daemon run` under launchd and systemd, which restart it after a
+crash but not after a clean stop. Two guards came with it: `daemon run` exits when a daemon
+already answers (a login item and a session starting together would otherwise take each
+other's socket), and `daemon ensure` stops a running daemon of an older release and starts its
+own, because a daemon that runs for days would otherwise outlive every upgrade. Login items
+refuse any home but the default, so a test or a manual run with `RTFC_HOME` can never register
+itself to start at login.
+
 **Pushes wait for an idle session (§7.3, §10.4).** The first live session also showed an
 item landing in the middle of other work: Claude Code injects a channel event into a running
 turn (the prompt hook fires for it there), and the gate then froze the work in progress until
@@ -316,6 +332,7 @@ they were checked; versions are what they were checked against.
 | Bitbucket Cloud answers 401 to an unscoped Atlassian API token on `GET /2.0/user`; its docs require a scoped token created for the Bitbucket app | curl with the Jira token | 2026-09-30 |
 | Confluence Cloud: `GET /wiki/rest/api/search?cql=type = comment AND creator != currentUser() AND lastmodified >= now("-14d")&expand=content.history.createdBy,content.container.history.createdBy,content.ancestors,content.body.storage` answers each comment with its author, its page and the page's creator, its parent comments and its storage body; `mention = currentUser()`, `watcher = currentUser()` and `creator = currentUser()` all work; results page through `_links.next`; `/wiki/rest/api/user/current` has no time zone | curl with the unscoped token against the owner's site | 2026-09-30 |
 | Bitbucket Cloud with a *scoped* API token as Basic `email:token`: `GET /2.0/user` (`uuid`, `account_id`, `display_name`), `GET /2.0/user/workspaces`, `GET /2.0/repositories/{ws}?role=member`, `GET /2.0/workspaces/{ws}/pullrequests/{uuid}` (authored), `GET .../pullrequests?q=reviewers.uuid="…" AND state="OPEN"` and `q=updated_on >= <ISO>`, `GET .../pullrequests/{id}/activity` with `comment` (global or inline, `parent` on replies), `approval` and `update` entries, `GET .../comments?q=created_on > …&sort=-created_on`, `GET .../statuses`. Bearer works as well. `changes_requested` entries and mention markup were not seen | curl and a probe script against the owner's workspace | 2026-09-30 |
+| `conhost.exe --headless <program>` runs a console program with no visible window (the host's `MainWindowHandle` is 0), its child runs, and both exit when it is done | Windows 11 Pro 10.0.26200, `Start-Process` from this machine | 2026-09-30 |
 
 ## Schema history
 
@@ -333,8 +350,13 @@ block per version.
 
 ## Known gaps
 
-- **The outbox is delivered only while the daemon runs**, that is, while a session is
-  open. The login-item daemon of spec §18.1 would change that.
+- **The outbox is delivered only while the daemon runs**: while a session is open, or all day
+  with always-on (spec §3.1). The login items for macOS and Linux were written from the
+  launchd and systemd documentation and are covered by tests of what they write, not run on
+  a real Mac or Linux desktop yet.
+- **Items that park while no session is open stay parked.** An always-on daemon polls all day,
+  and a session-mode item with no session to go to waits in the inbox; nothing offers the
+  waiting items when the session opens.
 - **Windows detach.** `daemon run` does not leave its parent's process group or job on
   Windows. Claude Code 2.1.283 leaves it running when the session that started it ends, but
   a Win32-OpenSSH command session kills it the moment the session closes (both in the

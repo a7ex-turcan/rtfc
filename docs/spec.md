@@ -85,6 +85,8 @@ Everything ships as **one executable, `rtfc`**, with several modes:
 
 **Daemon lifetime.** `rtfc daemon ensure` (run from the plugin's SessionStart hook, and again by `rtfc mcp` on startup) starts the daemon detached if its socket doesn't answer. Each running `rtfc mcp` holds an open IPC connection as a lease. When no leases remain for a grace period (e.g. 30 s), the daemon exits. A stopping daemon ends every lease at once, and a session whose lease ended takes one on the next daemon that answers, whoever started it, so a restart (after a config change, say) doesn't leave the new daemon without sessions. A session never starts a daemon on its own initiative: after `rtfc daemon stop`, its next tool call does. This is what makes "home" mean "Claude Code is open on that machine", and it survives crashed sessions without depending on an end-of-session hook. There's exactly one listener and one queue per device, no matter how many sessions are open.
 
+**Always on (opt-in).** `rtfc daemon always-on on` (or `/rtfc:always-on on`) sets `alwaysOn` in `config.json` and registers a login item: a per-user startup entry on Windows (`HKCU\…\Run`, launched through `conhost --headless` so no window shows), a LaunchAgent on macOS, a systemd user service on Linux. The daemon re-reads the setting while it runs and does not idle out while it is on, so it keeps listening, polling sources (§10) and delivering the outbox (§7.2) with no session open, and headless auto-answer (§7.3) works too. "Home" then means "logged in on that machine": a contact's message parks in the inbox instead of meeting nobody's home, and `rtfc away on` still stops listening. A login item serves the default home only. `off` removes the login item and the daemon is session-bound again. `rtfc daemon run` leaves a daemon that already answers alone, so a login item and a session starting together cannot take each other's socket, and `rtfc daemon ensure` replaces a running daemon of an older release, so a daemon that runs for days does not outlive an upgrade.
+
 **Local IPC.** A minimal API on Kestrel listening on a Unix domain socket at `~/.claude/rtfc/rtfcd.sock` (the whole directory moves with the `RTFC_HOME` environment variable, which is how tests and side-by-side runs stay apart). .NET supports Unix sockets on Windows 10+ too, so one mechanism covers every OS. It's debuggable with `curl --unix-socket`. The socket lives in the user's profile directory, with 0600 permissions on Unix.
 
 **Why a separate daemon instead of doing it all in the MCP server:** several sessions share one device identity, one inbox, and one port. The IPC boundary also means a non-.NET piece (e.g. a TypeScript channel shim, §12) can talk to the same daemon.
@@ -401,7 +403,7 @@ Anything that changes **who can reach you or what your Claude will do automatica
 
 - `init`, `invite`, `accept`
 - `remove`, `block`
-- `auto`, `receipts`, `away`, `hints`
+- `auto`, `receipts`, `away`, `hints`, `daemon always-on`
 - `link`, `approve-device`, `revoke-device`
 - `export-identity`
 - `account add` / `account remove`, `sources approve`, `project forget`
@@ -434,7 +436,7 @@ Tell the user the result above in one sentence. Do not run any other rtfc comman
 | `/rtfc:contacts` | Prompt: asks Claude to show contacts and who's home via the MCP tools |
 | `/rtfc:init` · `/rtfc:invite` · `/rtfc:accept <token>` | CLI |
 | `/rtfc:rename <contact> <handle>` · `/rtfc:remove <contact>` · `/rtfc:block <contact>` | CLI |
-| `/rtfc:auto <contact>\|--all off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` · `/rtfc:hints [add\|remove <host>…\|auto]` | CLI |
+| `/rtfc:auto <contact>\|--all off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` · `/rtfc:hints [add\|remove <host>…\|auto]` · `/rtfc:always-on [on\|off]` | CLI |
 | `/rtfc:sources` | Prompt: asks Claude to show this project's subscriptions and their health via the `sources` tool |
 | `/rtfc:sources-approve` · `/rtfc:project-forget` | CLI |
 | *(terminal only)* `rtfc account add` / `remove` | CLI in a real terminal; prompts for a secret, which must never pass through Claude |
@@ -750,7 +752,7 @@ A `meta` table holds `schema_version` and device-local flags such as `away`; the
 | A source token is stolen or misused | Keychain storage, narrowest scopes, device-local, added only in a real terminal, never seen by Claude; rtfc never writes to sources |
 | Subscriptions are changed by a script, a teammate's tooling, or an injected Claude | Changes stay `pending_approval` until `rtfc sources approve` |
 | Runaway usage from `prepare` runs | Per-project rate limits and a daily cap |
-| Presence reveals when you're working | Visible only to accepted contacts; `/rtfc:away`; no "last seen" |
+| Presence reveals when you're working | Visible only to accepted contacts; `/rtfc:away`; no "last seen"; with the daemon always on, home says only that you are logged in |
 
 ---
 
@@ -837,13 +839,13 @@ Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ah
 
 ## 18. Open questions
 
-1. **Daemon lifetime.** Session-bound (current design: home = Claude Code open) or a login item that is always home? More pressing since Phase 4: the outbox is delivered by the daemon, so a queued reply leaves only while both sides have a session open at the same time. The login item would let auto-answer work with no session open, but changes what "home" means.
+1. ~~**Daemon lifetime.** Session-bound (current design: home = Claude Code open) or a login item that is always home?~~ Both, by the owner's decision (2026-09-30): session-bound by default, always on for whoever turns it on with `rtfc daemon always-on on` (§3.1). A contact cannot tell the two apart; with always-on, home means logged in.
 2. **Sibling-device delivery.** Should a message that landed on the desktop be offered to the laptop when it comes online, or does an inbox live where it landed? Currently only handled state syncs.
 3. **Attachments.** Diffs and files are the obvious next ask. What size limit, and are they ever allowed into auto-answer?
 4. **Groups.** Is "ask the team" a list of contacts with fan-out, or a first-class group concept?
 5. **Read receipts default.** On (current; off per contact with `rtfc receipts <contact> off`) or off?
 6. **Handle collisions.** How to display two contacts who both chose "alex" as their suggested handle.
-7. **Daemon lifetime matters more with sources.** Polling only happens while some session is open, so items catch up late (not lost) after the laptop has been closed. A login-item daemon would poll all day. Is that wanted?
+7. ~~**Daemon lifetime matters more with sources.**~~ Settled with 1: an always-on daemon polls all day, and its items wait in the inbox until a session opens.
 8. ~~**Bitbucket flavor.** Cloud or Data Center first? The APIs differ.~~ Cloud, and Cloud for Jira and Confluence too: the owner's shop is on atlassian.net (2026-09-30). Data Center adapters can follow the same `ISourceAdapter`.
 9. ~~**Project-addressed messages.**~~ Resolved on 2026-09-28: yes, when the sender names the project explicitly, and a message for a project that doesn't exist lands in the shared inbox. See §7.6.
 10. **Account sync.** Should accounts (without secrets) sync between your own devices, so a new device only needs tokens re-entered?

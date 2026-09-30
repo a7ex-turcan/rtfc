@@ -23,9 +23,13 @@ public static class DaemonLauncher
     public static async Task<Outcome> EnsureAsync(RtfcHome home, CancellationToken cancellationToken)
     {
         using var client = new DaemonClient(home);
-        if (await client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is not null)
+        if (await client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is { } running)
         {
-            return Outcome.AlreadyRunning;
+            // A daemon that runs for days outlives an upgrade; the first newer rtfc that finds it replaces it. Never a downgrade.
+            if (!IsOlder(running.Version, EntryPoint.Version) || !await StopAsync(client, cancellationToken).ConfigureAwait(false))
+            {
+                return Outcome.AlreadyRunning;
+            }
         }
 
         if (!IdentityStore.Exists(home))
@@ -46,6 +50,36 @@ public static class DaemonLauncher
         }
 
         return Outcome.Failed;
+    }
+
+    /// <summary>Whether <paramref name="running"/> is an older release than <paramref name="mine"/>. Build suffixes are ignored; anything unreadable is not older.</summary>
+    public static bool IsOlder(string running, string mine) =>
+        Version.TryParse(Core(running), out var r) && Version.TryParse(Core(mine), out var m) && r < m;
+
+    private static string Core(string version) => version.Split('-', '+')[0];
+
+    /// <summary>Asks the daemon to stop and waits until it no longer answers. False if it is still there after the wait.</summary>
+    public static async Task<bool> StopAsync(DaemonClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.ShutdownAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or DaemonException)
+        {
+        }
+
+        var deadline = DateTimeOffset.UtcNow + StartupWait;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(200, cancellationToken).ConfigureAwait(false);
+            if (await client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -75,7 +75,7 @@ public static class DaemonHost
         await node.StartAsync(cancellationToken).ConfigureAwait(false);
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         RestrictSocket(home.SocketPath);
-        logger.LogInformation("IPC on {Socket} (pid {Pid}, idle exit {IdleExit})", home.SocketPath, Environment.ProcessId, options.IdleExit);
+        logger.LogInformation("IPC on {Socket} (pid {Pid}, idle exit {IdleExit})", home.SocketPath, Environment.ProcessId, IdleExit(options, home));
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.ApplicationStopping);
         try
@@ -83,7 +83,7 @@ public static class DaemonHost
             while (!stop.Token.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(5), stop.Token).ConfigureAwait(false);
-                if (options.IdleExit && leases.IsIdle())
+                if (leases.IsIdle() && IdleExit(options, home))
                 {
                     logger.LogInformation("No session has held a lease for {Grace}; exiting", Leases.Grace);
                     break;
@@ -109,7 +109,7 @@ public static class DaemonHost
     {
         app.MapGet(IpcRoutes.Status, IResult () => Results.Json(new DaemonStatus(
             EntryPoint.Version, Environment.ProcessId, node.Self.PersonId, node.Self.Handle, node.Self.DeviceId, node.Self.DeviceName,
-            (node.Transport as TcpTransport)?.Port ?? 0, node.AdvertisedHints(), leases.Count, options.IdleExit, node.IsAway), IpcJson.Default.DaemonStatus));
+            (node.Transport as TcpTransport)?.Port ?? 0, node.AdvertisedHints(), leases.Count, IdleExit(options, home), node.IsAway), IpcJson.Default.DaemonStatus));
 
         // Held open for as long as the caller keeps the connection: that is the lease. It also ends the moment the daemon starts
         // stopping, so a session notices at once and shutdown does not wait out the host's timeout on every open session.
@@ -356,6 +356,28 @@ public static class DaemonHost
             lifetime.StopApplication();
             return Results.StatusCode(202);
         });
+    }
+
+    /// <summary>
+    /// Whether the daemon leaves once no session holds a lease: not when started with <c>--stay</c>, and not while
+    /// <c>config.json</c> says always on (spec §3.1). Read each time, so <c>rtfc daemon always-on</c> takes effect at once.
+    /// </summary>
+    public static bool IdleExit(DaemonOptions options, RtfcHome home)
+    {
+        if (!options.IdleExit)
+        {
+            return false;
+        }
+
+        try
+        {
+            return ConfigFile.Load(home).AlwaysOn != true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            // Half written, or being replaced: staying a little longer is the safe side.
+            return false;
+        }
     }
 
     private static void DeleteStaleSocket(string path)

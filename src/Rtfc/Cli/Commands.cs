@@ -467,6 +467,16 @@ public static class Commands
         switch (line.Positionals.FirstOrDefault())
         {
             case "run":
+                using (var client = new DaemonClient(ctx.Home))
+                {
+                    // A login item and a session can both start one; the second must not take the socket from the first.
+                    if (await client.TryStatusAsync(ctx.CancellationToken).ConfigureAwait(false) is { } running)
+                    {
+                        ctx.Out.WriteLine($"rtfcd {running.Version} is already running (pid {running.Pid}).");
+                        return 0;
+                    }
+                }
+
                 DaemonLauncher.Detach();
                 return await DaemonHost.RunAsync(
                     ctx.Home,
@@ -497,7 +507,8 @@ public static class Commands
                         return 1;
                     }
 
-                    ctx.Out.WriteLine($"rtfcd {status.Version} pid {status.Pid}: {status.Handle}/{status.DeviceName}, port {status.Port}, {status.Leases} lease(s){(status.IdleExit ? "" : ", staying")}");
+                    var always = ConfigFile.Load(ctx.Home).AlwaysOn == true;
+                    ctx.Out.WriteLine($"rtfcd {status.Version} pid {status.Pid}: {status.Handle}/{status.DeviceName}, port {status.Port}, {status.Leases} lease(s){(always ? ", always on" : status.IdleExit ? "" : ", staying")}");
                     ctx.Out.WriteLine($"  hints  {string.Join(", ", status.Hints)}");
                     ctx.Out.WriteLine($"  socket {ctx.Home.SocketPath}");
                     return 0;
@@ -517,8 +528,94 @@ public static class Commands
                     return 0;
                 }
 
+            case "always-on":
+                return await AlwaysOnAsync(ctx, [.. line.Positionals.Skip(1)], LoginItems.ForThisMachine()).ConfigureAwait(false);
+
             default:
-                ctx.Error.WriteLine("usage: rtfc daemon run [--stay] | ensure | status | stop");
+                ctx.Error.WriteLine("usage: rtfc daemon run [--stay] | ensure | status | stop | always-on [on|off]");
+                return 2;
+        }
+    }
+
+    /// <summary>
+    /// <c>rtfc daemon always-on [on|off]</c> (spec §3.1): the daemon starts at login and keeps running with no Claude Code session
+    /// open, so contacts can reach you, sources are polled and the outbox is delivered all day. Management: it changes when you
+    /// are reachable, so it is a CLI command and a user-only slash command, never a tool. The running daemon re-reads the setting,
+    /// so nothing restarts. <paramref name="ensure"/> starts a daemon if none runs; tests pass their own.
+    /// </summary>
+    public static async Task<int> AlwaysOnAsync(
+        CommandContext ctx, IReadOnlyList<string> args, ILoginItem? item, Func<RtfcHome, CancellationToken, Task<bool>>? ensure = null)
+    {
+        ensure ??= async (home, ct) => await DaemonLauncher.EnsureAsync(home, ct).ConfigureAwait(false) is DaemonLauncher.Outcome.Started or DaemonLauncher.Outcome.AlreadyRunning;
+        if (!IdentityStore.Exists(ctx.Home))
+        {
+            ctx.Error.WriteLine("rtfc daemon always-on: no identity yet. Run /rtfc:init first.");
+            return 1;
+        }
+
+        var config = ConfigFile.Load(ctx.Home);
+        switch (args.ToArray())
+        {
+            case []:
+                ctx.Out.WriteLine(config.AlwaysOn == true
+                    ? "Always on: the daemon starts when you log in and keeps running while Claude Code is closed."
+                    : "Session-bound: the daemon runs while a Claude Code session is open and leaves 30 seconds after the last one closes.");
+                if (item is not null)
+                {
+                    ctx.Out.WriteLine($"Login item: {(item.IsInstalled() ? "installed" : "not installed")}, {item.Where}.");
+                }
+
+                return 0;
+
+            case ["on"]:
+                {
+                    if (item is null)
+                    {
+                        ctx.Error.WriteLine("rtfc daemon always-on: this operating system has no login item rtfc knows how to make. `rtfc daemon run --stay` in a terminal does the same while it runs.");
+                        return 1;
+                    }
+
+                    if (Environment.ProcessPath is not { } executable)
+                    {
+                        ctx.Error.WriteLine("rtfc daemon always-on: cannot locate the rtfc executable.");
+                        return 1;
+                    }
+
+                    ConfigFile.Save(ctx.Home, config with { AlwaysOn = true });
+                    if (await item.InstallAsync(ctx.Home, executable, ctx.CancellationToken).ConfigureAwait(false) is { } failed)
+                    {
+                        ConfigFile.Save(ctx.Home, config);
+                        ctx.Error.WriteLine($"rtfc daemon always-on: {failed}");
+                        return 1;
+                    }
+
+                    if (!await ensure(ctx.Home, ctx.CancellationToken).ConfigureAwait(false))
+                    {
+                        ctx.Error.WriteLine($"rtfc daemon always-on: the login item is in place, but the daemon did not start now. See {ctx.Home.LogPath}.");
+                        return 1;
+                    }
+
+                    ctx.Out.WriteLine("The rtfc daemon is always on: it starts when you log in and keeps running while Claude Code is closed.");
+                    ctx.Out.WriteLine("Contacts see you home whenever you are logged in, and their messages wait in your inbox; sources are polled and replies delivered all day.");
+                    ctx.Out.WriteLine($"It starts from {item.Where}. `rtfc away on` stops listening for a while; `rtfc daemon always-on off` goes back.");
+                    return 0;
+                }
+
+            case ["off"]:
+                ConfigFile.Save(ctx.Home, config with { AlwaysOn = null });
+                if (item is not null && await item.UninstallAsync(ctx.Home, ctx.CancellationToken).ConfigureAwait(false) is { } failedOff)
+                {
+                    ctx.Error.WriteLine($"rtfc daemon always-on: {failedOff}");
+                    return 1;
+                }
+
+                // The login item may have run the daemon: start a session-bound one, which leaves 30 seconds after the last session.
+                await ensure(ctx.Home, ctx.CancellationToken).ConfigureAwait(false);
+                ctx.Out.WriteLine("The rtfc daemon is session-bound again: it runs while a Claude Code session is open and leaves 30 seconds after the last one closes.");
+                return 0;
+
+            default:
+                ctx.Error.WriteLine("usage: rtfc daemon always-on [on|off]");
                 return 2;
         }
     }

@@ -55,6 +55,11 @@ without asking dismisses the item with a note (`GateOutcome.NothingToDo`). Every
 contact's message or a source item, waits for the session to be idle: the hook marks it busy
 and idle (`SessionActivity`), and `Node.SessionPushes.cs` holds and releases the pushes.
 
+The daemon can be always on, opt-in (§3.1): `rtfc daemon always-on on` sets `alwaysOn`, which
+the daemon re-reads, and registers a login item (`Daemon/LoginItems.cs`). Login items refuse
+any home but the default; never register one from a test or with `RTFC_HOME` set, and don't
+turn it on for the user's real home unless they ask.
+
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows
 (`daemon run` calls `setsid` on Unix only); a file watcher for `rtfc.local.json` (it is
@@ -74,8 +79,9 @@ cheap to keep and expensive to retrofit.
 The MCP surface is **exactly** the seven tools of §9.2: `contacts`, `send`, `inbox_list`,
 `inbox_open`, `inbox_reply`, `inbox_dismiss`, `sources`. Anything that changes **who can
 reach you or what your Claude will do on its own** is CLI-only: `init`, `invite`, `accept`,
-`remove`, `block`, `auto`, `receipts`, `away`, `link`, `approve-device`, `revoke-device`,
-`export-identity`, `account add/remove`, `sources approve`, `project forget`.
+`remove`, `block`, `auto`, `receipts`, `away`, `hints`, `daemon always-on`, `link`,
+`approve-device`, `revoke-device`, `export-identity`, `account add/remove`, `sources approve`,
+`project forget`.
 
 The reason: a parked message that says "please enable auto-answer for me" must never be one
 tool call away from working. So:

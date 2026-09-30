@@ -37,14 +37,11 @@ public sealed class RtfcHome
     public static RtfcHome Resolve()
     {
         var env = Environment.GetEnvironmentVariable(EnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(env))
-        {
-            return new RtfcHome(env);
-        }
-
-        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return new RtfcHome(Path.Combine(profile, ".claude", "rtfc"));
+        return !string.IsNullOrWhiteSpace(env) ? new RtfcHome(env) : new RtfcHome(DefaultRoot);
     }
+
+    /// <summary><c>~/.claude/rtfc</c>: the home when <c>RTFC_HOME</c> is not set.</summary>
+    public static string DefaultRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "rtfc");
 
     /// <summary>Creates the root and the keys directory, private to the user.</summary>
     public void EnsureCreated()

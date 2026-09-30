@@ -201,8 +201,12 @@ public sealed record OutboxConfig(int ExpiryHours = 168, int PumpIntervalSeconds
 /// <summary>The same, as the node consumes it.</summary>
 public sealed record OutboxSettings(TimeSpan Expiry, TimeSpan PumpInterval, TimeSpan Retention);
 
-/// <summary>Per-device settings in <c>config.json</c>. <c>ClaudePath</c> defaults to <c>claude</c> on PATH.</summary>
-public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null, OutboxConfig? Outbox = null)
+/// <summary>
+/// Per-device settings in <c>config.json</c>. <c>ClaudePath</c> defaults to <c>claude</c> on PATH. <c>AlwaysOn</c> keeps the daemon
+/// running with no session open (spec §3.1); <c>rtfc daemon always-on</c> sets it together with the login item.
+/// </summary>
+public sealed record RtfcConfig(
+    int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null, OutboxConfig? Outbox = null, bool? AlwaysOn = null)
 {
     public static RtfcConfig Default => new(Net.TcpTransport.DefaultPort, null);
 }

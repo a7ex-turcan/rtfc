@@ -145,6 +145,7 @@ public static class EntryPoint
 
         plumbing:
           daemon run [--stay] | ensure | status | stop
+          daemon always-on [on|off]   start the daemon at login and keep it running with Claude Code closed
           mcp                         stdio MCP server, launched by Claude Code
           statusline                  the status-bar segment
           hook                        the plugin's hook, fed Claude Code's event JSON: the accept gate for a contact's message

@@ -48,8 +48,10 @@ On **both** machines:
 No .NET installation is needed: releases are native binaries, and the archive contains the
 Claude Code plugin too.
 
-One word you'll meet everywhere: someone is **home** when they have a Claude Code session
-open with the plugin loaded. That's when their daemon runs and messages can reach them.
+One word you'll meet everywhere: someone is **home** when their rtfc daemon runs, which by
+default means they have a Claude Code session open with the plugin loaded. That's when
+messages can reach them. With the daemon always on (see *The daemon, by hand*), home means
+logged in.
 
 ### 1. Install the `rtfc` command
 
@@ -138,7 +140,7 @@ The plugin adds:
   does nothing.
 - Slash commands: `/rtfc:init`, `/rtfc:invite`, `/rtfc:accept <token>`, `/rtfc:contacts`,
   `/rtfc:inbox`, `/rtfc:auto`, `/rtfc:remove`, `/rtfc:block`, `/rtfc:away`, `/rtfc:rename`,
-  `/rtfc:receipts`, `/rtfc:hints`, `/rtfc:sources`, `/rtfc:sources-approve`,
+  `/rtfc:receipts`, `/rtfc:hints`, `/rtfc:always-on`, `/rtfc:sources`, `/rtfc:sources-approve`,
   `/rtfc:project-forget`.
 
 ### 4. Show parked messages in the status line
@@ -487,6 +489,28 @@ curl --unix-socket ~/.claude/rtfc/rtfcd.sock http://rtfcd/v1/status
 The first time the daemon listens, macOS and Windows show a firewall prompt. Allow it, or
 nobody can reach you.
 
+#### Always on
+
+By default the daemon runs only while a Claude Code session is open. To keep it running all
+day, starting when you log in:
+
+```bash
+rtfc daemon always-on on     # or /rtfc:always-on on
+rtfc daemon always-on        # what it is set to, and where the login item lives
+rtfc daemon always-on off    # back to running only while Claude Code is open
+```
+
+It registers a login item: a startup entry named `rtfc` on Windows (it shows in Task
+Manager's startup apps, and runs without a window), a LaunchAgent on macOS, a systemd user
+service on Linux. From then on the daemon keeps listening, polls your sources and delivers
+queued replies while Claude Code is closed, and headless auto-answer works too. Contacts see
+you home whenever you're logged in, and their messages wait in your inbox for when you open
+Claude Code; items in session mode wait there as well. `rtfc away on` stops listening for a
+while. It serves the default home, `~/.claude/rtfc`, only.
+
+When you upgrade rtfc, the first newer `rtfc` that runs, such as the next session's start,
+replaces the older daemon, so an always-on daemon doesn't keep running the old release.
+
 ### Configuration
 
 `~/.claude/rtfc/config.json`:
@@ -539,9 +563,11 @@ project's `.claude/rtfc.local.json` (step 9).
 ### Limitations
 
 - One device per person. Multi-device comes in Phase 5.
-- The outbox is delivered only while your daemon runs, that is, while you have a Claude
-  Code session open. A login-item daemon that delivers all day is an open question (spec
-  §18).
+- The outbox is delivered only while your daemon runs: while you have a Claude Code session
+  open, or all day with `rtfc daemon always-on on`. Both sides' daemons have to run at the
+  same moment.
+- Items that arrive while no session is open wait in the inbox; opening the session later
+  does not push them in. `/rtfc:inbox` shows them.
 - Auto-answer's `Grep` can search any file in the scope, including ones `Read` is denied.
   Keep secrets out of scopes.
 - Reaching someone needs a network path to one of their hints: the office LAN, a VPN, or an

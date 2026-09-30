@@ -88,6 +88,12 @@ public class DaemonTests
 
         await WaitUntilAsync(async () => (await client.TryStatusAsync(Ct))!.Leases == 0);
 
+        // A second daemon for the same home, from a login item or a session, leaves the running one alone.
+        var second = new StringWriter();
+        Assert.Equal(0, await Commands.DaemonAsync(new CommandContext(temp.Home, second, new StringWriter(), Ct), ["run"]));
+        Assert.Contains("is already running", second.ToString());
+        Assert.NotNull(await client.TryStatusAsync(Ct));
+
         await client.ShutdownAsync(Ct);
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
         Assert.Null(await client.TryStatusAsync(Ct));
