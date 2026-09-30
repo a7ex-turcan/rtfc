@@ -1,6 +1,6 @@
 {
   "name": "rtfc",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Relay Tool For Contacts: message between people's Claude Code sessions, with a parked inbox and opt-in auto-answer, and Jira, Confluence and Bitbucket notifications in the same inbox.",
   "author": {
     "name": "Alex Turcan"
