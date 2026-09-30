@@ -129,7 +129,7 @@ public static class EntryPoint
           away on|off                 stop listening; contacts see nobody home, you can still send
           hints [add <host>...|remove <host>...|auto]
                                       what your invites tell people to connect to; add a VPN address or a Tailscale name
-          account add <name> --type jira --url <https://site.atlassian.net> --login <email>
+          account add <name> --type jira|confluence --url <https://site.atlassian.net> --login <email>
                                       store a source account; the token is typed hidden, in a real terminal
           account list | account remove <name>
           sources approve [--project <dir>]

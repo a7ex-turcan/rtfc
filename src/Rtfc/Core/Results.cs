@@ -166,7 +166,7 @@ public sealed record AcceptResult(
 public sealed record StatusGlobal(int Parked, string[] From, int Pending = 0);
 
 /// <summary>One project's line in <c>status.json</c>: messages addressed to it (spec §7.6) and, from Phase 8, its source items.</summary>
-public sealed record ProjectStatus(string Name, int Parked, string[] From, int Reviews = 0, int Tickets = 0, int PendingSubscriptions = 0);
+public sealed record ProjectStatus(string Name, int Parked, string[] From, int Reviews = 0, int Tickets = 0, int PendingSubscriptions = 0, int Pages = 0);
 
 /// <summary>The contents of <c>status.json</c> (spec §11). <c>Projects</c> is keyed by the project's normalized root (<see cref="ProjectPaths.Key"/>).</summary>
 public sealed record StatusSnapshot(StatusGlobal Global, Dictionary<string, ProjectStatus> Projects, bool Away);

@@ -51,10 +51,12 @@ open in its project (`Node.PushSourceItem`), behind the hook's gate in its sourc
 question with the actions plus "Nothing to do", then Accept/Decline for the chosen one; a
 turn that ends without asking dismisses the item with a note (`GateOutcome.NothingToDo`).
 
+Phase 8c: `Core/Sources/ConfluenceCloudAdapter.cs`, checked against the same site.
+
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows
 (`daemon run` calls `setsid` on Unix only); a file watcher for `rtfc.local.json` (it is
-re-read every tick). Next are Confluence and Bitbucket Cloud (Phase 8c, 8d), then
+re-read every tick). Next is Bitbucket Cloud (Phase 8d, waiting on a scoped token), then
 **Phase 5**, multi-device.
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps

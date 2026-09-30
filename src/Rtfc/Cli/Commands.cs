@@ -573,6 +573,11 @@ public static class Commands
                 segments.Add($"🎫 {projects[here].Tickets.ToString(CultureInfo.InvariantCulture)}");
             }
 
+            if (projects[here].Pages > 0)
+            {
+                segments.Add($"📄 {projects[here].Pages.ToString(CultureInfo.InvariantCulture)}");
+            }
+
             if (projects[here].PendingSubscriptions > 0)
             {
                 segments.Add($"⚠ rtfc: {projects[here].PendingSubscriptions.ToString(CultureInfo.InvariantCulture)} pending");
@@ -1024,14 +1029,16 @@ public static class Commands
             return 2;
         }
 
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         Core.Sources.ISourceAdapter? adapter = type switch
         {
-            Core.Sources.JiraCloudAdapter.TypeName => new Core.Sources.JiraCloudAdapter(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }),
+            Core.Sources.JiraCloudAdapter.TypeName => new Core.Sources.JiraCloudAdapter(http),
+            Core.Sources.ConfluenceCloudAdapter.TypeName => new Core.Sources.ConfluenceCloudAdapter(http),
             _ => null,
         };
         if (adapter is null)
         {
-            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported yet; jira is. Confluence and Bitbucket follow in later releases.");
+            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported yet; jira and confluence are. Bitbucket follows in a later release.");
             return 2;
         }
 

@@ -15,9 +15,9 @@ copy-pasting Claude output between terminals and chat windows.
 - **Auto-answer is opt-in, per contact.** Either in your own session, where Claude gives
   you the gist and asks Accept or Decline before it acts, or by a separate, read-only,
   scoped Claude while you are away.
-- **Sources.** Jira notifications land in the same inbox, scoped to the project they belong
-  to: one item per ticket with what happened and who did it. rtfc only ever reads from a
-  source. Confluence and Bitbucket follow.
+- **Sources.** Jira and Confluence notifications land in the same inbox, scoped to the
+  project they belong to: one item per ticket or page with what happened and who did it.
+  rtfc only ever reads from a source. Bitbucket follows.
 
 LAN first, with mutual TLS on every connection, designed so that reaching someone over
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
@@ -146,8 +146,9 @@ Add to `~/.claude/settings.json`:
 
 You'll see `📨 1 · sasha` when something is waiting, `📨 1 · sasha → payments-api` when it
 waits in another of your projects, `📤 2` when replies wait in your outbox, `💤 away` when
-you are away, `🎫 3` when tickets from a source wait in the project you are in, `⚠ rtfc: 1
-pending` when a subscription there waits for your approval, and nothing otherwise. If you
+you are away, `🎫 3` when tickets and `📄 2` when pages from a source wait in the project you
+are in, `⚠ rtfc: 1 pending` when a subscription there waits for your approval, and nothing
+otherwise. If you
 already have a status line script, call `rtfc statusline` from it and append its output;
 `refreshInterval` (seconds) keeps the counter current while you're idle.
 
@@ -314,10 +315,10 @@ Removal is local and immediate: Sasha's devices are refused from now on, and a n
 either way makes you contacts again. Block also refuses every future invite exchange with
 her, from either side. Neither needs her cooperation.
 
-### 9. Watch Jira from your inbox
+### 9. Watch Jira and Confluence from your inbox
 
-Tickets that involve you can land in the same inbox, scoped to the project they belong to.
-Three steps, all yours: an account, a subscription, an approval.
+Tickets and pages that involve you can land in the same inbox, scoped to the project they
+belong to. Three steps, all yours: an account, a subscription, an approval.
 
 **The account.** Create an API token at
 [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) (the plain
@@ -352,6 +353,14 @@ to read. `rtfc account list` and `rtfc account remove <name>` are the rest.
 
 `events` picks from `assigned`, `mentioned`, `status_changed` and `comment_on_mine`; leave it
 out for all of them. Your own comments and transitions never notify you.
+
+Confluence works the same way with `--type confluence` (the same site URL and, for an
+unscoped token, the same token) and an entry like
+`{ "account": "confluence-work", "type": "confluence", "space": "PR" }`, where `space`
+narrows it to one space and `cql` adds any clause of your own; both are optional. It brings
+comments by other people on pages you created or watch (`comment_on_mine`), replies to
+your comments (`reply_to_me`) and comments that mention you (`mentioned`), one item per
+page, shown as `📄 N` in the status line.
 
 **The approval.** In a Claude session in that project, `/rtfc:sources-approve` (or `rtfc
 sources approve` in its directory). Until then the status line shows `⚠ rtfc: 1 pending`
@@ -494,7 +503,8 @@ they never touch your real one.
   in a separate terminal is the workaround.
 - Projects are addressed by folder name. Two of yours with the same name can't be told
   apart, so a message for that name lands in the shared inbox with a note.
-- Sources: Jira Cloud only for now; Confluence and Bitbucket follow. Subscriptions read
+- Sources: Jira and Confluence Cloud for now; Bitbucket follows. Confluence brings comments,
+  not page edits, and knows at most two hundred watched pages per subscription. Subscriptions read
   `.claude/rtfc.local.json` on every tick (about fifteen seconds) rather than watching it.
   Polling happens only while your daemon runs, and a new subscription starts from now, not
   from the past. Unscoped Atlassian tokens work against the site URL; scoped ones need the
@@ -518,7 +528,8 @@ they never touch your real one.
 | 7 ✅ | Auto-answer inside a live session, via Claude Code channels (experimental) |
 | 8a ✅ | Sources: accounts, per-project subscriptions with approval, the poller, one item per ticket, `sources`; Jira Cloud |
 | 8b ✅ | Source items into your session: Claude proposes actions, you pick and confirm, or nothing to do |
-| 8c, 8d | Confluence Cloud, Bitbucket Cloud; then GitHub and `prepare` mode |
+| 8c ✅ | Confluence Cloud: comments on your pages, replies to you, mentions |
+| 8d | Bitbucket Cloud; then GitHub and `prepare` mode |
 
 ---
 

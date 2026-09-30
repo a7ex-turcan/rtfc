@@ -37,6 +37,11 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
   `⚠ rtfc: N pending` while a subscription waits for approval.
 - `rtfc project forget <dir>` stops polling a project and removes its source items.
 - `rtfc account list` and `rtfc account remove <name>`.
+- Confluence Cloud as a source: `rtfc account add <name> --type confluence …`, and a
+  subscription with an optional `space` key and `cql` clause. Comments by other people on
+  pages you created or watch (`comment_on_mine`), replies to your comments (`reply_to_me`)
+  and comments that mention you (`mentioned`) land as one item per page, shown as `📄 N` in
+  the status line.
 - Session mode for source items: a subscription with `"mode": "session"` pushes each new
   item into the Claude Code session open in its project, behind the same gate as a
   contact's message. Claude gives the gist and asks one question with the actions it sees

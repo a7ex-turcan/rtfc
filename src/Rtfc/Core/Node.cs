@@ -50,7 +50,7 @@ public sealed partial class Node : IAsyncDisposable
         _logger = logger;
         _sessions = sessions;
         _sourceSettings = options.Sources ?? SourceSettings.Default;
-        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp)]).ToDictionary(a => a.Type, StringComparer.Ordinal);
+        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp), new Sources.ConfluenceCloudAdapter(SourceHttp)]).ToDictionary(a => a.Type, StringComparer.Ordinal);
         _hintHosts = options.HintHosts;
 
         _db.SaveSelf(new SelfRow(self.PersonId, self.Handle, self.PersonCa.RawData, self.DeviceId, self.DeviceName, self.DeviceCertificate.RawData, DeviceListVersion));
@@ -965,10 +965,11 @@ public sealed partial class Node : IAsyncDisposable
             var messages = parked.Where(m => ProjectIdOf(m, projects) == project.Id).ToList();
             var tickets = _db.CountSourceItems(project.Id, "jira:");
             var reviews = _db.CountSourceItems(project.Id, "bitbucket:") + _db.CountSourceItems(project.Id, "github:");
+            var pages = _db.CountSourceItems(project.Id, "confluence:");
             var waiting = pending.GetValueOrDefault(project.Id);
-            if (messages.Count > 0 || tickets > 0 || reviews > 0 || waiting > 0)
+            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || waiting > 0)
             {
-                perProject[project.RootPath] = new ProjectStatus(project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting);
+                perProject[project.RootPath] = new ProjectStatus(project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages);
             }
         }
 

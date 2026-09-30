@@ -24,7 +24,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
 | §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
 | §10.2 session registration | `McpServer` (`CLAUDE_PROJECT_DIR`, registered once it holds a lease) → `POST /v1/projects` → `Node.RegisterProject` |
-| §10.1 polling, cursors, adapters | `Node.Sources.cs` (`PollDueAsync`, `Deliver`); `Core/Sources/SourceEvent.cs` (`ISourceAdapter`, `SourceEvent`, `SourceCursor`); `Core/Sources/JiraCloudAdapter.cs`; `source_cursors` via `Database.GetCursor`/`UpsertCursor` |
+| §10.1 polling, cursors, adapters | `Node.Sources.cs` (`PollDueAsync`, `Deliver`); `Core/Sources/SourceEvent.cs` (`ISourceAdapter`, `SourceEvent`, `SourceCursor`); `Core/Sources/JiraCloudAdapter.cs`, `ConfluenceCloudAdapter.cs`; `source_cursors` via `Database.GetCursor`/`UpsertCursor` |
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
@@ -286,6 +286,7 @@ they were checked; versions are what they were checked against.
 | Jira Cloud: `GET /rest/api/3/search/jql` answers `{issues, isLast, nextPageToken}` and honours `expand=changelog`; the old `GET /rest/api/3/search` answers 410 Gone. `GET /issue/{key}/changelog` pages with `values[]{author, created, items[]{field, fromString, toString}}`; `GET /issue/{key}/comment?orderBy=-created` gives `comments[]{author, created, body (ADF)}`. `/rest/api/3/myself` returns `accountId`, `displayName`, `timeZone` | curl with an unscoped API token (Basic `email:token`) against the owner's site | 2026-09-30 |
 | Confluence Cloud: `GET /wiki/rest/api/search?cql=…&expand=content.history.lastUpdated,content.container` answers `{results[]{content{type, history.lastUpdated.by}, title, url, lastModified}, totalSize, _links}`; `(mention = currentUser() OR contributor = currentUser() OR creator = currentUser()) AND lastmodified >= now("-7d")` found the week's comments on the owner's pages; `/wiki/rest/api/user/current` returns the same `accountId` as Jira | curl with the same token | 2026-09-30 |
 | Bitbucket Cloud answers 401 to an unscoped Atlassian API token on `GET /2.0/user`; its docs require a scoped token created for the Bitbucket app | curl with the Jira token | 2026-09-30 |
+| Confluence Cloud: `GET /wiki/rest/api/search?cql=type = comment AND creator != currentUser() AND lastmodified >= now("-14d")&expand=content.history.createdBy,content.container.history.createdBy,content.ancestors,content.body.storage` answers each comment with its author, its page and the page's creator, its parent comments and its storage body; `mention = currentUser()`, `watcher = currentUser()` and `creator = currentUser()` all work; results page through `_links.next`; `/wiki/rest/api/user/current` has no time zone | curl with the unscoped token against the owner's site | 2026-09-30 |
 
 ## Schema history
 
@@ -313,7 +314,9 @@ block per version.
 - **Two projects with the same folder name are ambiguous**, and messages for that name
   land in the shared inbox. `rtfc project forget` removes a project, its subscriptions and
   its source items.
-- **Sources are Jira Cloud only.** `rtfc.local.json` is re-read on every tick of the
+- **Sources are Jira and Confluence Cloud only.** Confluence brings comments and not page
+  edits (a page that mentions you would re-notify on every edit), and reads at most two
+  hundred watched pages per poll. `rtfc.local.json` is re-read on every tick of the
   source loop instead of being watched; a new subscription starts from now, with a
   seven-day cap on catch-up after a long absence and no "N older updates" item yet;
   `prepare` mode does not exist. Scoped Atlassian tokens work only through the
