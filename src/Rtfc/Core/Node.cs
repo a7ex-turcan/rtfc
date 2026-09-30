@@ -8,7 +8,8 @@ using Rtfc.Storage;
 
 namespace Rtfc.Core;
 
-public sealed record NodeOptions(IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer, OutboxSettings Outbox, SourceSettings? Sources = null);
+public sealed record NodeOptions(
+    IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer, OutboxSettings Outbox, SourceSettings? Sources = null, SessionPushSettings? SessionPushes = null);
 
 /// <summary>
 /// Everything stateful on one device, minus the IPC surface (spec §3.1): the contact
@@ -29,6 +30,7 @@ public sealed partial class Node : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly ISessionChannel? _sessions;
     private readonly SourceSettings _sourceSettings;
+    private readonly SessionPushSettings _pushSettings;
     private readonly Dictionary<string, Sources.ISourceAdapter> _adapters;
     private IReadOnlyList<string> _hintHosts;
     private readonly CancellationTokenSource _stopping = new();
@@ -50,6 +52,7 @@ public sealed partial class Node : IAsyncDisposable
         _logger = logger;
         _sessions = sessions;
         _sourceSettings = options.Sources ?? SourceSettings.Default;
+        _pushSettings = options.SessionPushes ?? SessionPushSettings.Default;
         _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp), new Sources.ConfluenceCloudAdapter(SourceHttp), new Sources.BitbucketCloudAdapter(SourceHttp)])
             .ToDictionary(a => a.Type, StringComparer.Ordinal);
         _hintHosts = options.HintHosts;
@@ -76,6 +79,7 @@ public sealed partial class Node : IAsyncDisposable
         StartAutoAnswering();
         StartOutbox();
         StartSources();
+        StartSessionPushes();
         WriteStatus();
         _logger.LogInformation("rtfcd listening as {Handle}/{Device} ({Person}) on port {Port}", Self.Handle, Self.DeviceName, Ids.Fingerprint(Self.PersonId), (_transport as TcpTransport)?.Port);
     }
@@ -87,6 +91,7 @@ public sealed partial class Node : IAsyncDisposable
         await StopAutoAnsweringAsync().ConfigureAwait(false);
         await StopOutboxAsync().ConfigureAwait(false);
         await StopSourcesAsync().ConfigureAwait(false);
+        await StopSessionPushesAsync().ConfigureAwait(false);
     }
 
     /// <summary>Away (spec §9.4): nothing listens, so contacts see nobody home, while everything outbound still works.</summary>

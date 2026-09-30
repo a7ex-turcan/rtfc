@@ -189,9 +189,11 @@ public class DaemonTests
     {
         var sessions = new SessionChannels();
         var pushed = new SessionEvent("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", "sasha", "Hello.");
+        Assert.False(sessions.IsOpen("s1"));
         Assert.False(sessions.TryPush("s1", pushed));
 
         var first = sessions.Open("s1");
+        Assert.True(sessions.IsOpen("s1"));
         Assert.True(sessions.TryPush("s1", pushed));
         Assert.True(first.TryRead(out var received));
         Assert.Equal(pushed, received);
@@ -200,10 +202,12 @@ public class DaemonTests
         var second = sessions.Open("s1");
         Assert.True(first.Completion.IsCompleted);
         sessions.Close("s1", first);
+        Assert.True(sessions.IsOpen("s1"));
         Assert.True(sessions.TryPush("s1", pushed));
         Assert.True(second.TryRead(out _));
 
         sessions.Close("s1", second);
+        Assert.False(sessions.IsOpen("s1"));
         Assert.False(sessions.TryPush("s1", pushed));
         Assert.False(sessions.TryPush("s2", pushed));
     }

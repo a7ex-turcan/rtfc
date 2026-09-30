@@ -22,6 +22,12 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ### Changed
 
+- Nothing is pushed into a session in the middle of a turn. A contact's message or a source
+  item for a session that is busy waits until the turn is over, with a note in the inbox
+  saying so, and several go in one turn after another. The plugin's hooks now also run on
+  `StopFailure`, `SessionEnd` and Claude Code's idle notification, to know when a session is
+  free again, including after you interrupt a turn.
+
 - A source item in your session now ends cleanly. The first question offers "Later" beside
   "Nothing to do" and up to two actions; "Later" keeps the item in your inbox with a note,
   and "Nothing to do" dismisses it. After an accepted action is done, Claude asks "Dismiss"

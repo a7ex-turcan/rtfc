@@ -133,7 +133,9 @@ The plugin adds:
   `inbox_open`, `inbox_reply`, `inbox_dismiss`, `sources`.
 - Hooks: `rtfc daemon ensure` starts the daemon when a session opens, and `rtfc hook` runs
   on prompts, tool calls and turn ends to hold a contact's message or a source item in your
-  session until you accept it (steps 7 and 9). For anything else it does nothing.
+  session until you accept it, and to keep track of whether the session is in the middle of a
+  turn, so nothing is pushed into it until it's idle (steps 7 and 9). For anything else it
+  does nothing.
 - Slash commands: `/rtfc:init`, `/rtfc:invite`, `/rtfc:accept <token>`, `/rtfc:contacts`,
   `/rtfc:inbox`, `/rtfc:auto`, `/rtfc:remove`, `/rtfc:block`, `/rtfc:away`, `/rtfc:rename`,
   `/rtfc:receipts`, `/rtfc:hints`, `/rtfc:sources`, `/rtfc:sources-approve`,
@@ -233,7 +235,8 @@ claude --dangerously-load-development-channels plugin:rtfc@rtfc    # an alias sa
 ```
 
 From then on Sasha's messages come into that session as they arrive, even while you are
-idle, and this happens:
+away from the keyboard. If Claude is in the middle of something, a message waits until that
+turn is over, so it never interrupts work in progress. Then this happens:
 
 1. Claude tells you the gist of the message in a sentence or two.
 2. It asks you **Accept** or **Decline**. Until you answer, every tool is blocked, whatever
@@ -423,10 +426,11 @@ If Claude finds nothing worth doing it says so in one line and stops, and the it
 dismissed for you with a note saying why. A dismissed item stays in `rtfc inbox --all`, and
 comes back if anything new happens to it.
 
-An item can arrive while Claude is busy with something else. That work pauses until you
-answer, and after Later, Nothing to do or Decline the tools stay blocked until the turn
-ends; your next prompt carries on. The gate is deliberately strict: once a ticket's text is
-in the conversation, nothing runs that you haven't sanctioned in that turn.
+Items only go in while the session is idle. If Claude is in the middle of a turn, working
+or waiting on a question of its own, the item waits until that turn is over, and its note
+in the inbox says so. Several items that arrive together go in one turn after another.
+After you interrupt a turn with Esc, anything waiting goes in once Claude Code reports the
+session idle; if it doesn't, the next turn you finish releases it.
 
 A subscription sends at most twenty items an hour into a session; the rest wait in the
 inbox. With no session open in the project the item waits too, and its note says so. A
@@ -530,6 +534,7 @@ project's `.claude/rtfc.local.json` (step 9).
 | Nothing arrives from a source | `/rtfc:sources` (or `rtfc sources`) shows each subscription's status, how far it has read and its last error. A new subscription starts from the moment you approved it; your own actions never notify you; polling happens only while a session is open; and the JQL, space or repository must match what you expect. `rtfcd.log` logs each subscription's first poll. |
 | A subscription shows `error` and the token was refused | The token expired (Atlassian tokens last at most a year), or it is an unscoped token on Bitbucket, which needs one created with scopes. `rtfc account add <name> …` again, in a terminal, stores a new one. |
 | Session mode: a source item never shows up in the session | Was the session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`, and is it open in the item's project (the git root of the folder with `.claude/rtfc.local.json`)? The item's note in `rtfc inbox` says where it went, or that no session was open, or that the subscription used its twenty pushes for the hour. |
+| Session mode: an item or message says it is waiting for the session to finish | The session is in the middle of a turn; it goes in when the turn ends. If the session sits idle and it still waits, the hook missed the end of a turn, for instance after an interrupt: send any prompt and let the turn finish, or restart the session. |
 
 ### Limitations
 

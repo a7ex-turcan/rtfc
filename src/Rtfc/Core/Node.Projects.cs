@@ -41,8 +41,12 @@ public sealed partial class Node
         return project;
     }
 
-    /// <summary>The session's lease ended: it is no longer somewhere a source item can go.</summary>
-    public void SessionClosed(string session) => _openSessions.TryRemove(session, out _);
+    /// <summary>The session's lease ended: it is no longer somewhere a source item can go, and what waited for it stays in the inbox.</summary>
+    public void SessionClosed(string session)
+    {
+        _openSessions.TryRemove(session, out _);
+        DropHeldPushes(session);
+    }
 
     /// <summary>
     /// Where an incoming message is stored: with the thread it continues, else in the project it names if exactly one

@@ -28,6 +28,9 @@ public sealed class RtfcHome
     /// <summary>One small file per Claude Code session: the accept gate for a contact's message pushed into it (spec §7.3).</summary>
     public string GatesDirectory => Path.Combine(Root, "gates");
 
+    /// <summary>One small file per Claude Code session that is in the middle of a turn, so pushes wait for it to be idle (spec §7.3).</summary>
+    public string ActivityDirectory => Path.Combine(Root, "busy");
+
     /// <summary>One private file per third-party account, holding its token (spec §10.5).</summary>
     public string AccountsDirectory => Path.Combine(KeysDirectory, "accounts");
 

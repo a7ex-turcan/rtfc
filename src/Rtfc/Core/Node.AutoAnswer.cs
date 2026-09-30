@@ -125,12 +125,27 @@ public sealed partial class Node
             return;
         }
 
-        var pushed = contact.AutoSession is { } session && _sessions is not null
-            && _sessions.TryPush(session, new SessionEvent(message.Id, contact.Handle, SessionPrompt(contact, message)));
-        var note = pushed
-            ? $"Sent into the Claude Code session that answers {contact.Handle}, at {Timestamps.Format(now)}."
-            : $"Not sent into a session: the Claude Code session that answers {contact.Handle} is not open.";
-        _db.SetAutoState(message.Id, InboxState.Parked, note, draft: null, countAttempt: pushed, now);
+        string Sent(DateTimeOffset at) => $"Sent into the Claude Code session that answers {contact.Handle}, at {Timestamps.Format(at)}.";
+        var note = $"Not sent into a session: the Claude Code session that answers {contact.Handle} is not open.";
+        if (contact.AutoSession is { } session)
+        {
+            PushOrHold(session, new SessionEvent(message.Id, contact.Handle, SessionPrompt(contact, message)), Sent, outcome =>
+            {
+                note = outcome switch
+                {
+                    PushOutcome.Sent => Sent(now),
+                    PushOutcome.Held => $"Waiting for the Claude Code session that answers {contact.Handle} to finish what it is doing; it goes in when the turn ends.",
+                    _ => note,
+                };
+                // A held push counts toward the hourly caps now, so a flood cannot slip past them while the session is busy.
+                _db.SetAutoState(message.Id, InboxState.Parked, note, draft: null, countAttempt: outcome != PushOutcome.NotOpen, now);
+            });
+        }
+        else
+        {
+            _db.SetAutoState(message.Id, InboxState.Parked, note, draft: null, countAttempt: false, now);
+        }
+
         _logger.LogInformation("Message {Id} from {Handle}: {Note}", message.Id, contact.Handle, note);
     }
 

@@ -251,28 +251,38 @@ public sealed partial class Node
             recent.TryDequeue(out _);
         }
 
-        string note;
-        var pushed = false;
+        string Sent(DateTimeOffset at) => $"Sent into your Claude Code session in {project.Name}, at {Timestamps.Format(at)}.";
+        var note = $"Not sent into a session: none is open in {project.Name}. It waits here.";
+        var session = _openSessions.Where(s => s.Value.ProjectId == project.Id).OrderByDescending(s => s.Value.Since).Select(s => s.Key).FirstOrDefault();
         if (recent.Count >= SourcePushesPerHour)
         {
             note = $"Not sent into a session: this subscription already sent {SourcePushesPerHour} items into your session this hour. It waits here.";
+            _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: false, now);
+        }
+        else if (session is null)
+        {
+            _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: false, now);
         }
         else
         {
-            var session = _openSessions.Where(s => s.Value.ProjectId == project.Id).OrderByDescending(s => s.Value.Since).Select(s => s.Key).FirstOrDefault();
-            pushed = session is not null
-                && _sessions.TryPush(session, new SessionEvent(item.Id, SourceTypeOf(item.EntityKey), SourceSessionPrompt(item, project), InboxKind.Source));
-            if (pushed)
+            PushOrHold(session, new SessionEvent(item.Id, SourceTypeOf(item.EntityKey), SourceSessionPrompt(item, project), InboxKind.Source), Sent, outcome =>
             {
-                recent.Enqueue(now);
-            }
+                note = outcome switch
+                {
+                    PushOutcome.Sent => Sent(now),
+                    PushOutcome.Held => $"Waiting for your Claude Code session in {project.Name} to finish what it is doing; it goes in when the turn ends.",
+                    _ => note,
+                };
+                if (outcome != PushOutcome.NotOpen)
+                {
+                    // Held counts toward the hourly cap now, so a storm of updates cannot pile up behind a busy session.
+                    recent.Enqueue(now);
+                }
 
-            note = pushed
-                ? $"Sent into your Claude Code session in {project.Name}, at {Timestamps.Format(now)}."
-                : $"Not sent into a session: none is open in {project.Name}. It waits here.";
+                _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: outcome != PushOutcome.NotOpen, now);
+            });
         }
 
-        _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: pushed, now);
         _logger.LogInformation("Source item {Entity} in {Project}: {Note}", item.EntityKey, project.Name, note);
     }
 

@@ -56,6 +56,14 @@ public sealed class FakeSessionChannel : ISessionChannel
         }
     }
 
+    public bool IsOpen(string sessionId)
+    {
+        lock (_lock)
+        {
+            return Open.Contains(sessionId);
+        }
+    }
+
     public bool TryPush(string sessionId, SessionEvent sessionEvent)
     {
         lock (_lock)
@@ -101,12 +109,15 @@ public sealed class TestNode : IAsyncDisposable
     public static void AssertDelivered(SendResult result) =>
         Assert.True(result.Status == SendStatus.Delivered, $"Send: {result.Status}{(result.Reason is null ? "" : ": " + result.Reason)}");
 
+    /// <summary>Pushes go in at once and held ones only when a test flushes them, unless a test says otherwise.</summary>
+    public static readonly SessionPushSettings ImmediatePushes = new(Timeout.InfiniteTimeSpan, TimeSpan.Zero);
+
     /// <summary>Tests want the pump to run often and entries to live long unless a test says otherwise.</summary>
     public static readonly OutboxSettings DefaultOutbox = new(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(500), TimeSpan.FromDays(30));
 
     public static async Task<TestNode> StartAsync(
         string handle, string device, AutoAnswerConfig? autoAnswer = null, OutboxSettings? outbox = null,
-        IReadOnlyList<Rtfc.Core.Sources.ISourceAdapter>? adapters = null, SourceSettings? sources = null)
+        IReadOnlyList<Rtfc.Core.Sources.ISourceAdapter>? adapters = null, SourceSettings? sources = null, SessionPushSettings? pushes = null)
     {
         var temp = new TempHome();
         var self = IdentityStore.Create(temp.Home, handle, device, DateTimeOffset.UtcNow);
@@ -115,7 +126,8 @@ public sealed class TestNode : IAsyncDisposable
         var claude = new FakeClaudeRunner();
         var sessions = new FakeSessionChannel();
         var node = new Node(
-            temp.Home, self, db, transport, new NodeOptions(["127.0.0.1"], autoAnswer ?? new AutoAnswerConfig(), outbox ?? DefaultOutbox, sources), claude,
+            temp.Home, self, db, transport,
+            new NodeOptions(["127.0.0.1"], autoAnswer ?? new AutoAnswerConfig(), outbox ?? DefaultOutbox, sources, pushes ?? ImmediatePushes), claude,
             TimeProvider.System, NullLogger.Instance, sessions, adapters);
         await node.StartAsync(TestContext.Current.CancellationToken);
         return new TestNode(temp, node, db, transport, claude, sessions);

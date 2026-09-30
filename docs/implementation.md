@@ -28,6 +28,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
+| §7.3, §10.4 only into an idle session | `Core/SessionActivity.cs` (the busy marks); the hook's `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `SessionEnd` and `Notification` cases; `Node.SessionPushes.cs` (`PushOrHold`, `FlushHeldPushes`, the loop, `DropHeldPushes`) |
 | §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
@@ -212,6 +213,18 @@ hints, and cost more to get right. See §17's progress line.
 `keys/` (`keys/accounts/<name>.token`, 0600 on Unix, the profile ACL on Windows) and not in
 the OS keychain the spec prefers; the keychain comes for both at once.
 
+**Pushes wait for an idle session (§7.3, §10.4).** The first live session also showed an
+item landing in the middle of other work: Claude Code injects a channel event into a running
+turn (the prompt hook fires for it there), and the gate then froze the work in progress until
+the item was answered. The owner asked that nothing be pushed while Claude is busy. The hook
+now marks a session busy on every `UserPromptSubmit` and idle on `Stop`, `StopFailure`,
+`SessionStart`, `SessionEnd` and the `idle_prompt` notification, as a file under `busy/` like
+the gate, so it needs no daemon call; `Node.SessionPushes.cs` holds a push for a busy session
+and sends one per idle turn, counting a few seconds after each push as busy so the pushed
+prompt can register. The docs do not say whether `Stop` fires after an interrupt, so the idle
+notification covers that case, and a mark older than three hours is ignored. The gate is
+unchanged: an item that does arrive is still held behind it.
+
 **How a source item leaves the inbox is the hook's to record (§10.4).** The first live
 session showed three endings, none clean: an item accepted and handled in a later turn was
 never dismissed, one was dismissed before its action ran, and a user who meant "later" had
@@ -358,6 +371,11 @@ block per version.
   deliver without telling the server, so a pushed message stays parked and its note says
   where it was sent, not that it arrived. It rests on the channels research preview and on
   a launch flag with `dangerously` in its name.
+- **Held pushes live in the daemon's memory.** A daemon restart forgets them; the items and
+  messages stay parked with a note saying they waited, and nothing re-pushes them. Whether
+  Claude Code's `idle_prompt` notification follows an interrupted turn, and how soon, was
+  taken from the docs, not seen live; without it, a push held behind an interrupted turn
+  waits for the next turn to end or for the three-hour staleness.
 - **The accept gate is a process per event.** `rtfc hook` starts on every prompt, tool call
   and turn end of every session with the plugin. With the Native AOT binary that is a few
   milliseconds; with the framework-dependent build about 100 ms.

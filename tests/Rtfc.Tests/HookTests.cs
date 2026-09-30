@@ -250,6 +250,53 @@ public class HookTests
     }
 
     [Fact]
+    public void Any_prompt_marks_the_session_busy_and_the_end_of_a_turn_or_an_idle_session_marks_it_idle()
+    {
+        using var temp = new TempHome();
+        bool Busy() => SessionActivity.IsBusy(temp.Home, Session, DateTimeOffset.UtcNow);
+
+        Assert.Equal((0, ""), Hook(temp, Prompt("please refactor the parser")));
+        Assert.True(Busy());
+        Assert.Equal((0, ""), Hook(temp, Event("Stop")));
+        Assert.False(Busy());
+
+        Hook(temp, Prompt(PushedItem));
+        Assert.True(Busy());
+        Hook(temp, Event("StopFailure"));
+        Assert.False(Busy());
+
+        foreach (var ending in new[] { "SessionStart", "SessionEnd" })
+        {
+            Hook(temp, Prompt("go on"));
+            Hook(temp, Event(ending));
+            Assert.False(Busy());
+        }
+
+        // An interrupted turn has no Stop: Claude Code waiting for input is what says it is over. Other notifications are not.
+        Hook(temp, Prompt("go on"));
+        var permission = Event("Notification");
+        permission["notification_type"] = "permission_prompt";
+        permission["message"] = "Claude needs your permission to use Bash";
+        Assert.Equal((0, ""), Hook(temp, permission));
+        Assert.True(Busy());
+        var idle = Event("Notification");
+        idle["notification_type"] = "idle_prompt";
+        idle["message"] = "Claude is waiting for your input";
+        Assert.Equal((0, ""), Hook(temp, idle));
+        Assert.False(Busy());
+
+        Hook(temp, Prompt("go on"));
+        var older = Event("Notification");
+        older["message"] = "Claude is waiting for your input";
+        Hook(temp, older);
+        Assert.False(Busy());
+
+        // Another session's turn is its own.
+        Hook(temp, Prompt("go on", session: "0b7e2f3a-1111-2222-3333-444455556666"));
+        Assert.False(Busy());
+    }
+
+    [Fact]
     public void A_contacts_message_treats_the_source_answers_as_any_other_text()
     {
         using var temp = new TempHome();

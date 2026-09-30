@@ -9,6 +9,9 @@ namespace Rtfc.Core;
 public interface ISessionChannel
 {
     bool TryPush(string sessionId, SessionEvent sessionEvent);
+
+    /// <summary>Whether the session holds a lease that can take a push.</summary>
+    bool IsOpen(string sessionId);
 }
 
 /// <summary>

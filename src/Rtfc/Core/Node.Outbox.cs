@@ -360,6 +360,7 @@ public sealed partial class Node
         }
 
         _lastPrune = now;
+        SessionActivity.Prune(_home, now);
         var removed = _db.Prune(now - _options.Outbox.Retention, now - TimeSpan.FromDays(1));
         if (removed > 0)
         {

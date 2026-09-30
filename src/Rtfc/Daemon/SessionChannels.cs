@@ -38,4 +38,6 @@ public sealed class SessionChannels : ISessionChannel
 
     public bool TryPush(string sessionId, SessionEvent sessionEvent) =>
         _sessions.TryGetValue(sessionId, out var channel) && channel.Writer.TryWrite(sessionEvent);
+
+    public bool IsOpen(string sessionId) => _sessions.ContainsKey(sessionId);
 }

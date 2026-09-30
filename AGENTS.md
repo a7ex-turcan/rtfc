@@ -51,7 +51,9 @@ open in its project (`Node.PushSourceItem`), behind the hook's gate in its sourc
 question with the actions plus "Later" and "Nothing to do", then Accept/Decline for the
 chosen one, then "Dismiss" or "Keep" once the action is done. The hook turns each answer into
 a `GateOutcome` for the daemon (`Later`, `NoAction`, `Dismissed`, `Kept`); a turn that ends
-without asking dismisses the item with a note (`GateOutcome.NothingToDo`).
+without asking dismisses the item with a note (`GateOutcome.NothingToDo`). Every push, a
+contact's message or a source item, waits for the session to be idle: the hook marks it busy
+and idle (`SessionActivity`), and `Node.SessionPushes.cs` holds and releases the pushes.
 
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows

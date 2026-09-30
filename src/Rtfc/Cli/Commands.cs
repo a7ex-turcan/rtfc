@@ -635,6 +635,8 @@ public static class Commands
             switch (StringProperty(root, "hook_event_name"))
             {
                 case "UserPromptSubmit":
+                    // Every prompt, typed or pushed, starts or joins a turn: pushes wait until it is over (spec §7.3).
+                    SessionActivity.MarkBusy(ctx.Home, session);
                     if (PushedMessage(StringProperty(root, "prompt")) is { } pushed)
                     {
                         SessionGates.Write(ctx.Home, session, new SessionGate(pushed.Id, pushed.From, GateState.Pending, pushed.Kind));
@@ -698,10 +700,28 @@ public static class Commands
                     }
 
                     SessionGates.Clear(ctx.Home, session);
+                    SessionActivity.MarkIdle(ctx.Home, session);
                     break;
 
                 case "SessionStart":
+                case "SessionEnd":
                     SessionGates.Clear(ctx.Home, session);
+                    SessionActivity.MarkIdle(ctx.Home, session);
+                    break;
+
+                case "StopFailure":
+                    // The turn ended on an API error. The gate stays shut until a turn ends properly; the session is idle all the same.
+                    SessionActivity.MarkIdle(ctx.Home, session);
+                    break;
+
+                case "Notification":
+                    // Claude Code waiting for the user's next prompt: the only sign that a turn the user interrupted is over.
+                    if (StringProperty(root, "notification_type") == "idle_prompt"
+                        || (StringProperty(root, "message") ?? "").Contains("waiting for your input", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SessionActivity.MarkIdle(ctx.Home, session);
+                    }
+
                     break;
             }
         }

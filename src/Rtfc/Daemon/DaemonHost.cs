@@ -147,7 +147,11 @@ public static class DaemonHost
                 if (events is not null)
                 {
                     sessions.Close(session, events);
-                    node.SessionClosed(session);
+                    if (!sessions.IsOpen(session))
+                    {
+                        // Not when a newer lease of the same session has already taken over.
+                        node.SessionClosed(session);
+                    }
                 }
             }
 

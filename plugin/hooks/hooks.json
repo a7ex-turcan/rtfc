@@ -19,6 +19,15 @@
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
+    ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
+    ],
+    "Notification": [
+      { "matcher": "idle_prompt", "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "rtfc hook" } ] }
     ]
   }
 }
