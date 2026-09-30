@@ -651,22 +651,40 @@ public static class Commands
                     break;
 
                 case "PostToolUse":
-                    if (StringProperty(root, "tool_name") == "AskUserQuestion" && SessionGates.Read(ctx.Home, session) is { State: GateState.Pending } asked)
+                    if (StringProperty(root, "tool_name") == "AskUserQuestion" && SessionGates.Read(ctx.Home, session) is { } asked)
                     {
-                        switch (Decision(root, asked.Kind))
+                        var answer = Decision(root, asked.Kind);
+                        if (asked.State == GateState.Pending)
                         {
-                            case Answer.Accept:
-                                SessionGates.Write(ctx.Home, session, asked with { State = GateState.Accepted, Asked = true });
-                                await NoteDecisionAsync(ctx, asked, GateOutcome.Accepted).ConfigureAwait(false);
-                                break;
-                            case Answer.Decline:
-                                SessionGates.Write(ctx.Home, session, asked with { State = GateState.Declined, Asked = true });
-                                await NoteDecisionAsync(ctx, asked, GateOutcome.Declined).ConfigureAwait(false);
-                                break;
-                            case Answer.Other when asked.Kind == InboxKind.Source && !asked.Asked:
-                                // The user picked an action for a source item; the Accept/Decline question comes next.
-                                SessionGates.Write(ctx.Home, session, asked with { Asked = true });
-                                break;
+                            switch (answer)
+                            {
+                                case Answer.Accept:
+                                    SessionGates.Write(ctx.Home, session, asked with { State = GateState.Accepted, Asked = true });
+                                    await NoteDecisionAsync(ctx, asked, GateOutcome.Accepted).ConfigureAwait(false);
+                                    break;
+                                case Answer.Decline:
+                                    SessionGates.Write(ctx.Home, session, asked with { State = GateState.Declined, Asked = true });
+                                    await NoteDecisionAsync(ctx, asked, GateOutcome.Declined).ConfigureAwait(false);
+                                    break;
+                                case Answer.NothingToDo:
+                                    // The user said so: the item is dismissed. The gate shuts for the turn, as for a decline.
+                                    SessionGates.Write(ctx.Home, session, asked with { State = GateState.Declined, Asked = true });
+                                    await NoteDecisionAsync(ctx, asked, GateOutcome.NoAction).ConfigureAwait(false);
+                                    break;
+                                case Answer.Later:
+                                    SessionGates.Write(ctx.Home, session, asked with { State = GateState.Declined, Asked = true });
+                                    await NoteDecisionAsync(ctx, asked, GateOutcome.Later).ConfigureAwait(false);
+                                    break;
+                                case Answer.Other when asked.Kind == InboxKind.Source && !asked.Asked:
+                                    // The user picked an action for a source item; the Accept/Decline question comes next.
+                                    SessionGates.Write(ctx.Home, session, asked with { Asked = true });
+                                    break;
+                            }
+                        }
+                        else if (asked is { State: GateState.Accepted, Kind: InboxKind.Source } && answer is Answer.Dismiss or Answer.Keep)
+                        {
+                            // The accepted action is done and the user said what becomes of the item; the gate stays open.
+                            await NoteDecisionAsync(ctx, asked, answer == Answer.Dismiss ? GateOutcome.Dismissed : GateOutcome.Kept).ConfigureAwait(false);
                         }
                     }
 
@@ -691,11 +709,12 @@ public static class Commands
         return 0;
     }
 
-    private enum Answer { None, Accept, Decline, Other }
+    private enum Answer { None, Accept, Decline, NothingToDo, Later, Dismiss, Keep, Other }
 
     /// <summary>
-    /// The user's answer, read from the answers alone: the echoed options name every choice. "Accept" and "Decline" decide; for a
-    /// source item "Nothing to do" declines too, and any other answer is the action they picked, which still needs confirming.
+    /// The user's answer, read from the answers alone: the echoed options name every choice. "Accept" and "Decline" decide. For a
+    /// source item, "Nothing to do" and "Later" decide too, "Dismiss" and "Keep" answer the question after the action, and any other
+    /// answer is the action they picked, which still needs confirming.
     /// </summary>
     private static Answer Decision(JsonElement root, string kind)
     {
@@ -709,15 +728,19 @@ public static class Commands
         foreach (var answer in answers.EnumerateObject())
         {
             var value = answer.Value.ValueKind == JsonValueKind.String ? answer.Value.GetString()?.Trim() : null;
-            if (string.Equals(value, "Accept", StringComparison.OrdinalIgnoreCase))
+            var found = value?.ToLowerInvariant() switch
             {
-                return Answer.Accept;
-            }
-
-            if (string.Equals(value, "Decline", StringComparison.OrdinalIgnoreCase)
-                || (kind == InboxKind.Source && string.Equals(value, "Nothing to do", StringComparison.OrdinalIgnoreCase)))
+                "accept" => Answer.Accept,
+                "decline" => Answer.Decline,
+                "nothing to do" when kind == InboxKind.Source => Answer.NothingToDo,
+                "later" when kind == InboxKind.Source => Answer.Later,
+                "dismiss" when kind == InboxKind.Source => Answer.Dismiss,
+                "keep" when kind == InboxKind.Source => Answer.Keep,
+                _ => Answer.None,
+            };
+            if (found != Answer.None)
             {
-                return Answer.Decline;
+                return found;
             }
 
             other |= !string.IsNullOrEmpty(value);
@@ -734,7 +757,7 @@ public static class Commands
             ? $"rtfc: the user declined {what}, so tools stay blocked until this turn ends. Tell the user and stop."
             : gate.Kind == InboxKind.Source
                 ? $"rtfc: {what} has not been accepted by the user, so every tool but AskUserQuestion is blocked. Give the user the gist and ask them "
-                    + "with AskUserQuestion which action to take, with \"Nothing to do\" as an option; when they pick one, ask \"Accept\" or \"Decline\" for it."
+                    + "with AskUserQuestion which action to take, with \"Later\" and \"Nothing to do\" as options; when they pick an action, ask \"Accept\" or \"Decline\" for it."
                 : $"rtfc: {what} has not been accepted by the user, so every tool but AskUserQuestion is blocked. "
                     + "Give the user the gist and ask them with AskUserQuestion, options \"Accept\" and \"Decline\".";
         return new JsonObject

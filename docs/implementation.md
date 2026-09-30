@@ -28,7 +28,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
-| §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`, "Nothing to do", the `Stop` outcome) → `Node.RecordGateDecision(id, outcome)` |
+| §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
@@ -211,6 +211,17 @@ hints, and cost more to get right. See §17's progress line.
 **Source tokens are private files (§10.5).** Like the identity keys, a token lives under
 `keys/` (`keys/accounts/<name>.token`, 0600 on Unix, the profile ACL on Windows) and not in
 the OS keychain the spec prefers; the keychain comes for both at once.
+
+**How a source item leaves the inbox is the hook's to record (§10.4).** The first live
+session showed three endings, none clean: an item accepted and handled in a later turn was
+never dismissed, one was dismissed before its action ran, and a user who meant "later" had
+only "Nothing to do" to unblock the session. So the question offers "Later" beside "Nothing to
+do", and after an accepted action Claude asks "Dismiss" or "Keep". The hook reads those
+answers, like Accept and Decline, from `tool_response.answers` and tells the daemon; a
+dismissal no longer depends on Claude remembering to call `inbox_dismiss`, though it still
+may. The answers are exact labels and count only for a source item's gate; for a contact's
+message they are ordinary text. None of this opens the gate any wider: "Later" and "Nothing
+to do" shut it for the turn like a decline.
 
 **Sources: Atlassian Cloud, Jira first, and a `session` mode behind the gate (§10, Phase
 8).** The owner's shop runs Jira, Confluence and Bitbucket on atlassian.net, so the Cloud

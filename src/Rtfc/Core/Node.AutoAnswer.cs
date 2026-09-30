@@ -182,6 +182,20 @@ public sealed partial class Node
                 _db.SetMessageState(id, InboxState.Dismissed, Self.DeviceId, now);
                 _db.SetMessageNote(id, $"Dismissed at {Timestamps.Format(now)}: Claude found nothing to do about it in your session{where}. It stays listed here.", now);
                 break;
+            case GateOutcome.NoAction when message.Kind == InboxKind.Source:
+                _db.SetMessageState(id, InboxState.Dismissed, Self.DeviceId, now);
+                _db.SetMessageNote(id, $"Dismissed at {Timestamps.Format(now)}: you chose nothing to do in your session{where}. It stays listed here.", now);
+                break;
+            case GateOutcome.Later when message.Kind == InboxKind.Source:
+                _db.SetMessageNote(id, $"Left for later in your Claude Code session{where} at {Timestamps.Format(now)}. It waits here.", now);
+                break;
+            case GateOutcome.Dismissed when message.Kind == InboxKind.Source:
+                _db.SetMessageState(id, InboxState.Dismissed, Self.DeviceId, now);
+                _db.SetMessageNote(id, $"Handled in your Claude Code session{where} and dismissed at {Timestamps.Format(now)}. It stays listed here.", now);
+                break;
+            case GateOutcome.Kept when message.Kind == InboxKind.Source:
+                _db.SetMessageNote(id, $"Handled in your Claude Code session{where} at {Timestamps.Format(now)}; kept in your inbox at your request.", now);
+                break;
             default:
                 return false;
         }

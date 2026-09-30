@@ -127,5 +127,13 @@ public class SessionModeTests : IAsyncLifetime
         Assert.Contains("Accepted in your Claude Code session", _alex.Node.Open(accepted.MessageId!)!.Note);
         Assert.Contains("Declined in your Claude Code session", _alex.Node.Open(declined.MessageId!)!.Note);
         Assert.Equal(2, _alex.Node.ListInbox(null).Length);
+
+        // The source-only outcomes never touch a contact's message: only a reply marks it answered.
+        foreach (var outcome in new[] { GateOutcome.Later, GateOutcome.NoAction, GateOutcome.Dismissed, GateOutcome.Kept, GateOutcome.NothingToDo })
+        {
+            Assert.False(_alex.Node.RecordGateDecision(accepted.MessageId!, outcome));
+        }
+
+        Assert.Equal(InboxState.Read, _alex.Node.Open(accepted.MessageId!)!.State);
     }
 }

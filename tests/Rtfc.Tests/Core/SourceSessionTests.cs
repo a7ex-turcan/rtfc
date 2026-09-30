@@ -45,8 +45,10 @@ public class SourceSessionTests : IAsyncLifetime
         Assert.Equal(Session, session);
         Assert.Equal((item.Id, "jira", InboxKind.Source), (pushed.Id, pushed.From, pushed.Kind));
         Assert.StartsWith("rtfc: a source item for the user's project payments-api: jira PAY-1. ", pushed.Content);
-        Assert.Contains("\"Nothing to do\"", pushed.Content);
+        Assert.Contains("(at most two) plus \"Later\" and \"Nothing to do\"", pushed.Content);
         Assert.Contains("\"Accept\" and \"Decline\"", pushed.Content);
+        Assert.Contains("When the action is done, and not before", pushed.Content);
+        Assert.Contains("\"Dismiss\" and \"Keep\"", pushed.Content);
         Assert.Contains($"inbox_dismiss tool with id {item.Id}", pushed.Content);
         Assert.Contains("<source_item source=\"jira\" entity=\"PAY-1\" untrusted=\"true\">\nTitle: PAY-1 Retry policy\nURL: https://acme.atlassian.net/browse/PAY-1\nEvents, oldest first:\n", pushed.Content);
         Assert.Contains("· status_changed · Dan: Dan moved it from \"To Do\" to \"In Progress\"\n", pushed.Content);
@@ -129,6 +131,41 @@ public class SourceSessionTests : IAsyncLifetime
 
         Assert.False(_alex.Node.RecordGateDecision("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", GateOutcome.Accepted));
         Assert.False(_alex.Node.RecordGateDecision(id, "whatever"));
+    }
+
+    [Fact]
+    public async Task Later_keeps_an_item_nothing_to_do_dismisses_it_and_after_the_action_the_user_says_dismiss_or_keep()
+    {
+        OpenSession(Session, _project);
+        _jira.Queue(
+            Event("a", "jira:PAY-1", SourceEventType.Assigned, "Dan", "PAY-1", "assigned", T0),
+            Event("b", "jira:PAY-2", SourceEventType.Assigned, "Dan", "PAY-2", "assigned", T0),
+            Event("c", "jira:PAY-3", SourceEventType.Assigned, "Dan", "PAY-3", "assigned", T0),
+            Event("d", "jira:PAY-4", SourceEventType.Assigned, "Dan", "PAY-4", "assigned", T0));
+        await _alex.Node.PollDueAsync(Ct);
+        var ids = _alex.Node.ListInbox(InboxState.Parked).ToDictionary(i => i.Entity!, i => i.Id);
+        InboxSummary Item(string entity) => Assert.Single(_alex.Node.ListInbox(null), i => i.Entity == entity);
+
+        Assert.True(_alex.Node.RecordGateDecision(ids["PAY-1"], GateOutcome.Later));
+        Assert.Equal(InboxState.Parked, Item("PAY-1").State);
+        Assert.Contains("Left for later in your Claude Code session in payments-api", Item("PAY-1").Note);
+
+        Assert.True(_alex.Node.RecordGateDecision(ids["PAY-2"], GateOutcome.NoAction));
+        Assert.Equal(InboxState.Dismissed, Item("PAY-2").State);
+        Assert.Contains("you chose nothing to do in your session in payments-api", Item("PAY-2").Note);
+
+        Assert.True(_alex.Node.RecordGateDecision(ids["PAY-3"], GateOutcome.Accepted));
+        Assert.True(_alex.Node.RecordGateDecision(ids["PAY-3"], GateOutcome.Dismissed));
+        Assert.Equal(InboxState.Dismissed, Item("PAY-3").State);
+        Assert.Contains("Handled in your Claude Code session in payments-api and dismissed", Item("PAY-3").Note);
+
+        Assert.True(_alex.Node.RecordGateDecision(ids["PAY-4"], GateOutcome.Accepted));
+        Assert.True(_alex.Node.RecordGateDecision(ids["PAY-4"], GateOutcome.Kept));
+        Assert.Equal(InboxState.Parked, Item("PAY-4").State);
+        Assert.Contains("kept in your inbox at your request", Item("PAY-4").Note);
+
+        Assert.Equal(["PAY-1", "PAY-4"], _alex.Node.ListInbox(InboxState.Parked).Select(i => i.Entity).Order());
+        Assert.Equal(2, StatusFile.Read(_alex.Home.StatusPath)!.Projects.Single().Value.Tickets);
     }
 
     [Fact]

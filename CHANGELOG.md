@@ -20,7 +20,14 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Changed
+
+- A source item in your session now ends cleanly. The first question offers "Later" beside
+  "Nothing to do" and up to two actions; "Later" keeps the item in your inbox with a note,
+  and "Nothing to do" dismisses it. After an accepted action is done, Claude asks "Dismiss"
+  or "Keep", and your answer is recorded by the plugin's hook, so an item you handled no
+  longer stays in the inbox because Claude forgot to dismiss it, and is not dismissed before
+  the action has run.
 
 ## [0.9.0] - 2026-09-30
 

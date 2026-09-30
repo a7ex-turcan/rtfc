@@ -9,12 +9,20 @@ public static class GateState
     public const string Declined = "declined";
 }
 
-/// <summary>What the hook tells the daemon about a pushed item: the user's answer, or that the turn ended with nothing to ask.</summary>
+/// <summary>
+/// What the hook tells the daemon about a pushed item: the user's answer, or that the turn ended with nothing to ask. For a source
+/// item, <c>NoAction</c> is the user choosing "Nothing to do", <c>Later</c> is "Later", and <c>Dismissed</c> and <c>Kept</c> are
+/// the answer to "Dismiss or Keep?" once an accepted action is done (spec §10.4).
+/// </summary>
 public static class GateOutcome
 {
     public const string Accepted = "accepted";
     public const string Declined = "declined";
     public const string NothingToDo = "nothing_to_do";
+    public const string NoAction = "no_action";
+    public const string Later = "later";
+    public const string Dismissed = "dismissed";
+    public const string Kept = "kept";
 }
 
 /// <summary>

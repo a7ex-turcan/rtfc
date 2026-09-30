@@ -48,8 +48,10 @@ mirrored into `subscriptions` and gated by `rtfc sources approve`, the poller in
 were probed against the owner's real site and workspace before they were written, and have
 opt-in live tests. A subscription in `session` mode pushes each new item into the session
 open in its project (`Node.PushSourceItem`), behind the hook's gate in its source shape: one
-question with the actions plus "Nothing to do", then Accept/Decline for the chosen one; a
-turn that ends without asking dismisses the item with a note (`GateOutcome.NothingToDo`).
+question with the actions plus "Later" and "Nothing to do", then Accept/Decline for the
+chosen one, then "Dismiss" or "Keep" once the action is done. The hook turns each answer into
+a `GateOutcome` for the daemon (`Later`, `NoAction`, `Dismissed`, `Kept`); a turn that ends
+without asking dismisses the item with a note (`GateOutcome.NothingToDo`).
 
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows

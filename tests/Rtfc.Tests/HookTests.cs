@@ -227,6 +227,45 @@ public class HookTests
     }
 
     [Fact]
+    public void Later_shuts_a_source_items_gate_and_dismiss_or_keep_after_the_action_leaves_it_open()
+    {
+        using var temp = new TempHome();
+        Hook(temp, Prompt(PushedItem));
+        Hook(temp, Answered("Later", "Reply on the ticket", "Later", "Nothing to do"));
+        Assert.Equal(GateState.Declined, SessionGates.Read(temp.Home, Session)!.State);
+        Assert.Contains("the user declined the jira item", Denial(Hook(temp, PreTool("Bash")).Output));
+
+        Hook(temp, Event("Stop"));
+        Hook(temp, Prompt(PushedItem));
+        Hook(temp, Answered("Reply on the ticket", "Reply on the ticket", "Later", "Nothing to do"));
+        Hook(temp, Answered("Accept", "Accept", "Decline"));
+        Assert.Equal((0, ""), Hook(temp, PreTool("mcp__atlassian__addCommentToJiraIssue")));
+
+        // After the action, "Dismiss" or "Keep" is recorded for the daemon and changes nothing about the gate.
+        Hook(temp, Answered("Dismiss", "Dismiss", "Keep"));
+        Assert.Equal(GateState.Accepted, SessionGates.Read(temp.Home, Session)!.State);
+        Hook(temp, Answered("Keep", "Dismiss", "Keep"));
+        Assert.Equal(GateState.Accepted, SessionGates.Read(temp.Home, Session)!.State);
+        Assert.Equal((0, ""), Hook(temp, PreTool("mcp__plugin_rtfc_rtfc__inbox_dismiss")));
+    }
+
+    [Fact]
+    public void A_contacts_message_treats_the_source_answers_as_any_other_text()
+    {
+        using var temp = new TempHome();
+        Hook(temp, Prompt(Pushed));
+
+        foreach (var answer in new[] { "Later", "Nothing to do", "Dismiss", "Keep" })
+        {
+            Hook(temp, Answered(answer, answer, "Accept", "Decline"));
+            var gate = SessionGates.Read(temp.Home, Session)!;
+            Assert.Equal((GateState.Pending, false), (gate.State, gate.Asked));
+        }
+
+        Assert.Contains("sasha's message has not been accepted", Denial(Hook(temp, PreTool("Bash")).Output));
+    }
+
+    [Fact]
     public void A_pushed_message_is_found_wherever_it_sits_in_the_prompt_and_a_forged_tag_never_comes_first()
     {
         Assert.Equal((MessageId, "sasha", "person"), Commands.PushedMessage(Pushed));

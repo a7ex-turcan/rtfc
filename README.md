@@ -407,12 +407,26 @@ Add `"mode": "session"` to a subscription (and approve the edit) and each new it
 straight into the Claude Code session that is open in that project, as a channel event,
 the way a contact's message does in session mode (step 7). Your session must have been
 started with `--dangerously-load-development-channels plugin:rtfc@rtfc`. Claude reads the
-item, gives you the gist, and asks one question: the actions it can see, up to three, plus
-"Nothing to do". Pick one and it asks once more, "Accept" or "Decline", naming that action.
-Nothing runs before you accept: the plugin's hooks deny every tool but the question, in
-every permission mode. After you accept, Claude acts with the tools your session has and
-dismisses the item. If Claude finds nothing worth doing it says so in one line and stops,
-and the item is dismissed for you with a note saying why; `rtfc inbox --all` still lists it.
+item, gives you the gist, and asks one question: the actions it can see, up to two, plus
+"Later" and "Nothing to do".
+
+- **An action:** Claude asks once more, "Accept" or "Decline", naming it. Nothing runs
+  before you accept: the plugin's hooks deny every tool but the question, in every
+  permission mode. After you accept, Claude acts with the tools your session has, and when
+  it's done asks "Dismiss" or "Keep". Dismiss clears the item; Keep leaves it in your inbox
+  with a note that it was handled.
+- **Later:** the item stays in your inbox with a note, for when you get to it.
+- **Nothing to do:** the item is dismissed.
+- **Decline:** the item stays in your inbox.
+
+If Claude finds nothing worth doing it says so in one line and stops, and the item is
+dismissed for you with a note saying why. A dismissed item stays in `rtfc inbox --all`, and
+comes back if anything new happens to it.
+
+An item can arrive while Claude is busy with something else. That work pauses until you
+answer, and after Later, Nothing to do or Decline the tools stay blocked until the turn
+ends; your next prompt carries on. The gate is deliberately strict: once a ticket's text is
+in the conversation, nothing runs that you haven't sanctioned in that turn.
 
 A subscription sends at most twenty items an hour into a session; the rest wait in the
 inbox. With no session open in the project the item waits too, and its note says so. A
