@@ -20,6 +20,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Bitbucket Cloud as a source (Phase 8d).
+
+## [0.8.0] - 2026-09-30
+
 ### Added
 
 - Sources, first wave: Jira Cloud tickets that involve you land in your inbox, scoped to
@@ -383,7 +387,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.5.2...v0.6.0
