@@ -20,7 +20,7 @@ The core idea is the **contact**: a mutual, explicitly accepted relationship bet
 - Parked inbox with a status-bar indicator; messages survive relaunches.
 - "Nobody's home": if the recipient has no device online, the sender is told immediately.
 - Optional per-contact auto-answer with a restricted profile and loop protection.
-- **Sources:** notifications from Jira, Confluence, Bitbucket, and GitHub land in the same inbox, subscribed per project (§10). They come last in the phasing (§17): the primary value is agent-to-agent communication.
+- **Sources:** notifications from Jira, Confluence, Bitbucket, and GitHub land in the same inbox, subscribed per project (§10). They were planned last in the phasing, since the primary value is agent-to-agent communication, and shipped as Phase 8 ahead of multi-device and the relay at the owner's request (§17).
 - LAN-only in v1, with an architecture that extends to the internet (overlay VPN, then a relay) without touching identity, storage, or the message model.
 
 ### Non-goals (for now)
@@ -552,8 +552,8 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 ## 11. Status bar
 
 - The daemon writes `~/.claude/rtfc/status.json` atomically (write temp file, then rename) whenever the inbox changes. Counts are split into global (the shared inbox) and per project (messages addressed to a project, §7.6, and source items), keyed by the project's normalized root path:
-  `{ "global": { "parked": 1, "from": ["Sasha"], "pending": 2 }, "projects": { "/src/payments-api": { "name": "payments-api", "parked": 1, "from": ["Alex"], "reviews": 2, "tickets": 3, "pendingSubscriptions": 0 } }, "away": false }` (`pending` counts the outbox; the status line shows it as `📤 2`, and `away` as `💤 away`)
-- Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 2 · Sasha, Alex  🔀 2  🎫 3`, or nothing when there's nothing to show. The current project's messages count with the shared inbox; another project's appear as a pointer, `📨 1 · Alex → payments-api`. Reading a file keeps it fast, since status lines run often.
+  `{ "global": { "parked": 1, "from": ["Sasha"], "pending": 2 }, "projects": { "/src/payments-api": { "name": "payments-api", "parked": 1, "from": ["Alex"], "reviews": 2, "tickets": 3, "pages": 1, "pendingSubscriptions": 0 } }, "away": false }` (`pending` counts the outbox; the status line shows it as `📤 2`, and `away` as `💤 away`; `reviews` are pull requests, `tickets` Jira issues, `pages` Confluence pages, each counting parked source items)
+- Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 2 · Sasha, Alex  🔀 2  🎫 3  📄 1`, and `⚠ rtfc: 1 pending` while a subscription waits for approval, or nothing when there's nothing to show. The current project's messages count with the shared inbox; another project's appear as a pointer, `📨 1 · Alex → payments-api`. Reading a file keeps it fast, since status lines run often.
 - Configure it once in `~/.claude/settings.json`:
   `{ "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }`
 - Claude Code has **one** `statusLine` setting per user, so ship this as a composable segment: users with an existing status line call `rtfc statusline` from their own script. Offer a standalone config for everyone else.
@@ -818,7 +818,7 @@ Ordered by the primary value, agent-to-agent communication. Two Claudes talk as 
 
 The order is cheap to change because the invariants (§15) and the `(person_id, device_id)` data model are in place from Phase 1, so no phase reworks an earlier one. **Early phases defer features, never guards.** Mutual TLS, the untrusted wrapping (§7.5), the frame and body size caps, and the CLI-only management boundary (§9.3) all ship in Phase 1.
 
-Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints. Project-addressed messages (§7.6) came next, and brought two parts of 8a forward with them: session registration and the project-aware status line. Then Phase 7 (§7.3), at the owner's request, and then Phase 3.
+Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ahead of 3 because replies that wait for the sender are worth more than VPN hints. Project-addressed messages (§7.6) came next, and brought two parts of 8a forward with them: session registration and the project-aware status line. Then Phase 7 (§7.3), at the owner's request, and then Phase 3. Then Phase 8 for the three Atlassian Cloud products, 8a to 8d, ahead of 5 and 6, also at the owner's request (2026-09-30), because their team lives in Jira, Confluence and Bitbucket.
 
 | Phase | Scope | Done when |
 |---|---|---|

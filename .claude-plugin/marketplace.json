@@ -6,7 +6,7 @@
     {
       "name": "rtfc",
       "source": "./plugin",
-      "description": "Message between people's Claude Code sessions, with a parked inbox and opt-in auto-answer."
+      "description": "Message between people's Claude Code sessions, with a parked inbox and opt-in auto-answer, and Jira, Confluence and Bitbucket notifications in the same inbox."
     }
   ]
 }

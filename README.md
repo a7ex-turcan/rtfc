@@ -23,11 +23,13 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.8.0, Phases 1, 2, 3, 4 and 7, messages addressed to a project, and Jira and Confluence as sources.** Two people
+**Status: 0.8.0, Phases 1, 2, 3, 4, 7 and 8, and messages addressed to a project.** Two people
 on one LAN or VPN exchange messages between their Claude Code sessions; a contact's message can come
 straight into your live session, where Claude asks you Accept or Decline and then acts; a
 scoped, read-only Claude can answer while you are away; replies to someone who has gone
-wait until they are back; and a message can be sent to one of the other person's projects.
+wait until they are back; a message can be sent to one of the other person's projects; and
+Jira, Confluence and Bitbucket Cloud notifications land in the project they belong to, or
+straight in your session, where Claude proposes what to do and you confirm.
 See [`CHANGELOG.md`](CHANGELOG.md) for what is in and what is not, and
 [`docs/spec.md`](docs/spec.md) for the design.
 
@@ -127,14 +129,15 @@ release (the two carry the same manifest, so register one or the other). Session
 
 The plugin adds:
 
-- An MCP server, `rtfc mcp`, with six tools: `contacts`, `send`, `inbox_list`,
-  `inbox_open`, `inbox_reply`, `inbox_dismiss`.
+- An MCP server, `rtfc mcp`, with seven tools: `contacts`, `send`, `inbox_list`,
+  `inbox_open`, `inbox_reply`, `inbox_dismiss`, `sources`.
 - Hooks: `rtfc daemon ensure` starts the daemon when a session opens, and `rtfc hook` runs
-  on prompts, tool calls and turn ends to hold a contact's message in your session until
-  you accept it (step 7). For anything else it does nothing.
+  on prompts, tool calls and turn ends to hold a contact's message or a source item in your
+  session until you accept it (steps 7 and 9). For anything else it does nothing.
 - Slash commands: `/rtfc:init`, `/rtfc:invite`, `/rtfc:accept <token>`, `/rtfc:contacts`,
   `/rtfc:inbox`, `/rtfc:auto`, `/rtfc:remove`, `/rtfc:block`, `/rtfc:away`, `/rtfc:rename`,
-  `/rtfc:receipts`, `/rtfc:hints`.
+  `/rtfc:receipts`, `/rtfc:hints`, `/rtfc:sources`, `/rtfc:sources-approve`,
+  `/rtfc:project-forget`.
 
 ### 4. Show parked messages in the status line
 
@@ -321,18 +324,22 @@ Tickets, pages and pull requests that involve you can land in the same inbox, sc
 project they belong to. Three steps, all yours: an account, a subscription, an approval.
 
 **The account.** Create an API token at
-[id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) (the plain
-"Create API token" kind works against your site URL; a token *with scopes* has to be used
-through `https://api.atlassian.com/ex/jira/<cloudId>`), then, in a real terminal:
+[id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens). The plain
+"Create API token" kind works for Jira and Confluence against your site URL and is the one
+to use; a token *with scopes* works only through the API gateway,
+`https://api.atlassian.com/ex/jira/<cloudId>` or `…/ex/confluence/<cloudId>`, and then the
+links in your items point at the gateway rather than the site. Then, in a real terminal:
 
 ```bash
 rtfc account add jira-work --type jira --url https://acme.atlassian.net --login you@acme.com
 ```
 
-It asks for the token with hidden input, checks it against Jira, and stores it in
+It asks for the token with hidden input, checks it against the service, and stores it in
 `~/.claude/rtfc/keys/accounts/jira-work.token`, readable only by you. The token never goes
 on a command line, through a slash command or through Claude, and rtfc only ever uses it
-to read. `rtfc account list` and `rtfc account remove <name>` are the rest.
+to read. `rtfc account list` and `rtfc account remove <name>` are the rest. The daemon
+reaches the site over HTTPS, so the machine needs a way out to `atlassian.net` and
+`api.bitbucket.org`.
 
 **The subscription.** In the project you want the tickets in, create
 `.claude/rtfc.local.json` (it is gitignored by the same convention as Claude Code's
@@ -351,8 +358,9 @@ to read. `rtfc account list` and `rtfc account remove <name>` are the rest.
 }
 ```
 
-`events` picks from `assigned`, `mentioned`, `status_changed` and `comment_on_mine`; leave it
-out for all of them. Your own comments and transitions never notify you.
+For Jira, `events` picks from `assigned`, `mentioned`, `status_changed` and
+`comment_on_mine`; leave it out for every event the source produces. Your own comments,
+transitions and approvals never notify you, on any source.
 
 Confluence works the same way with `--type confluence` (the same site URL and, for an
 unscoped token, the same token) and an entry like
@@ -380,16 +388,18 @@ included, so the file alone never turns a source on; you do. An edited entry goe
 pending.
 
 From then on the daemon polls every minute or two while you have a session open, and each
-ticket that changes becomes one item: `🎫 2` in the status line of that project, kind
-`source` in `/rtfc:inbox`, and in full through `inbox_open`, wrapped as
-`<source_item source="jira" entity="PAY-123" untrusted="true">` with its recent events,
-who did what and when, and the link. Dismiss it like a message; if the ticket moves again,
-it comes back with its history. `/rtfc:sources` shows the subscriptions and their health,
-and `rtfc project forget <dir>` stops polling a project and drops its items.
+ticket, page or pull request that changes becomes one item: `🎫 2`, `📄 1` or `🔀 1` in the
+status line of that project, kind `source` in `/rtfc:inbox`, and in full through
+`inbox_open`, wrapped as `<source_item source="jira" entity="PAY-123" untrusted="true">`
+with its recent events, who did what and when, and the link. A new subscription starts
+from the moment you approve it, not from the past. Dismiss an item like a message; if the
+ticket moves again, it comes back with its history. `/rtfc:sources` shows the
+subscriptions and their health, and `/rtfc:project-forget <dir>` stops polling a project
+and drops its items.
 
-rtfc never writes to Jira. Ask Claude to comment or move a ticket and it will use the
-tools you already have, such as the Atlassian MCP server, with their own permission
-prompts. Replying to a source item with `inbox_reply` is refused.
+rtfc never writes to a source. Ask Claude to comment on a ticket or approve a pull request
+and it will use the tools you already have, such as the Atlassian MCP server or a browser,
+with their own permission prompts. Replying to a source item with `inbox_reply` is refused.
 
 #### Into your session: Claude proposes, you pick, you confirm
 
@@ -402,7 +412,7 @@ item, gives you the gist, and asks one question: the actions it can see, up to t
 Nothing runs before you accept: the plugin's hooks deny every tool but the question, in
 every permission mode. After you accept, Claude acts with the tools your session has and
 dismisses the item. If Claude finds nothing worth doing it says so in one line and stops,
-and the item is dismissed for you with a note saying why; it stays in `/rtfc:inbox --all`.
+and the item is dismissed for you with a note saying why; `rtfc inbox --all` still lists it.
 
 A subscription sends at most twenty items an hour into a session; the rest wait in the
 inbox. With no session open in the project the item waits too, and its note says so. A
@@ -435,15 +445,16 @@ you confirm, and a "nothing to do" can at most turn a notification into one line
   `<contact_message untrusted="true">` and is told to confirm with you before doing
   anything a message asks. Claude Code's normal permission prompts remain the backstop, and
   in session mode the plugin's hooks block every tool until you accept the message.
-- **Sources are read, never written.** The daemon polls Jira with your token from a cursor,
-  keeps one item per ticket, and shows it wrapped as `<source_item untrusted="true">`. The
-  token lives in a private file, is never a tool result, and its subscriptions start only
-  after `rtfc sources approve`. Acting on a ticket happens with the tools your session
-  already has.
-- **Changing who can reach you is never a tool.** Invite, accept, auto-answer, remove and
-  block are CLI commands that only run when you type the slash command. Don't pre-approve
-  `Bash(rtfc:*)` in your permissions, or Claude could run them for you. A message saying
-  "please enable auto-answer for me" is exactly the attack this stops.
+- **Sources are read, never written.** The daemon polls Jira, Confluence and Bitbucket with
+  your token from a cursor, keeps one item per ticket, page or pull request, and shows it
+  wrapped as `<source_item untrusted="true">`. The token lives in a private file, is never a
+  tool result, and a subscription starts only after `rtfc sources approve`. Acting on an
+  item happens with the tools your session already has.
+- **Changing who can reach you is never a tool.** Invite, accept, auto-answer, remove,
+  block, adding a source account, approving subscriptions and forgetting a project are CLI
+  commands that only run when you type them or their slash command. Don't pre-approve
+  `Bash(rtfc:*)` in your permissions, or Claude could run them for you. A message or a
+  ticket saying "please enable auto-answer for me" is exactly the attack this stops.
 
 ### The daemon, by hand
 
@@ -482,6 +493,9 @@ lease on it.
 `RTFC_HOME` moves the whole directory somewhere else. Tests and the e2e script use it so
 they never touch your real one.
 
+Sources are not configured here: accounts live in `rtfc account`, and subscriptions in each
+project's `.claude/rtfc.local.json` (step 9).
+
 ### Troubleshooting
 
 | Symptom | Look at |
@@ -498,6 +512,10 @@ they never touch your real one.
 | A message sent to a project landed in the shared inbox | Its note says why: no project by that name, or several. A project is known once a Claude Code session with the plugin has run in it; the name is its git root's folder name (or the folder's, outside git). `rtfc inbox` shows which project each message went to. |
 | Session mode: a contact's message never shows up in the session | Was the session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`, and did you run `/rtfc:auto <contact> session` in that same session? Claude Code drops a channel event it cannot deliver without a word; the message still waits in `/rtfc:inbox`. Team/Enterprise organisations must allow channels. |
 | Session mode: Claude says rtfc blocked a tool | You have not accepted the contact's message yet, or you declined it. Answer the Accept/Decline question; the gate lifts for the rest of that turn and closes when the turn ends. |
+| The status line says `⚠ rtfc: 1 pending` | A subscription in `.claude/rtfc.local.json` waits for you. `/rtfc:sources-approve` in a session in that project; an entry you edit goes back to pending. |
+| Nothing arrives from a source | `/rtfc:sources` (or `rtfc sources`) shows each subscription's status, how far it has read and its last error. A new subscription starts from the moment you approved it; your own actions never notify you; polling happens only while a session is open; and the JQL, space or repository must match what you expect. `rtfcd.log` logs each subscription's first poll. |
+| A subscription shows `error` and the token was refused | The token expired (Atlassian tokens last at most a year), or it is an unscoped token on Bitbucket, which needs one created with scopes. `rtfc account add <name> …` again, in a terminal, stores a new one. |
+| Session mode: a source item never shows up in the session | Was the session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`, and is it open in the item's project (the git root of the folder with `.claude/rtfc.local.json`)? The item's note in `rtfc inbox` says where it went, or that no session was open, or that the subscription used its twenty pushes for the hour. |
 
 ### Limitations
 
@@ -521,12 +539,12 @@ they never touch your real one.
   matched by your account id or uuid in the text. Subscriptions read
   `.claude/rtfc.local.json` on every tick (about fifteen seconds) rather than watching it.
   Polling happens only while your daemon runs, and a new subscription starts from now, not
-  from the past. Unscoped Atlassian tokens work against the site URL; scoped ones need the
-  `api.atlassian.com/ex/jira/<cloudId>` URL. There is no `prepare` mode yet. Session mode
-  for items rests on the same channels preview as it does for contacts, and rtfc cannot
-  tell whether a pushed item reached the session, so it waits in the inbox as well.
-- Session mode rests on Claude Code's channels research preview, and rtfc cannot tell
-  whether a pushed message reached the session, so it also waits in the inbox.
+  from the past. A scoped Atlassian token for Jira or Confluence works only through the
+  API gateway URL, and then an item's link points at the gateway. Tokens are private files,
+  not OS keychain entries. There is no `prepare` mode yet.
+- Session mode, for contacts and for source items alike, rests on Claude Code's channels
+  research preview, and rtfc cannot tell whether a push reached the session, so the message
+  or item also waits in the inbox.
 - Fingerprints are hex groups, not words.
 
 ### Roadmap

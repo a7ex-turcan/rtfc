@@ -31,6 +31,16 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
   replies to your comments and comments naming you as `reply_to_me` and `mentioned`. One
   item per pull request, shown as `🔀 N` in the status line.
 
+### Changed
+
+- `/rtfc:inbox` shows source items with their source, ticket, page or pull request and
+  event count, and says that acting on one happens with your session's own tools.
+- `/rtfc:sources` explains how to add a Confluence or Bitbucket subscription too, and what
+  to do about a refused token.
+- The README's step 9 covers all three sources, and its troubleshooting table covers
+  pending subscriptions, silent sources, refused tokens and items that never reach the
+  session.
+
 ## [0.8.0] - 2026-09-30
 
 ### Added

@@ -24,7 +24,7 @@ from the spec with its reason. If the code has to diverge from the spec, update 
 
 ## Status
 
-**Phases 1, 2 and 4 work end to end** (§17). Phase 1: `rtfc init`, invite and accept over
+**Phases 1, 2, 3, 4, 7 and 8 work end to end** (§17). Phase 1: `rtfc init`, invite and accept over
 mutual TLS, the daemon with its lease-based lifetime and Unix-socket IPC, `send` with
 nobody's-home, the parked inbox, the status line, and open and reply, all driven from the
 MCP tools and the plugin's skills. Phase 2: `auto_headless` per contact
@@ -39,20 +39,17 @@ every tool until the user accepts the message. Phase 3 too: a device's hints tri
 `rtfc hints`, and hints in every hello (§8.3, §8.4). `scripts/e2e.sh` runs the whole story on
 one machine with two daemons and a fake `claude`.
 
-Phase 8a too: sources (§10) with one adapter, Jira Cloud. `rtfc account add` (hidden token
-input, a private file under `keys/accounts/`), `<project>/.claude/rtfc.local.json` mirrored
-into `subscriptions` and gated by `rtfc sources approve`, the poller in `Node.Sources.cs`
-with cursors and one coalesced item per entity, the `sources` tool, `rtfc project forget`,
-and 🎫 in the status line. `Core/Sources/JiraCloudAdapter.cs` was checked against a real
-site.
-
-Phase 8b as well: a subscription in `session` mode pushes each new item into the session
+Phase 8 as well: sources (§10) for the three Atlassian Cloud products. `rtfc account add`
+(hidden token input, a private file under `keys/accounts/`), `<project>/.claude/rtfc.local.json`
+mirrored into `subscriptions` and gated by `rtfc sources approve`, the poller in
+`Node.Sources.cs` with cursors and one coalesced item per entity, the `sources` tool,
+`rtfc project forget`, and 🎫 📄 🔀 in the status line. The adapters,
+`Core/Sources/JiraCloudAdapter.cs`, `ConfluenceCloudAdapter.cs` and `BitbucketCloudAdapter.cs`,
+were probed against the owner's real site and workspace before they were written, and have
+opt-in live tests. A subscription in `session` mode pushes each new item into the session
 open in its project (`Node.PushSourceItem`), behind the hook's gate in its source shape: one
 question with the actions plus "Nothing to do", then Accept/Decline for the chosen one; a
 turn that ends without asking dismisses the item with a note (`GateOutcome.NothingToDo`).
-
-Phase 8c and 8d: `Core/Sources/ConfluenceCloudAdapter.cs` and `BitbucketCloudAdapter.cs`,
-checked against the same site and the owner's workspace.
 
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows

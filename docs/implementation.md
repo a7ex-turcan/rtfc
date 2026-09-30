@@ -208,6 +208,10 @@ an optimization for later.
 **Phase order: 4 before 3.** Replies that wait for the sender are worth more than VPN
 hints, and cost more to get right. See §17's progress line.
 
+**Source tokens are private files (§10.5).** Like the identity keys, a token lives under
+`keys/` (`keys/accounts/<name>.token`, 0600 on Unix, the profile ACL on Windows) and not in
+the OS keychain the spec prefers; the keychain comes for both at once.
+
 **Sources: Atlassian Cloud, Jira first, and a `session` mode behind the gate (§10, Phase
 8).** The owner's shop runs Jira, Confluence and Bitbucket on atlassian.net, so the Cloud
 APIs come first and settle §18.8; Data Center adapters can share `ISourceAdapter`. Jira
@@ -323,13 +327,18 @@ block per version.
   by account id or uuid in the text. `rtfc.local.json` is re-read on every tick of the
   source loop instead of being watched; a new subscription starts from now, with a
   seven-day cap on catch-up after a long absence and no "N older updates" item yet;
-  `prepare` mode does not exist. Scoped Atlassian tokens work only through the
-  `api.atlassian.com/ex/jira/<cloudId>` URL, which the user gives as `--url`. The per-hour
-  cap on session pushes is counted in memory, so it resets with the daemon.
+  `prepare` mode does not exist. Scoped Atlassian tokens for Jira and Confluence work only
+  through the gateway, `api.atlassian.com/ex/jira/<cloudId>` or `…/ex/confluence/<cloudId>`,
+  which the user gives as `--url`; an account keeps one URL, so item links are then built on
+  the gateway and do not open in a browser. The per-hour cap on session pushes is counted
+  in memory, so it resets with the daemon.
 - **A source item's session mode was not yet driven through a live Claude Code session**;
   `SourceSessionTests` and `HookTests` cover the push, the prompt, the gate's two questions
   and the "nothing to do" outcome, and the contact flow it copies was checked live (the
-  verified table). The first live run belongs to the 0.8.0 install.
+  verified table). 0.8.0 runs on the owner's machine with an AEXP subscription in session
+  mode, waiting for the first real item.
+- **The e2e story does not cover sources**; `SourcesTests`, `SourceSessionTests`, the three
+  adapter test classes and `DaemonTests` do, and the opt-in live tests poll the real sites.
 - **The e2e story does not cover project-addressed messages or session mode**;
   `ProjectMessageTests`, `SessionModeTests` and `DaemonTests` do, with real daemons and
   real TLS. Delivery into a live Claude Code session was checked by hand (see the verified
