@@ -147,6 +147,7 @@ public static class DaemonHost
                 if (events is not null)
                 {
                     sessions.Close(session, events);
+                    node.SessionClosed(session);
                 }
             }
 
@@ -191,7 +192,7 @@ public static class DaemonHost
                 return Results.Json(new IpcError("A JSON body with 'directory' is required."), IpcJson.Default.IpcError, statusCode: 400);
             }
 
-            var project = node.RegisterProject(request.Directory);
+            var project = node.RegisterProject(request.Directory, request.Session);
             return Results.Json(new ProjectView(project.Name, ProjectPaths.Root(request.Directory)), IpcJson.Default.ProjectView);
         });
 
@@ -224,7 +225,7 @@ public static class DaemonHost
                 return Results.Json(new IpcError("A JSON body with 'accepted' is required."), IpcJson.Default.IpcError, statusCode: 400);
             }
 
-            return node.RecordGateDecision(id, request.Accepted)
+            return node.RecordGateDecision(id, request.Outcome ?? (request.Accepted ? GateOutcome.Accepted : GateOutcome.Declined))
                 ? Results.StatusCode(204)
                 : Results.Json(new IpcError($"No message with id '{id}'."), IpcJson.Default.IpcError, statusCode: 404);
         });

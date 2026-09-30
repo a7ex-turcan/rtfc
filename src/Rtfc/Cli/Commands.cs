@@ -632,7 +632,7 @@ public static class Commands
                 case "UserPromptSubmit":
                     if (PushedMessage(StringProperty(root, "prompt")) is { } pushed)
                     {
-                        SessionGates.Write(ctx.Home, session, new SessionGate(pushed.Id, pushed.From, GateState.Pending));
+                        SessionGates.Write(ctx.Home, session, new SessionGate(pushed.Id, pushed.From, GateState.Pending, pushed.Kind));
                     }
 
                     break;
@@ -646,20 +646,37 @@ public static class Commands
                     break;
 
                 case "PostToolUse":
-                    if (StringProperty(root, "tool_name") == "AskUserQuestion"
-                        && SessionGates.Read(ctx.Home, session) is { State: GateState.Pending } asked
-                        && Decision(root) is { } accepted)
+                    if (StringProperty(root, "tool_name") == "AskUserQuestion" && SessionGates.Read(ctx.Home, session) is { State: GateState.Pending } asked)
                     {
-                        SessionGates.Write(ctx.Home, session, asked with { State = accepted ? GateState.Accepted : GateState.Declined });
-                        if (asked.Id.Length > 0)
+                        switch (Decision(root, asked.Kind))
                         {
-                            await NoteDecisionAsync(ctx, asked.Id, accepted).ConfigureAwait(false);
+                            case Answer.Accept:
+                                SessionGates.Write(ctx.Home, session, asked with { State = GateState.Accepted, Asked = true });
+                                await NoteDecisionAsync(ctx, asked, GateOutcome.Accepted).ConfigureAwait(false);
+                                break;
+                            case Answer.Decline:
+                                SessionGates.Write(ctx.Home, session, asked with { State = GateState.Declined, Asked = true });
+                                await NoteDecisionAsync(ctx, asked, GateOutcome.Declined).ConfigureAwait(false);
+                                break;
+                            case Answer.Other when asked.Kind == InboxKind.Source && !asked.Asked:
+                                // The user picked an action for a source item; the Accept/Decline question comes next.
+                                SessionGates.Write(ctx.Home, session, asked with { Asked = true });
+                                break;
                         }
                     }
 
                     break;
 
                 case "Stop":
+                    // A source item's turn that ended without a question found nothing to do (spec §10.4): the daemon dismisses it.
+                    if (SessionGates.Read(ctx.Home, session) is { Kind: InboxKind.Source, State: GateState.Pending, Asked: false, Id.Length: > 0 } quiet)
+                    {
+                        await NoteDecisionAsync(ctx, quiet, GateOutcome.NothingToDo).ConfigureAwait(false);
+                    }
+
+                    SessionGates.Clear(ctx.Home, session);
+                    break;
+
                 case "SessionStart":
                     SessionGates.Clear(ctx.Home, session);
                     break;
@@ -669,39 +686,52 @@ public static class Commands
         return 0;
     }
 
-    /// <summary>The user's answer to the Accept/Decline question, read from the answers alone: the echoed options name both.</summary>
-    private static bool? Decision(JsonElement root)
+    private enum Answer { None, Accept, Decline, Other }
+
+    /// <summary>
+    /// The user's answer, read from the answers alone: the echoed options name every choice. "Accept" and "Decline" decide; for a
+    /// source item "Nothing to do" declines too, and any other answer is the action they picked, which still needs confirming.
+    /// </summary>
+    private static Answer Decision(JsonElement root, string kind)
     {
         if (!root.TryGetProperty("tool_response", out var response) || response.ValueKind != JsonValueKind.Object
             || !response.TryGetProperty("answers", out var answers) || answers.ValueKind != JsonValueKind.Object)
         {
-            return null;
+            return Answer.None;
         }
 
+        var other = false;
         foreach (var answer in answers.EnumerateObject())
         {
             var value = answer.Value.ValueKind == JsonValueKind.String ? answer.Value.GetString()?.Trim() : null;
             if (string.Equals(value, "Accept", StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                return Answer.Accept;
             }
 
-            if (string.Equals(value, "Decline", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(value, "Decline", StringComparison.OrdinalIgnoreCase)
+                || (kind == InboxKind.Source && string.Equals(value, "Nothing to do", StringComparison.OrdinalIgnoreCase)))
             {
-                return false;
+                return Answer.Decline;
             }
+
+            other |= !string.IsNullOrEmpty(value);
         }
 
-        return null;
+        return other ? Answer.Other : Answer.None;
     }
 
     /// <summary>The PreToolUse denial: the documented form, and the older decision/reason pair that some builds still read.</summary>
     private static string Deny(SessionGate gate)
     {
+        var what = gate.Kind == InboxKind.Source ? $"the {gate.From} item" : $"{gate.From}'s message";
         var reason = gate.State == GateState.Declined
-            ? $"rtfc: the user declined {gate.From}'s message, so tools stay blocked until this turn ends. Tell the user and stop."
-            : $"rtfc: {gate.From}'s message has not been accepted by the user, so every tool but AskUserQuestion is blocked. "
-                + "Give the user the gist and ask them with AskUserQuestion, options \"Accept\" and \"Decline\".";
+            ? $"rtfc: the user declined {what}, so tools stay blocked until this turn ends. Tell the user and stop."
+            : gate.Kind == InboxKind.Source
+                ? $"rtfc: {what} has not been accepted by the user, so every tool but AskUserQuestion is blocked. Give the user the gist and ask them "
+                    + "with AskUserQuestion which action to take, with \"Nothing to do\" as an option; when they pick one, ask \"Accept\" or \"Decline\" for it."
+                : $"rtfc: {what} has not been accepted by the user, so every tool but AskUserQuestion is blocked. "
+                    + "Give the user the gist and ask them with AskUserQuestion, options \"Accept\" and \"Decline\".";
         return new JsonObject
         {
             ["decision"] = "block",
@@ -715,12 +745,17 @@ public static class Commands
         }.ToJsonString();
     }
 
-    private static async Task NoteDecisionAsync(CommandContext ctx, string id, bool accepted)
+    private static async Task NoteDecisionAsync(CommandContext ctx, SessionGate gate, string outcome)
     {
+        if (gate.Id.Length == 0)
+        {
+            return;
+        }
+
         try
         {
             using var client = new DaemonClient(ctx.Home, TimeSpan.FromSeconds(2));
-            await client.GateDecisionAsync(id, accepted, ctx.CancellationToken).ConfigureAwait(false);
+            await client.GateDecisionAsync(gate.Id, outcome, ctx.CancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or OperationCanceledException or JsonException)
         {
@@ -734,7 +769,7 @@ public static class Commands
     /// the tag's attributes come from rtfc's own event, and a contact's text, which follows it, can only ever imitate a later one.
     /// The sender is cut down to handle characters before anything shows it.
     /// </summary>
-    public static (string Id, string From)? PushedMessage(string? prompt)
+    public static (string Id, string From, string Kind)? PushedMessage(string? prompt)
     {
         for (var start = prompt?.IndexOf("<channel ", StringComparison.Ordinal) ?? -1; start >= 0; start = prompt!.IndexOf("<channel ", start + 1, StringComparison.Ordinal))
         {
@@ -747,8 +782,9 @@ public static class Commands
             var tag = prompt[start..end];
             if (Attribute(tag, "rtfc_id") is { Length: > 0 } id)
             {
+                var kind = Attribute(tag, "rtfc_kind") == InboxKind.Source ? InboxKind.Source : InboxKind.Person;
                 var from = new string([.. (Attribute(tag, "from") ?? "").Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.').Take(32)]);
-                return (id, from.Length > 0 ? from : "a contact");
+                return (id, from.Length > 0 ? from : kind == InboxKind.Source ? "a source" : "a contact", kind);
             }
         }
 

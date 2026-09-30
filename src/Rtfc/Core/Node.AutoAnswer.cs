@@ -153,22 +153,39 @@ public sealed partial class Node
             """;
     }
 
+    public bool RecordGateDecision(string id, bool accepted) => RecordGateDecision(id, accepted ? GateOutcome.Accepted : GateOutcome.Declined);
+
     /// <summary>
-    /// The user answered the accept question for a pushed message in their session (spec §7.3). The message says so and stays
-    /// parked: accepting means Claude is working on it there and its reply marks it answered; declining leaves it for the user.
+    /// What the user, or the turn's end, said about a pushed item in their session (spec §7.3, §10.4). A message or item stays
+    /// parked when accepted (Claude is working on it there) or declined (it waits for the user). A source item Claude found
+    /// nothing to do about is dismissed with a note that says so, and stays listed.
     /// </summary>
-    public bool RecordGateDecision(string id, bool accepted)
+    public bool RecordGateDecision(string id, string outcome)
     {
         var message = _db.GetMessage(id);
-        if (message is null || message.Kind != InboxKind.Person)
+        if (message is null || message.Kind == InboxKind.Notice)
         {
             return false;
         }
 
         var now = _clock.GetUtcNow();
-        _db.SetMessageNote(id, accepted
-            ? $"Accepted in your Claude Code session at {Timestamps.Format(now)}; Claude is working on it there."
-            : $"Declined in your Claude Code session at {Timestamps.Format(now)}. It waits here.", now);
+        var where = message.Kind == InboxKind.Source && message.ProjectId is { } p && _db.GetProject(p) is { } project ? $" in {project.Name}" : "";
+        switch (outcome)
+        {
+            case GateOutcome.Accepted:
+                _db.SetMessageNote(id, $"Accepted in your Claude Code session{where} at {Timestamps.Format(now)}; Claude is working on it there.", now);
+                break;
+            case GateOutcome.Declined:
+                _db.SetMessageNote(id, $"Declined in your Claude Code session{where} at {Timestamps.Format(now)}. It waits here.", now);
+                break;
+            case GateOutcome.NothingToDo when message.Kind == InboxKind.Source:
+                _db.SetMessageState(id, InboxState.Dismissed, Self.DeviceId, now);
+                _db.SetMessageNote(id, $"Dismissed at {Timestamps.Format(now)}: Claude found nothing to do about it in your session{where}. It stays listed here.", now);
+                break;
+            default:
+                return false;
+        }
+
         WriteStatus();
         InboxChanged?.Invoke();
         return true;

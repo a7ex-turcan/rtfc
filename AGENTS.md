@@ -46,11 +46,16 @@ with cursors and one coalesced item per entity, the `sources` tool, `rtfc projec
 and 🎫 in the status line. `Core/Sources/JiraCloudAdapter.cs` was checked against a real
 site.
 
+Phase 8b as well: a subscription in `session` mode pushes each new item into the session
+open in its project (`Node.PushSourceItem`), behind the hook's gate in its source shape: one
+question with the actions plus "Nothing to do", then Accept/Decline for the chosen one; a
+turn that ends without asking dismisses the item with a note (`GateOutcome.NothingToDo`).
+
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows
 (`daemon run` calls `setsid` on Unix only); a file watcher for `rtfc.local.json` (it is
-re-read every tick). Next is **Phase 8b**, the `session` mode for source items (§10.4), then
-Confluence and Bitbucket Cloud, then **Phase 5**, multi-device.
+re-read every tick). Next are Confluence and Bitbucket Cloud (Phase 8c, 8d), then
+**Phase 5**, multi-device.
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
 and the CLI-only management boundary all shipped in Phase 1. Update this section when a

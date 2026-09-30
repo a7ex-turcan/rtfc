@@ -11,5 +11,8 @@ public interface ISessionChannel
     bool TryPush(string sessionId, SessionEvent sessionEvent);
 }
 
-/// <summary>One message for a session: its inbox id, who sent it (the local handle), and the text Claude will see.</summary>
-public sealed record SessionEvent(string Id, string From, string Content);
+/// <summary>
+/// One push for a session: the inbox id, who it is from (a contact's local handle, or the source type for a source item), the
+/// text Claude will see, and the kind (<c>person</c> or <c>source</c>), which the plugin's hook uses to pick the gate's shape.
+/// </summary>
+public sealed record SessionEvent(string Id, string From, string Content, string Kind = "person");

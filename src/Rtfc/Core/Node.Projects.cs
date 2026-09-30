@@ -27,6 +27,24 @@ public sealed partial class Node
     }
 
     /// <summary>
+    /// The same, for a session that names itself (spec §10.4): the daemon remembers which project the session is open in, so a
+    /// source item in <c>session</c> mode knows where to go. Forgotten when the lease ends.
+    /// </summary>
+    public ProjectRow RegisterProject(string directory, string? session)
+    {
+        var project = RegisterProject(directory);
+        if (!string.IsNullOrEmpty(session))
+        {
+            _openSessions[session] = (project.Id, _clock.GetUtcNow());
+        }
+
+        return project;
+    }
+
+    /// <summary>The session's lease ended: it is no longer somewhere a source item can go.</summary>
+    public void SessionClosed(string session) => _openSessions.TryRemove(session, out _);
+
+    /// <summary>
     /// Where an incoming message is stored: with the thread it continues, else in the project it names if exactly one
     /// project here has that name, else in the shared inbox, with a note when it named a project we could not use.
     /// </summary>

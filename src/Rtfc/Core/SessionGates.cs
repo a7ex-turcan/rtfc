@@ -9,8 +9,20 @@ public static class GateState
     public const string Declined = "declined";
 }
 
-/// <summary>A contact's message pushed into one Claude Code session, and what the user has said about it so far (spec §7.3).</summary>
-public sealed record SessionGate(string Id, string From, string State);
+/// <summary>What the hook tells the daemon about a pushed item: the user's answer, or that the turn ended with nothing to ask.</summary>
+public static class GateOutcome
+{
+    public const string Accepted = "accepted";
+    public const string Declined = "declined";
+    public const string NothingToDo = "nothing_to_do";
+}
+
+/// <summary>
+/// A contact's message or a source item pushed into one Claude Code session, and what the user has said about it so far (spec
+/// §7.3, §10.4). <c>Asked</c> is set once Claude asked a source item's action question, so a turn that ends without asking is
+/// known to have found nothing to do.
+/// </summary>
+public sealed record SessionGate(string Id, string From, string State, string Kind = "person", bool Asked = false);
 
 /// <summary>
 /// The accept gate's state, one small file per session under <c>gates/</c>. The plugin's hook reads it on every tool call of

@@ -28,6 +28,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
+| §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`, "Nothing to do", the `Stop` outcome) → `Node.RecordGateDecision(id, outcome)` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
@@ -312,12 +313,16 @@ block per version.
 - **Two projects with the same folder name are ambiguous**, and messages for that name
   land in the shared inbox. `rtfc project forget` removes a project, its subscriptions and
   its source items.
-- **Sources are Jira Cloud only, park mode only.** `rtfc.local.json` is re-read on every
-  tick of the source loop instead of being watched; a new subscription starts from now,
-  with a seven-day cap on catch-up after a long absence and no "N older updates" item yet;
-  `prepare` mode does not exist; the `session` mode of §10.4 is Phase 8b. Scoped Atlassian
-  tokens work only through the `api.atlassian.com/ex/jira/<cloudId>` URL, which the user
-  gives as `--url`.
+- **Sources are Jira Cloud only.** `rtfc.local.json` is re-read on every tick of the
+  source loop instead of being watched; a new subscription starts from now, with a
+  seven-day cap on catch-up after a long absence and no "N older updates" item yet;
+  `prepare` mode does not exist. Scoped Atlassian tokens work only through the
+  `api.atlassian.com/ex/jira/<cloudId>` URL, which the user gives as `--url`. The per-hour
+  cap on session pushes is counted in memory, so it resets with the daemon.
+- **A source item's session mode was not yet driven through a live Claude Code session**;
+  `SourceSessionTests` and `HookTests` cover the push, the prompt, the gate's two questions
+  and the "nothing to do" outcome, and the contact flow it copies was checked live (the
+  verified table). The first live run belongs to the 0.8.0 install.
 - **The e2e story does not cover project-addressed messages or session mode**;
   `ProjectMessageTests`, `SessionModeTests` and `DaemonTests` do, with real daemons and
   real TLS. Delivery into a live Claude Code session was checked by hand (see the verified

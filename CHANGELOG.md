@@ -37,6 +37,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
   `⚠ rtfc: N pending` while a subscription waits for approval.
 - `rtfc project forget <dir>` stops polling a project and removes its source items.
 - `rtfc account list` and `rtfc account remove <name>`.
+- Session mode for source items: a subscription with `"mode": "session"` pushes each new
+  item into the Claude Code session open in its project, behind the same gate as a
+  contact's message. Claude gives the gist and asks one question with the actions it sees
+  plus "Nothing to do"; the one you pick is confirmed with Accept or Decline, and no tool
+  runs before that. An item Claude finds nothing to do about is dismissed with a note and
+  stays listed. At most twenty pushes an hour per subscription; with no session open in the
+  project the item waits and says so.
 
 ### Changed
 

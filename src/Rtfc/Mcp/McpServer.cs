@@ -252,7 +252,7 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
             try
             {
                 // So a contact can address this project before anyone here has called a tool (spec §7.6).
-                await _client.RegisterProjectAsync(_directory, cancellationToken).ConfigureAwait(false);
+                await _client.RegisterProjectAsync(_directory, _session, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or JsonException)
             {
@@ -282,7 +282,7 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
                 ["params"] = new JsonObject
                 {
                     ["content"] = pushed.Content,
-                    ["meta"] = new JsonObject { ["rtfc_id"] = pushed.Id, ["from"] = pushed.From },
+                    ["meta"] = new JsonObject { ["rtfc_id"] = pushed.Id, ["from"] = pushed.From, ["rtfc_kind"] = pushed.Kind },
                 },
             }, CancellationToken.None).ConfigureAwait(false);
         }

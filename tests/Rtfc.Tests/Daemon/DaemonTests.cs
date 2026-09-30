@@ -40,6 +40,8 @@ public class DaemonTests
         Directory.CreateDirectory(Path.Combine(temp.Home.Root, "payments-api", ".git"));
         var project = await client.RegisterProjectAsync(projectDirectory, Ct);
         Assert.Equal("payments-api", project.Name);
+        Assert.Equal("payments-api", (await client.RegisterProjectAsync(projectDirectory, "26a3ad2f-f791-4e1c-8d9b-cb96de3f4c95", Ct)).Name);
+        Assert.False(await client.GateDecisionAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", GateOutcome.NothingToDo, Ct));
         Assert.Equal(Path.Combine(temp.Home.Root, "payments-api"), project.Root);
         var scoped = await client.InboxAsync("parked", projectDirectory, Ct);
         Assert.Empty(scoped.Messages);

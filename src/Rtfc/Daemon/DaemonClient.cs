@@ -86,8 +86,11 @@ public sealed class DaemonClient : IDisposable
     }
 
     /// <summary>Tells the daemon which project a session runs in (spec §10.2).</summary>
-    public Task<ProjectView> RegisterProjectAsync(string directory, CancellationToken cancellationToken) =>
-        PostAsync(IpcRoutes.Projects, new ProjectRequest(directory), IpcJson.Default.ProjectRequest, IpcJson.Default.ProjectView, cancellationToken);
+    public Task<ProjectView> RegisterProjectAsync(string directory, CancellationToken cancellationToken) => RegisterProjectAsync(directory, session: null, cancellationToken);
+
+    /// <summary>The same, naming the Claude Code session, so a source item in session mode can find it (spec §10.4).</summary>
+    public Task<ProjectView> RegisterProjectAsync(string directory, string? session, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.Projects, new ProjectRequest(directory, session), IpcJson.Default.ProjectRequest, IpcJson.Default.ProjectView, cancellationToken);
 
     /// <summary>False when there is no such message.</summary>
     public async Task<bool> DismissAsync(string id, CancellationToken cancellationToken)
@@ -154,9 +157,13 @@ public sealed class DaemonClient : IDisposable
         PostAsync(IpcRoutes.ContactAuto(handle), new AutoRequest(mode, scope, session), IpcJson.Default.AutoRequest, IpcJson.Default.ManagementResult, cancellationToken);
 
     /// <summary>For the plugin's hook: the user accepted or declined a pushed message in their session (spec §7.3). False when there is no such message.</summary>
-    public async Task<bool> GateDecisionAsync(string id, bool accepted, CancellationToken cancellationToken)
+    public Task<bool> GateDecisionAsync(string id, bool accepted, CancellationToken cancellationToken) =>
+        GateDecisionAsync(id, accepted ? GateOutcome.Accepted : GateOutcome.Declined, cancellationToken);
+
+    /// <summary>The same with a <see cref="GateOutcome"/>, which for a source item can also be that the turn ended with nothing to do (spec §10.4).</summary>
+    public async Task<bool> GateDecisionAsync(string id, string outcome, CancellationToken cancellationToken)
     {
-        using var content = JsonContent.Create(new GateRequest(accepted), IpcJson.Default.GateRequest);
+        using var content = JsonContent.Create(new GateRequest(outcome == GateOutcome.Accepted, outcome), IpcJson.Default.GateRequest);
         using var response = await _http.PostAsync(IpcRoutes.InboxGate(id), content, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {

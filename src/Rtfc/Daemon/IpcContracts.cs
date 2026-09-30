@@ -56,7 +56,8 @@ public sealed record DaemonStatus(
 /// <summary><c>From</c> is the sending session's directory (spec §7.6); <c>Project</c> names one of the recipient's projects.</summary>
 public sealed record SendRequest(string To, string Text, bool Leave = false, string? Project = null, string? From = null);
 
-public sealed record ProjectRequest(string Directory);
+/// <summary><c>Session</c> is the Claude Code session registering (spec §10.4), so source items in session mode know where it is open.</summary>
+public sealed record ProjectRequest(string Directory, string? Session = null);
 
 public sealed record ToggleRequest(bool On);
 
@@ -69,8 +70,8 @@ public sealed record AcceptRequest(string Token);
 /// <summary><c>Session</c> is the Claude Code session that answers in <c>session</c> mode (spec §7.3).</summary>
 public sealed record AutoRequest(string Mode, string? Scope, string? Session = null);
 
-/// <summary>From the plugin's hook: the user accepted or declined a pushed message in their session (spec §7.3).</summary>
-public sealed record GateRequest(bool Accepted);
+/// <summary>From the plugin's hook: what became of a pushed item in the session (spec §7.3, §10.4). <c>Outcome</c> is a <see cref="GateOutcome"/>; <c>Accepted</c> is kept for older hooks.</summary>
+public sealed record GateRequest(bool Accepted, string? Outcome = null);
 
 /// <summary>A third-party account's public half (spec §10.5). The token never travels here: the CLI wrote it to a file.</summary>
 public sealed record AccountRequest(string Name, string Type, string BaseUrl, string Login, string? AccountId);

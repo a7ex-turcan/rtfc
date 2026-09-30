@@ -371,6 +371,24 @@ rtfc never writes to Jira. Ask Claude to comment or move a ticket and it will us
 tools you already have, such as the Atlassian MCP server, with their own permission
 prompts. Replying to a source item with `inbox_reply` is refused.
 
+#### Into your session: Claude proposes, you pick, you confirm
+
+Add `"mode": "session"` to a subscription (and approve the edit) and each new item goes
+straight into the Claude Code session that is open in that project, as a channel event,
+the way a contact's message does in session mode (step 7). Your session must have been
+started with `--dangerously-load-development-channels plugin:rtfc@rtfc`. Claude reads the
+item, gives you the gist, and asks one question: the actions it can see, up to three, plus
+"Nothing to do". Pick one and it asks once more, "Accept" or "Decline", naming that action.
+Nothing runs before you accept: the plugin's hooks deny every tool but the question, in
+every permission mode. After you accept, Claude acts with the tools your session has and
+dismisses the item. If Claude finds nothing worth doing it says so in one line and stops,
+and the item is dismissed for you with a note saying why; it stays in `/rtfc:inbox --all`.
+
+A subscription sends at most twenty items an hour into a session; the rest wait in the
+inbox. With no session open in the project the item waits too, and its note says so. A
+ticket can talk Claude into proposing something, and that is where it ends: you pick,
+you confirm, and a "nothing to do" can at most turn a notification into one line.
+
 ---
 
 ## Important to know
@@ -480,7 +498,9 @@ they never touch your real one.
   `.claude/rtfc.local.json` on every tick (about fifteen seconds) rather than watching it.
   Polling happens only while your daemon runs, and a new subscription starts from now, not
   from the past. Unscoped Atlassian tokens work against the site URL; scoped ones need the
-  `api.atlassian.com/ex/jira/<cloudId>` URL. There is no `prepare` mode yet.
+  `api.atlassian.com/ex/jira/<cloudId>` URL. There is no `prepare` mode yet. Session mode
+  for items rests on the same channels preview as it does for contacts, and rtfc cannot
+  tell whether a pushed item reached the session, so it waits in the inbox as well.
 - Session mode rests on Claude Code's channels research preview, and rtfc cannot tell
   whether a pushed message reached the session, so it also waits in the inbox.
 - Fingerprints are hex groups, not words.
@@ -497,7 +517,7 @@ they never touch your real one.
 | 6 | A self-hosted relay, for people with no shared network |
 | 7 ✅ | Auto-answer inside a live session, via Claude Code channels (experimental) |
 | 8a ✅ | Sources: accounts, per-project subscriptions with approval, the poller, one item per ticket, `sources`; Jira Cloud |
-| 8b | Source items into your session: Claude proposes actions, you pick and confirm, or nothing to do |
+| 8b ✅ | Source items into your session: Claude proposes actions, you pick and confirm, or nothing to do |
 | 8c, 8d | Confluence Cloud, Bitbucket Cloud; then GitHub and `prepare` mode |
 
 ---
