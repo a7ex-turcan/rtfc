@@ -24,6 +24,10 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
 | §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
 | §10.2 session registration | `McpServer` (`CLAUDE_PROJECT_DIR`, registered once it holds a lease) → `POST /v1/projects` → `Node.RegisterProject` |
+| §10.1 polling, cursors, adapters | `Node.Sources.cs` (`PollDueAsync`, `Deliver`); `Core/Sources/SourceEvent.cs` (`ISourceAdapter`, `SourceEvent`, `SourceCursor`); `Core/Sources/JiraCloudAdapter.cs`; `source_cursors` via `Database.GetCursor`/`UpsertCursor` |
+| §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
+| §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
+| §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
@@ -203,6 +207,20 @@ an optimization for later.
 **Phase order: 4 before 3.** Replies that wait for the sender are worth more than VPN
 hints, and cost more to get right. See §17's progress line.
 
+**Sources: Atlassian Cloud, Jira first, and a `session` mode behind the gate (§10, Phase
+8).** The owner's shop runs Jira, Confluence and Bitbucket on atlassian.net, so the Cloud
+APIs come first and settle §18.8; Data Center adapters can share `ISourceAdapter`. Jira
+leads instead of the spec's Bitbucket because it is the busiest source and the only one an
+unscoped token already reaches. The spec's "no push-into-session mode for sources" gave way
+on 2026-09-30, when the owner asked for exactly that flow: an item arrives, Claude reads it
+and proposes the actions it sees, the human picks one and confirms it, or declines, and an
+item with nothing to do about it is dismissed with a one-line notice. What made it
+acceptable is the gate that Phase 7 built for contacts: nothing but a question can run until
+the human accepts, so source content can at most talk Claude into a proposal. The push goes
+to a session open in the item's project rather than to a designated session id, because
+source items are project-scoped and the daemon already knows which sessions are open where.
+rtfc still never writes to a source; the chosen action runs with the session's own tools.
+
 ## The auto-answer run, exactly (§7.3)
 
 `ClaudeProcessRunner` runs, in the scope directory:
@@ -264,6 +282,9 @@ they were checked; versions are what they were checked against.
 | Claude Code starts a plugin's MCP server in the directory the session started in (not the git root) and sets `CLAUDE_PROJECT_DIR` to the same path | a probe plugin whose server wrote down its directory, run with `claude -p` from a subdirectory of a git repository, Claude Code 2.1.283 | 2026-09-28 |
 | `SslStream.ReadAsync` fills one read from every TLS record it has already buffered, so a reader that must stop exactly at the end of one frame cannot: the old hello-only reader ate the first bytes of a frame that arrived right behind the hello, and the session died with a bogus frame length (`closed_before_ack` for the sender). Seen on a busy macOS CI runner; `PeerSessionTests.Frames_sent_right_behind_the_hello_reach_a_peer_whose_reads_lag` recreates it on every OS | the release and CI runs of v0.7.0, then the test against the code before the fix | 2026-09-29 |
 | On Windows, a daemon started by `rtfc daemon ensure` from a Win32-OpenSSH command session dies when that session ends (the session's job is killed; the launcher does not break away), so a host probing it a few seconds later sees `away` and pktmon on the receiver reports "transport endpoint was not found" for the SYNs. With the session kept open the same probe and a message both succeed | the rebuilt test VM, an ssh session running `daemon ensure` then sleeping, `rtfc contacts` and a send from the host meanwhile | 2026-09-29 |
+| Jira Cloud: `GET /rest/api/3/search/jql` answers `{issues, isLast, nextPageToken}` and honours `expand=changelog`; the old `GET /rest/api/3/search` answers 410 Gone. `GET /issue/{key}/changelog` pages with `values[]{author, created, items[]{field, fromString, toString}}`; `GET /issue/{key}/comment?orderBy=-created` gives `comments[]{author, created, body (ADF)}`. `/rest/api/3/myself` returns `accountId`, `displayName`, `timeZone` | curl with an unscoped API token (Basic `email:token`) against the owner's site | 2026-09-30 |
+| Confluence Cloud: `GET /wiki/rest/api/search?cql=…&expand=content.history.lastUpdated,content.container` answers `{results[]{content{type, history.lastUpdated.by}, title, url, lastModified}, totalSize, _links}`; `(mention = currentUser() OR contributor = currentUser() OR creator = currentUser()) AND lastmodified >= now("-7d")` found the week's comments on the owner's pages; `/wiki/rest/api/user/current` returns the same `accountId` as Jira | curl with the same token | 2026-09-30 |
+| Bitbucket Cloud answers 401 to an unscoped Atlassian API token on `GET /2.0/user`; its docs require a scoped token created for the Bitbucket app | curl with the Jira token | 2026-09-30 |
 
 ## Schema history
 
@@ -277,6 +298,7 @@ block per version.
 | 3 | 0.3.0 | `auto_note` renamed to `note` (it serves every kind of message); the `sent` table; the `notice` inbox kind |
 | 4 | 0.4.0 | `sent.project_id`: where an answer to something sent lands (project-addressed messages, spec §7.6); `projects` and `inbox.project_id`, in the schema since v1, come into use |
 | 5 | 0.6.0 | `contacts.auto_session`: the Claude Code session that answers a contact in `auto_session` mode (spec §7.3) |
+| 6 | 0.8.0 | `accounts.login`, `accounts.account_id` (spec §10.5); the source columns of `inbox`, `accounts`, `subscriptions` and `source_cursors`, in the schema since v1, come into use |
 
 ## Known gaps
 
@@ -287,9 +309,15 @@ block per version.
   a Win32-OpenSSH command session kills it the moment the session closes (both in the
   verified table). Nothing in normal use depends on this yet; a proper detach would break
   away from the job.
-- **Projects are never forgotten.** A registered project stays in `projects` and stays
-  addressable; `rtfc project forget` arrives with Phase 8. Two projects with the same folder
-  name are ambiguous, and messages for that name land in the shared inbox.
+- **Two projects with the same folder name are ambiguous**, and messages for that name
+  land in the shared inbox. `rtfc project forget` removes a project, its subscriptions and
+  its source items.
+- **Sources are Jira Cloud only, park mode only.** `rtfc.local.json` is re-read on every
+  tick of the source loop instead of being watched; a new subscription starts from now,
+  with a seven-day cap on catch-up after a long absence and no "N older updates" item yet;
+  `prepare` mode does not exist; the `session` mode of §10.4 is Phase 8b. Scoped Atlassian
+  tokens work only through the `api.atlassian.com/ex/jira/<cloudId>` URL, which the user
+  gives as `--url`.
 - **The e2e story does not cover project-addressed messages or session mode**;
   `ProjectMessageTests`, `SessionModeTests` and `DaemonTests` do, with real daemons and
   real TLS. Delivery into a live Claude Code session was checked by hand (see the verified

@@ -8,7 +8,7 @@ using Rtfc.Storage;
 
 namespace Rtfc.Core;
 
-public sealed record NodeOptions(IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer, OutboxSettings Outbox);
+public sealed record NodeOptions(IReadOnlyList<string> HintHosts, AutoAnswerConfig AutoAnswer, OutboxSettings Outbox, SourceSettings? Sources = null);
 
 /// <summary>
 /// Everything stateful on one device, minus the IPC surface (spec §3.1): the contact
@@ -28,12 +28,17 @@ public sealed partial class Node : IAsyncDisposable
     private readonly TimeProvider _clock;
     private readonly ILogger _logger;
     private readonly ISessionChannel? _sessions;
+    private readonly SourceSettings _sourceSettings;
+    private readonly Dictionary<string, Sources.ISourceAdapter> _adapters;
     private IReadOnlyList<string> _hintHosts;
     private readonly CancellationTokenSource _stopping = new();
 
+    /// <summary>One client for every source adapter: the daemon polls a handful of sites, never many.</summary>
+    private static readonly HttpClient SourceHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
+
     public Node(
         RtfcHome home, SelfIdentity self, Database db, ITransport transport, NodeOptions options, IClaudeRunner claude, TimeProvider clock, ILogger logger,
-        ISessionChannel? sessions = null)
+        ISessionChannel? sessions = null, IReadOnlyList<Sources.ISourceAdapter>? adapters = null)
     {
         _home = home;
         Self = self;
@@ -44,6 +49,8 @@ public sealed partial class Node : IAsyncDisposable
         _clock = clock;
         _logger = logger;
         _sessions = sessions;
+        _sourceSettings = options.Sources ?? SourceSettings.Default;
+        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp)]).ToDictionary(a => a.Type, StringComparer.Ordinal);
         _hintHosts = options.HintHosts;
 
         _db.SaveSelf(new SelfRow(self.PersonId, self.Handle, self.PersonCa.RawData, self.DeviceId, self.DeviceName, self.DeviceCertificate.RawData, DeviceListVersion));
@@ -67,6 +74,7 @@ public sealed partial class Node : IAsyncDisposable
 
         StartAutoAnswering();
         StartOutbox();
+        StartSources();
         WriteStatus();
         _logger.LogInformation("rtfcd listening as {Handle}/{Device} ({Person}) on port {Port}", Self.Handle, Self.DeviceName, Ids.Fingerprint(Self.PersonId), (_transport as TcpTransport)?.Port);
     }
@@ -77,6 +85,7 @@ public sealed partial class Node : IAsyncDisposable
         await _transport.StopAsync().ConfigureAwait(false);
         await StopAutoAnsweringAsync().ConfigureAwait(false);
         await StopOutboxAsync().ConfigureAwait(false);
+        await StopSourcesAsync().ConfigureAwait(false);
     }
 
     /// <summary>Away (spec §9.4): nothing listens, so contacts see nobody home, while everything outbound still works.</summary>
@@ -660,10 +669,12 @@ public sealed partial class Node : IAsyncDisposable
 
         var messages = state == InboxState.Parked ? _db.ListMessages(null).Where(NeedsAttention) : _db.ListMessages(state);
         var summaries = messages.Where(Visible).Select(m => new InboxSummary(
-            m.Id, FromLabel(m, handles), m.Kind == InboxKind.Notice ? "" : DeviceName(m.FromDevice), m.State,
-            Preview(m.Body), m.ReceivedAt, m.ReplyTo, m.Origin, m.Note,
+            m.Id, FromLabel(m, handles), m.Kind == InboxKind.Person ? DeviceName(m.FromDevice) : "", m.State,
+            Preview(m.Kind == InboxKind.Source ? $"{m.Title}: {m.Body}" : m.Body), m.ReceivedAt, m.ReplyTo, m.Origin, m.Note,
             m.Kind == InboxKind.Person ? _db.ListSentReplies(m.Id).LastOrDefault()?.State : null, m.Kind,
-            ProjectIdOf(m, projects) is { } p ? projects[p].Name : null));
+            ProjectIdOf(m, projects) is { } p ? projects[p].Name : null,
+            m.Kind == InboxKind.Source ? m.Title : null, m.Kind == InboxKind.Source ? EntityIdOf(m.EntityKey) : null, m.Kind == InboxKind.Source ? m.Url : null,
+            m.Kind == InboxKind.Source ? EventHistory(m).Length : 0));
 
         var elsewhere = here is null
             ? []
@@ -676,8 +687,16 @@ public sealed partial class Node : IAsyncDisposable
     private static string? ProjectIdOf(InboxMessage m, Dictionary<string, ProjectRow> projects) =>
         m.ProjectId is { } id && projects.ContainsKey(id) ? id : null;
 
-    private static string FromLabel(InboxMessage m, Dictionary<string, string> handles) =>
-        m.Kind == InboxKind.Notice ? "rtfc" : handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson));
+    private static string FromLabel(InboxMessage m, Dictionary<string, string> handles) => m.Kind switch
+    {
+        InboxKind.Notice => "rtfc",
+        InboxKind.Source => SourceTypeOf(m.EntityKey),
+        _ => handles.GetValueOrDefault(m.FromPerson, Ids.Fingerprint(m.FromPerson)),
+    };
+
+    /// <summary>A source item's stored history, oldest first; empty for anything else.</summary>
+    private static Sources.SourceEvent[] EventHistory(InboxMessage m) =>
+        m.Kind == InboxKind.Source && m.Events is { } json ? System.Text.Json.JsonSerializer.Deserialize(json, Sources.SourceJson.Default.SourceEventArray) ?? [] : [];
 
     /// <summary>Marks a message dismissed without answering it (spec §9.2). False when there is no such message.</summary>
     public bool Dismiss(string id)
@@ -716,24 +735,38 @@ public sealed partial class Node : IAsyncDisposable
             InboxChanged?.Invoke();
         }
 
-        var from = message.Kind == InboxKind.Notice ? "rtfc" : contact?.Handle ?? Ids.Fingerprint(message.FromPerson);
+        var from = message.Kind switch
+        {
+            InboxKind.Notice => "rtfc",
+            InboxKind.Source => SourceTypeOf(message.EntityKey),
+            _ => contact?.Handle ?? Ids.Fingerprint(message.FromPerson),
+        };
         var replies = message.Kind == InboxKind.Person
             ? _db.ListSentReplies(message.Id).Select(r => new SentSummary(r.Id, r.State, r.Origin, r.SentAt, r.DeliveredAt, r.ReadAt, r.ExpiresAt)).ToArray()
             : [];
+        var isSource = message.Kind == InboxKind.Source;
         return new InboxOpened(
-            message.Id, from, message.Kind == InboxKind.Notice ? "" : DeviceName(message.FromDevice), message.FromPerson, message.State,
+            message.Id, from, message.Kind == InboxKind.Person ? DeviceName(message.FromDevice) : "", message.FromPerson, message.State,
             message.ReceivedAt, message.SentAt, message.Thread, message.ReplyTo, message.Origin, message.Hop, message.Body, message.Note,
             message.Draft, replies.Length == 0 ? null : replies, message.Kind,
-            message.ProjectId is { } project ? _db.GetProject(project)?.Name : null);
+            message.ProjectId is { } project ? _db.GetProject(project)?.Name : null,
+            isSource ? message.Title : null, isSource ? EntityIdOf(message.EntityKey) : null, isSource ? message.Url : null, isSource ? from : null,
+            isSource ? [.. EventHistory(message).Select(e => new SourceEventView(e.OccurredAt, e.EventType, e.Actor, e.Summary))] : null);
     }
 
     /// <summary>Replies to the person who sent a message: delivered now, or queued in the outbox if nobody is home (spec §7.2).</summary>
     public async Task<SendResult> ReplyAsync(string id, string text, CancellationToken cancellationToken)
     {
         var original = _db.GetMessage(id);
-        if (original is null || original.Kind != InboxKind.Person)
+        if (original is null)
         {
             return SendResult.Rejected("unknown_message");
+        }
+
+        if (original.Kind != InboxKind.Person)
+        {
+            // rtfc never writes to a source (spec §10): acting on an item happens with the session's own tools.
+            return SendResult.Rejected(original.Kind == InboxKind.Source ? "source_item" : "not_a_message");
         }
 
         if (string.IsNullOrWhiteSpace(text))
@@ -921,13 +954,24 @@ public sealed partial class Node : IAsyncDisposable
     /// <summary>The shared inbox under <c>global</c>, and messages addressed to a project under that project's root key (spec §11).</summary>
     public StatusSnapshot Status()
     {
-        var parked = _db.ListMessages(null).Where(NeedsAttention).ToList();
+        var parked = _db.ListMessages(null).Where(m => NeedsAttention(m) && m.Kind != InboxKind.Source).ToList();
         var handles = _db.ListContacts().ToDictionary(c => c.PersonId, c => c.Handle);
         var projects = _db.ListProjects().ToDictionary(p => p.Id);
         var shared = parked.Where(m => ProjectIdOf(m, projects) is null).ToList();
-        var perProject = parked.Where(m => ProjectIdOf(m, projects) is not null).GroupBy(m => projects[m.ProjectId!]).ToDictionary(
-            g => g.Key.RootPath,
-            g => new ProjectStatus(g.Key.Name, g.Count(), [.. g.Select(m => FromLabel(m, handles)).Distinct()]));
+        var pending = _db.ListSubscriptions().Where(s => s.Status == SubscriptionStatus.PendingApproval).GroupBy(s => s.ProjectId).ToDictionary(g => g.Key, g => g.Count());
+        var perProject = new Dictionary<string, ProjectStatus>();
+        foreach (var project in projects.Values)
+        {
+            var messages = parked.Where(m => ProjectIdOf(m, projects) == project.Id).ToList();
+            var tickets = _db.CountSourceItems(project.Id, "jira:");
+            var reviews = _db.CountSourceItems(project.Id, "bitbucket:") + _db.CountSourceItems(project.Id, "github:");
+            var waiting = pending.GetValueOrDefault(project.Id);
+            if (messages.Count > 0 || tickets > 0 || reviews > 0 || waiting > 0)
+            {
+                perProject[project.RootPath] = new ProjectStatus(project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting);
+            }
+        }
+
         return new StatusSnapshot(
             new StatusGlobal(shared.Count, [.. shared.Select(m => FromLabel(m, handles)).Distinct()], _db.CountOutbox(OutboxState.Pending)), perProject, IsAway);
     }

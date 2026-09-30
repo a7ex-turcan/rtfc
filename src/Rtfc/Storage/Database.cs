@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -112,6 +112,23 @@ public sealed class Database : IDisposable
                 }
 
                 Execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
+                version = 5;
+            }
+
+            if (version < 6)
+            {
+                // v6 (sources, spec §10.5): who the token belongs to, and the service's id for them.
+                if (!HasColumn("accounts", "login"))
+                {
+                    Execute("ALTER TABLE accounts ADD COLUMN login TEXT");
+                }
+
+                if (!HasColumn("accounts", "account_id"))
+                {
+                    Execute("ALTER TABLE accounts ADD COLUMN account_id TEXT");
+                }
+
+                Execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -245,7 +262,7 @@ public sealed class Database : IDisposable
         }
     }
 
-    // ---- inbox (person messages) ----
+    // ---- inbox (messages, notices and source items) ----
 
     /// <summary>Stores a message. Returns false when this id was already stored for this device, which is how a resend gets <c>ack: duplicate</c> (spec §7.2).</summary>
     public bool InsertMessage(InboxMessage m)
@@ -254,31 +271,89 @@ public sealed class Database : IDisposable
             """
             INSERT OR IGNORE INTO inbox (id, to_device, kind, from_person, from_device, seq, reply_to, origin, hop, thread,
                                          body, sent_at, received_at, updated_at, state, handled_by, handled_at,
-                                         draft, note, auto_attempts, project_id)
+                                         draft, note, auto_attempts, project_id, subscription_id, entity_key, url, title, events)
             VALUES ($id, $to_device, $kind, $from_person, $from_device, $seq, $reply_to, $origin, $hop, $thread,
                     $body, $sent_at, $received_at, $updated_at, $state, $handled_by, $handled_at,
-                    $draft, $note, $auto_attempts, $project_id)
+                    $draft, $note, $auto_attempts, $project_id, $subscription_id, $entity_key, $url, $title, $events)
             """,
             ("$id", m.Id), ("$to_device", m.ToDevice), ("$from_person", m.FromPerson), ("$from_device", m.FromDevice),
             ("$seq", m.Seq), ("$reply_to", m.ReplyTo), ("$origin", m.Origin), ("$hop", (long)m.Hop), ("$thread", m.Thread),
             ("$body", m.Body), ("$sent_at", Time(m.SentAt)), ("$received_at", Timestamps.Format(m.ReceivedAt)),
             ("$updated_at", Timestamps.Format(m.UpdatedAt)), ("$state", m.State), ("$handled_by", m.HandledBy),
             ("$handled_at", Time(m.HandledAt)), ("$draft", m.Draft), ("$note", m.Note), ("$auto_attempts", (long)m.AutoAttempts), ("$kind", m.Kind),
-            ("$project_id", m.ProjectId));
+            ("$project_id", m.ProjectId), ("$subscription_id", m.SubscriptionId), ("$entity_key", m.EntityKey), ("$url", m.Url), ("$title", m.Title),
+            ("$events", m.Events));
         return affected == 1;
     }
 
     private const string MessageColumns =
-        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, note, auto_attempts, kind, project_id";
+        "id, to_device, from_person, from_device, seq, reply_to, origin, hop, thread, body, sent_at, received_at, updated_at, state, handled_by, handled_at, draft, note, auto_attempts, kind, project_id, "
+        + "subscription_id, entity_key, url, title, events";
 
-    /// <summary>The kinds the messaging surface shows: people's messages and rtfc's own notices. Source items (spec §10) are Phase 8.</summary>
-    private const string MessageKinds = "kind IN ('person', 'notice')";
+    /// <summary>Every kind the inbox shows: people's messages, rtfc's own notices, and source items (spec §10).</summary>
+    private const string MessageKinds = "kind IN ('person', 'notice', 'source')";
 
     private static InboxMessage ReadMessage(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt64(4), StringOrNull(r, 5), r.GetString(6),
         (int)r.GetInt64(7), StringOrNull(r, 8), r.GetString(9), Timestamps.ParseOrNull(StringOrNull(r, 10)),
         Timestamps.Parse(r.GetString(11)), Timestamps.Parse(r.GetString(12)), r.GetString(13), StringOrNull(r, 14),
-        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18), r.GetString(19), StringOrNull(r, 20));
+        Timestamps.ParseOrNull(StringOrNull(r, 15)), StringOrNull(r, 16), StringOrNull(r, 17), (int)r.GetInt64(18), r.GetString(19), StringOrNull(r, 20),
+        StringOrNull(r, 21), StringOrNull(r, 22), StringOrNull(r, 23), StringOrNull(r, 24), StringOrNull(r, 25));
+
+    /// <summary>The source item for an entity in a project, if it exists (one row per entity, spec §10.3).</summary>
+    public InboxMessage? GetSourceItem(string projectId, string entityKey) =>
+        QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE kind = 'source' AND project_id = $project AND entity_key = $entity", ReadMessage,
+            ("$project", projectId), ("$entity", entityKey));
+
+    /// <summary>
+    /// Appends what happened to an entity's item, creating it on first sight (spec §10.3). <paramref name="merge"/> gets the stored
+    /// history (null for a new item) and returns the new title, body and history, or null when nothing is new; it runs under the
+    /// lock, so two polls landing together cannot duplicate an event. An item that was read, dismissed or answered goes back to
+    /// parked, because the new event is news. Returns the row, whether it was created, and how many events were added.
+    /// </summary>
+    public (InboxMessage? Item, bool Created, int Added) UpsertSourceItem(
+        string projectId, string subscriptionId, string entityKey, string toDevice, DateTimeOffset now, Func<string?, SourceMerge?> merge)
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            var existing = GetSourceItem(projectId, entityKey);
+            var merged = merge(existing?.Events);
+            if (merged is null || merged.Added == 0)
+            {
+                transaction.Commit();
+                return (existing, false, 0);
+            }
+
+            if (existing is null)
+            {
+                InsertMessage(new InboxMessage(
+                    Ulid.NewUlid(now), toDevice, FromPerson: "", FromDevice: "", Seq: 0, ReplyTo: null, MessageOrigin.Source, Hop: 0, Thread: entityKey,
+                    merged.Body, SentAt: now, ReceivedAt: now, UpdatedAt: now, InboxState.Parked, HandledBy: null, HandledAt: null,
+                    Kind: InboxKind.Source, ProjectId: projectId, SubscriptionId: subscriptionId, EntityKey: entityKey, Url: merged.Url, Title: merged.Title, Events: merged.Events));
+            }
+            else
+            {
+                Execute(
+                    """
+                    UPDATE inbox SET title = $title, url = $url, body = $body, events = $events, updated_at = $now, subscription_id = $subscription,
+                      state = CASE WHEN state IN ('read', 'dismissed', 'answered') THEN 'parked' ELSE state END,
+                      received_at = CASE WHEN state IN ('read', 'dismissed', 'answered') THEN $now ELSE received_at END
+                    WHERE id = $id AND to_device = $device
+                    """,
+                    ("$title", merged.Title), ("$url", merged.Url), ("$body", merged.Body), ("$events", merged.Events), ("$now", Timestamps.Format(now)),
+                    ("$subscription", subscriptionId), ("$id", existing.Id), ("$device", existing.ToDevice));
+            }
+
+            var item = GetSourceItem(projectId, entityKey)!;
+            transaction.Commit();
+            return (item, existing is null, merged.Added);
+        }
+    }
+
+    /// <summary>Removes a project's source items, when the project is forgotten (spec §10.2).</summary>
+    public int DeleteSourceItems(string projectId) =>
+        Execute("DELETE FROM inbox WHERE kind = 'source' AND project_id = $project", ("$project", projectId));
 
     public InboxMessage? GetMessage(string id) =>
         QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE id = $id AND {MessageKinds}", ReadMessage, ("$id", id));
@@ -416,6 +491,101 @@ public sealed class Database : IDisposable
 
     public IReadOnlyList<ProjectRow> ListProjects() =>
         Query("SELECT id, root_path, name FROM projects ORDER BY name COLLATE NOCASE", ReadProject);
+
+    /// <summary>Forgets a project (spec §10.2): its subscriptions and source items go with it; messages addressed to it fall back to the shared inbox.</summary>
+    public void DeleteProject(string id)
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            Execute("DELETE FROM subscriptions WHERE project_id = $id", ("$id", id));
+            DeleteSourceItems(id);
+            Execute("DELETE FROM projects WHERE id = $id", ("$id", id));
+            transaction.Commit();
+        }
+    }
+
+    // ---- accounts (spec §10.5): the row is public, the token is a file ----
+
+    public void UpsertAccount(AccountRow a) => Execute(
+        """
+        INSERT INTO accounts (name, type, base_url, created_at, login, account_id) VALUES ($name, $type, $url, $created, $login, $account)
+        ON CONFLICT (name) DO UPDATE SET type = excluded.type, base_url = excluded.base_url, login = excluded.login, account_id = excluded.account_id
+        """,
+        ("$name", a.Name), ("$type", a.Type), ("$url", a.BaseUrl), ("$created", Timestamps.Format(a.CreatedAt)), ("$login", a.Login), ("$account", a.AccountId));
+
+    private static AccountRow ReadAccount(SqliteDataReader r) =>
+        new(r.GetString(0), r.GetString(1), StringOrNull(r, 2), StringOrNull(r, 3), StringOrNull(r, 4), Timestamps.Parse(r.GetString(5)));
+
+    private const string AccountColumns = "name, type, base_url, login, account_id, created_at";
+
+    public AccountRow? GetAccount(string name) =>
+        QuerySingle($"SELECT {AccountColumns} FROM accounts WHERE name = $name", ReadAccount, ("$name", name));
+
+    public IReadOnlyList<AccountRow> ListAccounts() =>
+        Query($"SELECT {AccountColumns} FROM accounts ORDER BY name", ReadAccount);
+
+    /// <summary>Removes an account; the subscriptions that used it are left in the error state so the user sees why they stopped.</summary>
+    public bool DeleteAccount(string name)
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            Execute("UPDATE subscriptions SET status = 'error' WHERE account = $name", ("$name", name));
+            var removed = Execute("DELETE FROM accounts WHERE name = $name", ("$name", name));
+            transaction.Commit();
+            return removed == 1;
+        }
+    }
+
+    // ---- subscriptions (spec §10.2) ----
+
+    private const string SubscriptionColumns = "id, project_id, account, selector, events, mode, status, config_hash";
+
+    private static SubscriptionRow ReadSubscription(SqliteDataReader r) =>
+        new(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6), r.GetString(7));
+
+    public void UpsertSubscription(SubscriptionRow s) => Execute(
+        """
+        INSERT INTO subscriptions (id, project_id, account, selector, events, mode, status, config_hash)
+        VALUES ($id, $project, $account, $selector, $events, $mode, $status, $hash)
+        ON CONFLICT (id) DO UPDATE SET project_id = excluded.project_id, account = excluded.account, selector = excluded.selector,
+          events = excluded.events, mode = excluded.mode, status = excluded.status, config_hash = excluded.config_hash
+        """,
+        ("$id", s.Id), ("$project", s.ProjectId), ("$account", s.Account), ("$selector", s.Selector), ("$events", s.Events), ("$mode", s.Mode),
+        ("$status", s.Status), ("$hash", s.ConfigHash));
+
+    public IReadOnlyList<SubscriptionRow> ListSubscriptions(string? projectId = null) => projectId is null
+        ? Query($"SELECT {SubscriptionColumns} FROM subscriptions ORDER BY project_id, id", ReadSubscription)
+        : Query($"SELECT {SubscriptionColumns} FROM subscriptions WHERE project_id = $project ORDER BY id", ReadSubscription, ("$project", projectId));
+
+    public SubscriptionRow? GetSubscription(string id) =>
+        QuerySingle($"SELECT {SubscriptionColumns} FROM subscriptions WHERE id = $id", ReadSubscription, ("$id", id));
+
+    public int SetSubscriptionStatus(string id, string status) =>
+        Execute("UPDATE subscriptions SET status = $status WHERE id = $id", ("$status", status), ("$id", id));
+
+    public int DeleteSubscription(string id) => Execute("DELETE FROM subscriptions WHERE id = $id", ("$id", id));
+
+    /// <summary>Parked or failed source items per project, split by the entity prefix (<c>jira:</c>, <c>bitbucket:</c>, …), for the status line.</summary>
+    public int CountSourceItems(string projectId, string entityPrefix) => (int)Scalar<long>(
+        "SELECT COUNT(*) FROM inbox WHERE kind = 'source' AND project_id = $project AND state IN ('parked', 'auto_failed') AND entity_key LIKE $prefix ESCAPE '\\'",
+        ("$project", projectId), ("$prefix", entityPrefix.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%"));
+
+    // ---- source cursors (spec §10.1) ----
+
+    public SourceCursorRow? GetCursor(string pollKey) =>
+        QuerySingle("SELECT poll_key, cursor, boundary_ids, next_poll_at, last_error FROM source_cursors WHERE poll_key = $key",
+            r => new SourceCursorRow(r.GetString(0), r.GetString(1), r.GetString(2), Timestamps.ParseOrNull(StringOrNull(r, 3)), StringOrNull(r, 4)), ("$key", pollKey));
+
+    public void UpsertCursor(SourceCursorRow c) => Execute(
+        """
+        INSERT INTO source_cursors (poll_key, cursor, boundary_ids, next_poll_at, last_error) VALUES ($key, $cursor, $boundary, $next, $error)
+        ON CONFLICT (poll_key) DO UPDATE SET cursor = excluded.cursor, boundary_ids = excluded.boundary_ids, next_poll_at = excluded.next_poll_at, last_error = excluded.last_error
+        """,
+        ("$key", c.PollKey), ("$cursor", c.Cursor), ("$boundary", c.BoundaryIds), ("$next", Time(c.NextPollAt)), ("$error", c.LastError));
+
+    public int DeleteCursor(string pollKey) => Execute("DELETE FROM source_cursors WHERE poll_key = $key", ("$key", pollKey));
 
     // ---- retention (spec §13) ----
 

@@ -86,7 +86,9 @@ CREATE TABLE IF NOT EXISTS accounts (            -- secrets live in the keychain
   name        TEXT PRIMARY KEY,
   type        TEXT NOT NULL,                      -- jira | confluence | bitbucket | github
   base_url    TEXT,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  login       TEXT,                               -- the e-mail the token belongs to (Basic auth), schema v6
+  account_id  TEXT                                -- the service's id for the user, to recognize their own actions and mentions (v6)
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -101,7 +103,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   account     TEXT NOT NULL,
   selector    TEXT NOT NULL,                      -- JSON: repo / jql / space …
   events      TEXT NOT NULL,                      -- JSON array
-  mode        TEXT NOT NULL DEFAULT 'park',       -- park | prepare
+  mode        TEXT NOT NULL DEFAULT 'park',       -- park | prepare | session (spec §10.4)
   status      TEXT NOT NULL,                      -- pending_approval | active | disabled | error
   config_hash TEXT NOT NULL                       -- detects edits that need re-approval
 );
@@ -146,4 +148,4 @@ CREATE TABLE IF NOT EXISTS sent (                -- what left this device, so re
 CREATE TABLE IF NOT EXISTS seq_out (to_device   TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS seq_in  (from_device TEXT PRIMARY KEY, max_seq  INTEGER NOT NULL);
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '5');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '6');

@@ -301,6 +301,51 @@ public static class DaemonHost
             return Results.Json(node.AdvertisedHints(), IpcJson.Default.StringArray);
         });
 
+        // Sources (spec §10). Reading is for the `sources` tool; approving, forgetting and accounts are the CLI's (spec §9.3).
+        app.MapGet(IpcRoutes.Sources, IResult (HttpContext context) =>
+        {
+            var project = context.Request.Query["project"].ToString();
+            return Results.Json(node.SourceViews(project is "" ? null : project), IpcJson.Default.SourceViewArray);
+        });
+
+        app.MapPost(IpcRoutes.SourcesApprove, async Task<IResult> (HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.ProjectRequest, context.RequestAborted);
+            if (request is null || string.IsNullOrWhiteSpace(request.Directory))
+            {
+                return Results.Json(new IpcError("A JSON body with 'directory' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(node.ApproveSources(request.Directory), IpcJson.Default.ManagementResult);
+        });
+
+        app.MapPost(IpcRoutes.ProjectsForget, async Task<IResult> (HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.ProjectRequest, context.RequestAborted);
+            if (request is null || string.IsNullOrWhiteSpace(request.Directory))
+            {
+                return Results.Json(new IpcError("A JSON body with 'directory' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(node.ForgetProject(request.Directory), IpcJson.Default.ManagementResult);
+        });
+
+        app.MapGet(IpcRoutes.Accounts, IResult () => Results.Json(node.ListAccounts(), IpcJson.Default.AccountViewArray));
+
+        app.MapPost(IpcRoutes.Accounts, async Task<IResult> (HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.AccountRequest, context.RequestAborted);
+            if (request is null || string.IsNullOrWhiteSpace(request.Name))
+            {
+                return Results.Json(new IpcError("A JSON body with 'name', 'type', 'baseUrl' and 'login' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            return Results.Json(node.AddAccount(request.Name, request.Type, request.BaseUrl, request.Login, request.AccountId), IpcJson.Default.ManagementResult);
+        });
+
+        app.MapPost(IpcRoutes.Accounts + "/{name}/remove", IResult (string name) =>
+            Results.Json(node.RemoveAccount(name), IpcJson.Default.ManagementResult));
+
         app.MapPost(IpcRoutes.Shutdown, IResult () =>
         {
             lifetime.StopApplication();

@@ -65,6 +65,20 @@ public class DaemonTests
         Assert.Equal(ManagementStatus.NotAContact, (await client.RemoveAsync("nobody", Ct)).Status);
         Assert.Equal(ManagementStatus.NotAContact, (await client.BlockAsync("nobody", Ct)).Status);
 
+        // Sources (spec §10): the read side for the tool, the rest for the CLI.
+        Assert.Empty(await client.SourcesAsync(projectDirectory, Ct));
+        Assert.Empty(await client.SourcesAsync(null, Ct));
+        Assert.Empty(await client.AccountsAsync(Ct));
+        Assert.Equal(ManagementStatus.Invalid, (await client.AddAccountAsync(new AccountRequest("bad name!", "jira", "https://acme.atlassian.net", "me@acme.com", null), Ct)).Status);
+        Assert.Equal(ManagementStatus.Ok, (await client.AddAccountAsync(new AccountRequest("jira-work", "jira", "https://acme.atlassian.net", "me@acme.com", "712020:abc"), Ct)).Status);
+        var account = Assert.Single(await client.AccountsAsync(Ct));
+        Assert.Equal("jira-work", account.Name);
+        Assert.False(account.HasToken);
+        Assert.Equal("0", (await client.ApproveSourcesAsync(projectDirectory, Ct)).Reason);
+        Assert.Equal(ManagementStatus.Ok, (await client.RemoveAccountAsync("jira-work", Ct)).Status);
+        Assert.Equal(ManagementStatus.Ok, (await client.ForgetProjectAsync(projectDirectory, Ct)).Status);
+        Assert.Equal(ManagementStatus.Invalid, (await client.ForgetProjectAsync(projectDirectory, Ct)).Status);
+
         await using (await client.AcquireLeaseAsync(Ct))
         {
             Assert.Equal(1, (await client.TryStatusAsync(Ct))!.Leases);

@@ -114,7 +114,8 @@ public class EntryPointTests
     {
         var tools = Mcp.Tools.List().Select(t => t!.AsObject()).ToDictionary(t => t["name"]!.GetValue<string>());
 
-        Assert.Equal(["contacts", "send", "inbox_list", "inbox_open", "inbox_reply", "inbox_dismiss"], tools.Keys);
+        Assert.Equal(["contacts", "send", "inbox_list", "inbox_open", "inbox_reply", "inbox_dismiss", "sources"], tools.Keys);
+        Assert.Empty(tools["sources"]["inputSchema"]!["properties"]!.AsObject());
         Assert.NotNull(tools["send"]["inputSchema"]!["properties"]!["project"]);
         Assert.DoesNotContain("project", tools["send"]["inputSchema"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
         Assert.NotNull(tools["inbox_list"]["inputSchema"]!["properties"]!["scope"]);

@@ -39,10 +39,18 @@ every tool until the user accepts the message. Phase 3 too: a device's hints tri
 `rtfc hints`, and hints in every hello (§8.3, §8.4). `scripts/e2e.sh` runs the whole story on
 one machine with two daemons and a fake `claude`.
 
+Phase 8a too: sources (§10) with one adapter, Jira Cloud. `rtfc account add` (hidden token
+input, a private file under `keys/accounts/`), `<project>/.claude/rtfc.local.json` mirrored
+into `subscriptions` and gated by `rtfc sources approve`, the poller in `Node.Sources.cs`
+with cursors and one coalesced item per entity, the `sources` tool, `rtfc project forget`,
+and 🎫 in the status line. `Core/Sources/JiraCloudAdapter.cs` was checked against a real
+site.
+
 Not there yet, by design: fingerprint words (hex groups for now); session reuse between
 live sends (the outbox pump does reuse one per device); a proper detach on Windows
-(`daemon run` calls `setsid` on Unix only). Next is **Phase 5**, multi-device. Third-party
-sources come last (Phase 8).
+(`daemon run` calls `setsid` on Unix only); a file watcher for `rtfc.local.json` (it is
+re-read every tick). Next is **Phase 8b**, the `session` mode for source items (§10.4), then
+Confluence and Bitbucket Cloud, then **Phase 5**, multi-device.
 
 Early phases defer features, never guards. Mutual TLS, the untrusted wrapping, size caps
 and the CLI-only management boundary all shipped in Phase 1. Update this section when a
@@ -72,10 +80,9 @@ tool call away from working. So:
   looks. A read-only view is fine only if it is already in §9.2.
 - `send` is never pre-approved anywhere, including in docs and examples. The permission
   prompt is where the user sees the exact text leaving their machine.
-- CI asks the MCP server for `tools/list` and fails if any name is not one of those seven
-  (`ci.yml`, "MCP tools are a subset of spec §9.2"); `scripts/e2e.sh` checks the exact
-  list. Six exist today; `sources` arrives with Phase 8, and then the CI check becomes an
-  exact match.
+- CI asks the MCP server for `tools/list` and fails unless the names are exactly those
+  seven, in order (`ci.yml`, "MCP tools are exactly the seven of spec §9.2");
+  `scripts/e2e.sh` checks the same list.
 
 ### 2. Everything from a contact or a source is untrusted input (§7.4, §7.5, §10.4)
 
@@ -100,8 +107,12 @@ tool call away from working. So:
   path, and quoted in rtfc's own notes (which sit outside the wrapper) only through
   `ProjectName.ForDisplay`. The ack is the same whether it matched or not, so a contact
   can't probe for projects; keep it that way.
-- Sources never push into a session. Their only automatic mode is `prepare`, which drafts
-  and never posts.
+- A source item reaches a session only in the subscription's `session` mode and only
+  behind the same accept gate as a contact's message (§10.4): Claude may read it and
+  propose actions in one `AskUserQuestion`, the user picks one and confirms it, and no
+  tool runs before that. rtfc itself never writes to a source; the action runs with the
+  session's own tools. An item Claude finds nothing to do about is dismissed with a note
+  and stays listed. `prepare` drafts and never posts.
 - Every auto-answer guard in §7.4 is load-bearing. Messages with `origin: "auto"` are
   never auto-answered, `hop ≥ 2` is refused, there are per-contact and global rate limits,
   and the size cap is enforced **before** the database write. The headless run is

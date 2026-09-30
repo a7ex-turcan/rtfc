@@ -44,6 +44,63 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void A_version_5_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.7.x left it: accounts without a login or an account id.
+            db.Execute("ALTER TABLE accounts DROP COLUMN login");
+            db.Execute("ALTER TABLE accounts DROP COLUMN account_id");
+            db.Execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
+            Assert.Equal(5, db.SchemaVersion);
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        migrated.UpsertAccount(new AccountRow("jira-work", "jira", "https://acme.atlassian.net", "me@acme.com", "712020:abc", Now));
+        var account = migrated.GetAccount("jira-work")!;
+        Assert.Equal("me@acme.com", account.Login);
+        Assert.Equal("712020:abc", account.AccountId);
+    }
+
+    [Fact]
+    public void A_source_item_is_one_row_per_entity_and_comes_back_when_something_new_happens()
+    {
+        using var temp = new TempHome();
+        using var db = Database.Open(temp.Home.DatabasePath);
+        var project = db.UpsertProject(new ProjectRow("p1", temp.Home.Root, "payments-api"));
+
+        var (item, created, added) = db.UpsertSourceItem(project.Id, "s1", "jira:PAY-1", "d_me", Now,
+            stored => new SourceMerge("PAY-1 Retry policy", "https://acme.atlassian.net/browse/PAY-1", "Dan commented: hi", "[1]", 1));
+        Assert.True(created);
+        Assert.Equal(1, added);
+        Assert.Equal(InboxKind.Source, item!.Kind);
+        Assert.Equal("jira:PAY-1", item.EntityKey);
+        Assert.Equal(InboxState.Parked, item.State);
+        Assert.Equal("", item.FromPerson);
+
+        db.SetMessageState(item.Id, InboxState.Dismissed, "d_me", Now);
+        var (same, createdAgain, addedAgain) = db.UpsertSourceItem(project.Id, "s1", "jira:PAY-1", "d_me", Now.AddMinutes(5),
+            stored => new SourceMerge("PAY-1 Retry policy", null, "Dan moved it", "[1,2]", 1));
+        Assert.False(createdAgain);
+        Assert.Equal(1, addedAgain);
+        Assert.Equal(item.Id, same!.Id);
+        Assert.Equal(InboxState.Parked, same.State);
+        Assert.Equal("[1,2]", same.Events);
+        Assert.Single(db.ListMessages(null), m => m.Kind == InboxKind.Source);
+
+        var (_, _, none) = db.UpsertSourceItem(project.Id, "s1", "jira:PAY-1", "d_me", Now.AddMinutes(6), stored => null);
+        Assert.Equal(0, none);
+        Assert.Equal(1, db.CountSourceItems(project.Id, "jira:"));
+        Assert.Equal(0, db.CountSourceItems(project.Id, "bitbucket:"));
+
+        db.DeleteProject(project.Id);
+        Assert.Empty(db.ListMessages(null));
+    }
+
+    [Fact]
     public void A_version_2_file_is_migrated_on_open()
     {
         using var temp = new TempHome();

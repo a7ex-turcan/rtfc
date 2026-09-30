@@ -387,9 +387,30 @@ public static class Commands
                 return 1;
             }
 
-            var from = opened.Kind == "notice" ? "rtfc" : $"{opened.From}/{opened.FromDevice}";
+            var from = opened.Kind switch
+            {
+                "notice" => "rtfc",
+                "source" => $"{opened.From} {opened.Entity}",
+                _ => $"{opened.From}/{opened.FromDevice}",
+            };
             ctx.Out.WriteLine($"From {from} at {Timestamps.Format(opened.ReceivedAt)} ({opened.State}):");
-            ctx.Out.WriteLine(opened.Body);
+            if (opened.Kind == "source")
+            {
+                ctx.Out.WriteLine(opened.Title);
+                if (opened.Url is { Length: > 0 })
+                {
+                    ctx.Out.WriteLine(opened.Url);
+                }
+
+                foreach (var e in opened.Events ?? [])
+                {
+                    ctx.Out.WriteLine($"  {Timestamps.Format(e.At)}  {e.Type,-16} {e.Actor}: {e.Summary}");
+                }
+            }
+            else
+            {
+                ctx.Out.WriteLine(opened.Body);
+            }
             if (opened.Note is not null)
             {
                 ctx.Out.WriteLine($"Note: {opened.Note}");
@@ -425,7 +446,12 @@ public static class Commands
 
         foreach (var m in messages)
         {
-            var from = (m.Kind == "notice" ? "rtfc" : $"{m.From}/{m.FromDevice}") + (m.Project is null ? "" : $" → {m.Project}");
+            var from = m.Kind switch
+            {
+                "notice" => "rtfc",
+                "source" => $"{m.From} {m.Entity}",
+                _ => $"{m.From}/{m.FromDevice}",
+            } + (m.Project is null ? "" : $" → {m.Project}");
             var tail = (m.Note is null ? "" : $"  [{m.Note}]") + (m.ReplyState is null ? "" : $"  (your reply: {m.ReplyState})");
             ctx.Out.WriteLine($"{m.Id}  {m.State,-11} {from}: {m.Preview}{tail}");
         }
@@ -532,6 +558,25 @@ public static class Commands
         foreach (var (_, project) in projects.Where(p => p.Key != here && p.Value.Parked > 0).OrderBy(p => p.Value.Name, StringComparer.OrdinalIgnoreCase))
         {
             segments.Add($"📨 {project.Parked.ToString(CultureInfo.InvariantCulture)}{Senders(project.From ?? [])} → {project.Name}");
+        }
+
+        // This project's source items (spec §11): reviews and tickets, and subscriptions that wait for approval.
+        if (here is not null)
+        {
+            if (projects[here].Reviews > 0)
+            {
+                segments.Add($"🔀 {projects[here].Reviews.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (projects[here].Tickets > 0)
+            {
+                segments.Add($"🎫 {projects[here].Tickets.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (projects[here].PendingSubscriptions > 0)
+            {
+                segments.Add($"⚠ rtfc: {projects[here].PendingSubscriptions.ToString(CultureInfo.InvariantCulture)} pending");
+            }
         }
 
         if (status.Global.Pending > 0)
@@ -862,6 +907,266 @@ public static class Commands
 
         return 0;
     }
+
+    // ---- sources (spec §10): accounts, subscriptions, forgetting a project. CLI-only, like everything that changes what reaches the user. ----
+
+    /// <summary>
+    /// <c>rtfc account add &lt;name&gt; --type jira --url … --login …</c> reads the token with hidden input, checks it against the
+    /// service, stores it as a private file and tells the daemon about the account. <c>list</c> and <c>remove</c> are the rest.
+    /// </summary>
+    public static async Task<int> AccountAsync(CommandContext ctx, IReadOnlyList<string> args, TextReader? stdin)
+    {
+        var line = new CommandLine(args);
+        switch (line.Positionals.ToArray())
+        {
+            case ["add", var name]:
+                return await AddAccountAsync(ctx, line, name, stdin).ConfigureAwait(false);
+
+            case ["remove", var removed]:
+                {
+                    using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+                    if (client is null)
+                    {
+                        return 1;
+                    }
+
+                    var result = await client.RemoveAccountAsync(removed, ctx.CancellationToken).ConfigureAwait(false);
+                    var hadToken = Core.Sources.AccountStore.DeleteToken(ctx.Home, removed);
+                    if (result.Status != ManagementStatus.Ok && !hadToken)
+                    {
+                        ctx.Error.WriteLine($"rtfc account: {result.Reason}");
+                        return 1;
+                    }
+
+                    ctx.Out.WriteLine($"Account {removed} removed, and its token deleted. Subscriptions that used it now show an error until you point them at another account.");
+                    return 0;
+                }
+
+            case [] or ["list"]:
+                {
+                    using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+                    if (client is null)
+                    {
+                        return 1;
+                    }
+
+                    var accounts = await client.AccountsAsync(ctx.CancellationToken).ConfigureAwait(false);
+                    if (accounts.Length == 0)
+                    {
+                        ctx.Out.WriteLine("No source accounts. `rtfc account add <name> --type jira --url https://<site>.atlassian.net --login <email>` adds one.");
+                        return 0;
+                    }
+
+                    foreach (var a in accounts)
+                    {
+                        ctx.Out.WriteLine($"{a.Name,-16} {a.Type,-10} {a.BaseUrl}  {a.Login}  {(a.HasToken ? "token stored" : "NO TOKEN")}  {a.Subscriptions} subscription(s)");
+                    }
+
+                    return 0;
+                }
+
+            default:
+                ctx.Error.WriteLine("usage: rtfc account add <name> --type jira --url <https://site.atlassian.net> --login <email> | list | remove <name>");
+                return 2;
+        }
+    }
+
+    private static async Task<int> AddAccountAsync(CommandContext ctx, CommandLine line, string name, TextReader? stdin)
+    {
+        var type = line.Value("type");
+        var url = line.Value("url");
+        var login = line.Value("login");
+        if (!Core.Sources.AccountStore.IsValidName(name))
+        {
+            ctx.Error.WriteLine("rtfc account: the name is letters, digits, '.', '-' or '_', up to 64 characters.");
+            return 2;
+        }
+
+        if (string.IsNullOrWhiteSpace(type) || string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(login))
+        {
+            ctx.Error.WriteLine("usage: rtfc account add <name> --type jira --url <https://site.atlassian.net> --login <email>");
+            return 2;
+        }
+
+        Core.Sources.ISourceAdapter? adapter = type switch
+        {
+            Core.Sources.JiraCloudAdapter.TypeName => new Core.Sources.JiraCloudAdapter(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }),
+            _ => null,
+        };
+        if (adapter is null)
+        {
+            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported yet; jira is. Confluence and Bitbucket follow in later releases.");
+            return 2;
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+        {
+            ctx.Error.WriteLine("rtfc account: --url must be an absolute https URL, e.g. https://acme.atlassian.net.");
+            return 2;
+        }
+
+        // The token is typed, never given on the command line or piped from a slash command (spec §10.5).
+        if (stdin is not null || Console.IsInputRedirected)
+        {
+            ctx.Error.WriteLine("rtfc account: run this in a real terminal. The token is typed with hidden input; it never goes on a command line, through a slash command or through Claude.");
+            return 1;
+        }
+
+        ctx.Out.Write($"API token for {login} at {uri.Host} (hidden): ");
+        var token = ReadHidden();
+        ctx.Out.WriteLine();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            ctx.Error.WriteLine("rtfc account: no token entered.");
+            return 1;
+        }
+
+        var baseUrl = uri.ToString().TrimEnd('/');
+        Core.Sources.SourceIdentity identity;
+        try
+        {
+            identity = await adapter.IdentifyAsync(new Core.Sources.SourceAccount(name, type, baseUrl, login, null, token), ctx.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Core.Sources.SourceException ex)
+        {
+            ctx.Error.WriteLine($"rtfc account: the token did not work: {ex.Message}");
+            return 1;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        Core.Sources.AccountStore.SaveToken(ctx.Home, name, token);
+        var result = await client.AddAccountAsync(new AccountRequest(name, type, baseUrl, login, identity.AccountId), ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            Core.Sources.AccountStore.DeleteToken(ctx.Home, name);
+            ctx.Error.WriteLine($"rtfc account: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine($"Account {name} ({type}) added: {identity.DisplayName} at {uri.Host}.");
+        ctx.Out.WriteLine($"The token is in {Core.Sources.AccountStore.TokenPath(ctx.Home, name)}, readable only by you; rtfc uses it to read, never to write.");
+        ctx.Out.WriteLine($"Next: list a subscription under \"sources\" in <project>/.claude/rtfc.local.json with \"account\": \"{name}\", then run /rtfc:sources-approve there.");
+        return 0;
+    }
+
+    /// <summary>Reads a line without echoing it. Backspace works; nothing else is interpreted.</summary>
+    private static string ReadHidden()
+    {
+        var text = new System.Text.StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Enter)
+            {
+                return text.ToString();
+            }
+
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (text.Length > 0)
+                {
+                    text.Length--;
+                }
+            }
+            else if (!char.IsControl(key.KeyChar))
+            {
+                text.Append(key.KeyChar);
+            }
+        }
+    }
+
+    /// <summary><c>rtfc sources [--project &lt;dir&gt;|--all]</c> shows subscriptions; <c>rtfc sources approve</c> lets a project's pending ones poll.</summary>
+    public static async Task<int> SourcesAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        var line = new CommandLine(args, "all");
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        if (line.Positionals is ["approve"])
+        {
+            var directory = ProjectDirectory(line);
+            var result = await client.ApproveSourcesAsync(directory, ctx.CancellationToken).ConfigureAwait(false);
+            if (result.Status != ManagementStatus.Ok)
+            {
+                ctx.Error.WriteLine($"rtfc sources: {result.Reason}");
+                return 1;
+            }
+
+            ctx.Out.WriteLine(result.Reason == "0"
+                ? $"Nothing waits for approval in {result.Handle}. Subscriptions live in .claude/rtfc.local.json there."
+                : $"Approved {result.Reason} subscription(s) in {result.Handle}; polling starts now. Items land in this project's inbox and status line.");
+            return 0;
+        }
+
+        if (line.Positionals.Count > 0)
+        {
+            ctx.Error.WriteLine("usage: rtfc sources [--project <dir>|--all] | rtfc sources approve [--project <dir>]");
+            return 2;
+        }
+
+        var views = await client.SourcesAsync(line.Flag("all") ? null : ProjectDirectory(line), ctx.CancellationToken).ConfigureAwait(false);
+        if (views.Length == 0)
+        {
+            ctx.Out.WriteLine("No source subscriptions. Add a \"sources\" array to <project>/.claude/rtfc.local.json and run `rtfc sources approve` there.");
+            return 0;
+        }
+
+        foreach (var v in views)
+        {
+            if (v.FileError is not null && v.Account.Length == 0)
+            {
+                ctx.Out.WriteLine($"{v.Project}: {v.FileError}");
+                continue;
+            }
+
+            var health = v.LastError is not null ? $"  error: {v.LastError}" : v.SeenUpTo is { } seen ? $"  seen up to {Timestamps.Format(seen)}" : "";
+            ctx.Out.WriteLine($"{v.Project}  {v.Account} ({v.Type})  {v.Mode}  {v.Status}  {v.Selector}  events: {string.Join(",", v.Events)}  parked: {v.Parked}{health}");
+            if (v.FileError is not null)
+            {
+                ctx.Out.WriteLine($"  {v.FileError}");
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary><c>rtfc project forget &lt;dir&gt;</c>: stop polling a project and drop its source items (spec §10.2).</summary>
+    public static async Task<int> ProjectAsync(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        if (args.ToArray() is not ["forget", var directory])
+        {
+            ctx.Error.WriteLine("usage: rtfc project forget <dir>");
+            return 2;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        var result = await client.ForgetProjectAsync(ProjectPaths.Full(directory), ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            ctx.Error.WriteLine($"rtfc project: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine($"Forgot {result.Handle}: its subscriptions stopped and its source items are gone. Messages addressed to it show in the shared inbox.");
+        return 0;
+    }
+
+    /// <summary>The project a command means: <c>--project</c>, else the directory Claude runs in, else the working directory.</summary>
+    private static string ProjectDirectory(CommandLine line) =>
+        ProjectPaths.Full(line.Value("project") ?? Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") ?? Environment.CurrentDirectory);
 
     private static async Task<DaemonClient?> ConnectAsync(CommandContext ctx)
     {

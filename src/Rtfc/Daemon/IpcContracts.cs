@@ -20,6 +20,10 @@ public static class IpcRoutes
     public const string Away = "/v1/away";
     public const string Projects = "/v1/projects";
     public const string Hints = "/v1/hints";
+    public const string Sources = "/v1/sources";
+    public const string SourcesApprove = "/v1/sources/approve";
+    public const string ProjectsForget = "/v1/projects/forget";
+    public const string Accounts = "/v1/accounts";
     public const string Shutdown = "/v1/shutdown";
 
     public static string InboxOpen(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/open";
@@ -33,6 +37,7 @@ public static class IpcRoutes
     public static string ContactBlock(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/block";
     public static string ContactRename(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/rename";
     public static string ContactReceipts(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/receipts";
+    public static string AccountRemove(string name) => $"{Accounts}/{Uri.EscapeDataString(name)}/remove";
 }
 
 public sealed record DaemonStatus(
@@ -67,6 +72,9 @@ public sealed record AutoRequest(string Mode, string? Scope, string? Session = n
 /// <summary>From the plugin's hook: the user accepted or declined a pushed message in their session (spec §7.3).</summary>
 public sealed record GateRequest(bool Accepted);
 
+/// <summary>A third-party account's public half (spec §10.5). The token never travels here: the CLI wrote it to a file.</summary>
+public sealed record AccountRequest(string Name, string Type, string BaseUrl, string Login, string? AccountId);
+
 public sealed record IpcError(string Error);
 
 [JsonSourceGenerationOptions(
@@ -79,6 +87,9 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(AcceptRequest))]
 [JsonSerializable(typeof(AutoRequest))]
 [JsonSerializable(typeof(GateRequest))]
+[JsonSerializable(typeof(AccountRequest))]
+[JsonSerializable(typeof(AccountView[]))]
+[JsonSerializable(typeof(SourceView[]))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(SessionEvent))]
 [JsonSerializable(typeof(ToggleRequest))]

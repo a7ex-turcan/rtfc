@@ -84,7 +84,11 @@ public sealed record InboxSummary(
     string? Note = null,
     string? ReplyState = null,
     string Kind = "person",
-    string? Project = null);
+    string? Project = null,
+    string? Title = null,
+    string? Entity = null,
+    string? Url = null,
+    int Events = 0);
 
 /// <summary>What <c>inbox_list</c> shows a session (spec §7.6): its messages, and a count of what is parked in other projects.</summary>
 public sealed record InboxListing(InboxSummary[] Messages, ProjectCount[] Elsewhere);
@@ -111,7 +115,33 @@ public sealed record InboxOpened(
     string? Draft = null,
     SentSummary[]? YourReplies = null,
     string Kind = "person",
-    string? Project = null);
+    string? Project = null,
+    string? Title = null,
+    string? Entity = null,
+    string? Url = null,
+    string? Source = null,
+    SourceEventView[]? Events = null);
+
+/// <summary>One line of a source item's history (spec §10.3), as <c>inbox_open</c> shows it. Everything but the time and type came from the source.</summary>
+public sealed record SourceEventView(DateTimeOffset At, string Type, string Actor, string Summary);
+
+/// <summary>One subscription with its health (the <c>sources</c> tool, spec §9.2). It never carries a token.</summary>
+public sealed record SourceView(
+    string Project,
+    string Account,
+    string Type,
+    string Selector,
+    string[] Events,
+    string Mode,
+    string Status,
+    int Parked,
+    DateTimeOffset? SeenUpTo,
+    DateTimeOffset? NextPollAt,
+    string? LastError,
+    string? FileError);
+
+/// <summary>A third-party account as <c>rtfc account list</c> shows it: whose token, where, and whether the token file is there.</summary>
+public sealed record AccountView(string Name, string Type, string BaseUrl, string Login, string? AccountId, DateTimeOffset CreatedAt, int Subscriptions, bool HasToken);
 
 public sealed record InviteResult(string Token, DateTimeOffset ExpiresAt, string[] Hints);
 
@@ -193,6 +223,8 @@ public sealed record RtfcConfig(int Port, string[]? HintHosts, string? ClaudePat
 [JsonSerializable(typeof(AcceptResult))]
 [JsonSerializable(typeof(ManagementResult))]
 [JsonSerializable(typeof(StatusSnapshot))]
+[JsonSerializable(typeof(SourceView[]))]
+[JsonSerializable(typeof(AccountView[]))]
 [JsonSerializable(typeof(SessionGate))]
 [JsonSerializable(typeof(InviteTokenPayload))]
 [JsonSerializable(typeof(RtfcConfig))]

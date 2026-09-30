@@ -1,0 +1,4 @@
+---
+description: Show this project's source subscriptions (Jira notifications polled into the inbox) and their health.
+---
+Call the rtfc `sources` tool and show the user what it returns: for each subscription its account, type, selector, events, mode, status, how far it has read, the next poll and any error. If a subscription is `pending_approval`, say that `/rtfc:sources-approve` lets it start polling. If there are none, explain in two sentences how to add one: an account with `rtfc account add <name> --type jira --url https://<site>.atlassian.net --login <email>` in a terminal, then a `sources` entry in this project's `.claude/rtfc.local.json` with that account, a `jql` and optional `events`, then `/rtfc:sources-approve`. Do not run any rtfc commands and do not edit the file unless the user asks.

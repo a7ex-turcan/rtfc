@@ -486,9 +486,9 @@ Each adapter maps its service's API to the normalized event vocabulary. Verify t
 | Adapter | Approach |
 |---|---|
 | **GitHub** | The user's notifications feed (repo-filterable) plus review requests |
-| **Bitbucket** | Pull requests where I'm a reviewer, comments on my PRs, build status on my PRs. Cloud and Data Center APIs differ; pick one first. |
-| **Jira** | JQL search with `updated >= cursor`, then the changelog and comments to classify what happened |
-| **Confluence** | CQL for mentions, comments on my pages, and watched pages |
+| **Bitbucket Cloud** | Per repository (the user-wide pull-request endpoints were removed in 2025 and 2026): `GET /2.0/repositories/{ws}/{repo}/pullrequests?q=reviewers.uuid="…" AND updated_on >= cursor` for review requests, the PR `activity` and `comments` for comments, approvals and requested changes on my PRs, `statuses` for builds. Identity from `GET /2.0/user`. Needs a *scoped* API token; unscoped ones are refused with 401. Cloud first, by the owner's decision (§18.8). |
+| **Jira Cloud** | `GET /rest/api/3/search/jql` (the old `/search` answers 410 Gone) with `(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser() OR comment ~ currentUser()) AND updated >= cursor ORDER BY updated ASC`, paged by `nextPageToken`, then `/issue/{key}/changelog` and `/issue/{key}/comment` to classify what happened. Identity from `/rest/api/3/myself`. JQL dates are read in the user's profile time zone, so the cursor is formatted in it. |
+| **Confluence Cloud** | v1 `GET /wiki/rest/api/search?cql=` (v2 has no search): `mention = currentUser()`, `type = comment AND lastmodified >= cursor` filtered to pages I created or watch, replies to my comments through the comment's parent. Identity from `/wiki/rest/api/user/current`. Cloud has no notifications API. |
 
 ### 10.2 Project scoping
 
@@ -525,9 +525,10 @@ Each adapter maps its service's API to the normalized event vocabulary. Verify t
 | Mode | Behavior |
 |---|---|
 | `park` (default) | Item is stored and shown in the status bar; you pull it in with `/rtfc:inbox`. |
-| `prepare` | The auto mode for sources. A headless, read-only Claude run (same restrictions as `auto_headless`, §7.3) with the **project directory** as scope drafts something useful: review notes for a PR, a summary of a ticket thread, a suggested reply. The draft is attached to the item and the item is parked. **It never posts anything.** |
+| `prepare` | A headless, read-only Claude run (same restrictions as `auto_headless`, §7.3) with the **project directory** as scope drafts something useful: review notes for a PR, a summary of a ticket thread, a suggested reply. The draft is attached to the item and the item is parked. **It never posts anything.** |
+| `session` | The item is pushed into a Claude Code session that is open in its project, as a channel event (§7.3, §12), the moment it lands. The newest open session in the project gets it; with none open the item parks and the status line shows it. Behind the same accept gate as a contact's message: until the user decides, the hooks deny every tool but `AskUserQuestion`. Claude gives the gist and asks **one question** listing the actions it sees plus "Nothing to do"; picking an action leads to the Accept/Decline confirmation that names it, and only "Accept" opens the gate. The action itself runs with the tools the session already has (the Atlassian MCP server, `gh`, a browser), never through rtfc. When Claude finds nothing worth doing it says so in one line and stops without asking; the daemon then marks the item `dismissed` with a note saying so. Declining leaves it parked. |
 
-There's no push-into-session mode for sources. The claude-pr-channel project describes the risk directly: anyone who can comment on a PR is effectively talking to your agent.
+The push-into-session mode exists for sources since 0.9.0, by the owner's decision (2026-09-30), and only behind the gate. The claude-pr-channel project describes the risk directly: anyone who can comment on a PR is effectively talking to your agent. The gate is what makes it acceptable: source content can persuade Claude to *propose* something, and the human still has to pick it and confirm it before a single tool runs; a comment that talks Claude into "nothing to do" can at most turn a notification into one line, because dismissed items stay listed with the reason.
 
 Every `prepare` run uses Claude usage, so it's rate-limited per project (e.g. 20/hour) and capped per day. Items over the limit are parked without a draft.
 
@@ -539,7 +540,8 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 
 ### 10.5 Accounts and credentials
 
-- **Adding an account:** `rtfc account add <name> --type jira --url https://acme.atlassian.net` prompts for the token with hidden input.
+- **Adding an account:** `rtfc account add <name> --type jira --url https://acme.atlassian.net --login you@acme.com` prompts for the token with hidden input, checks it against the service's "who am I" endpoint, and records the account id it answers with (the same Atlassian account id across Jira, Confluence and Bitbucket), which the adapters use to recognize the user's own actions and mentions.
+- **Which token (Atlassian Cloud, checked 2026-09-30):** an *unscoped* API token from id.atlassian.com works for Jira and Confluence against the site URL. A *scoped* token must be used through the gateway, `https://api.atlassian.com/ex/jira/{cloudId}` and `…/ex/confluence/{cloudId}`, so `--url` takes either shape. Bitbucket Cloud accepts only scoped tokens (read scopes for user, workspace, repository and pull requests), created for the Bitbucket app; app passwords stopped working in July 2026. Tokens expire after at most a year; an expired one shows up as the subscription's `error` status, never as a silent stop.
 - **Run this in a real terminal, not via a slash command.** A slash command's `!` execution isn't interactive, and more importantly, the token must never pass through Claude's context.
 - **Storage:** the OS keychain where available, otherwise the keys directory with 0600 permissions. Tokens are device-local and aren't synced between your own devices in v1.
 - **Scopes:** use the narrowest the service offers, read-only where possible. Some Atlassian tokens carry the user's full permissions. That's another reason rtfc never writes to sources: a token that's only ever used for reading limits the damage if it leaks.
@@ -655,7 +657,9 @@ CREATE TABLE accounts (                           -- secrets live in the keychai
   name        TEXT PRIMARY KEY,
   type        TEXT NOT NULL,                      -- jira | confluence | bitbucket | github
   base_url    TEXT,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  login       TEXT,                               -- the e-mail the token belongs to (Basic auth)
+  account_id  TEXT                                -- the service's id for the user: their own actions and mentions
 );
 
 CREATE TABLE projects (
@@ -670,7 +674,7 @@ CREATE TABLE subscriptions (
   account     TEXT NOT NULL,
   selector    TEXT NOT NULL,                      -- JSON: repo / jql / space …
   events      TEXT NOT NULL,                      -- JSON array
-  mode        TEXT NOT NULL DEFAULT 'park',       -- park | prepare
+  mode        TEXT NOT NULL DEFAULT 'park',       -- park | prepare | session (§10.4)
   status      TEXT NOT NULL,                      -- pending_approval | active | disabled | error
   config_hash TEXT NOT NULL                       -- detects edits that need re-approval
 );
@@ -826,7 +830,7 @@ Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ah
 | **5: Multi-device** | Link/approve, device lists, fan-out, handled sync, revocation, contact sync, auto-owner rule | Alex's laptop and desktop act as one contact; revoking one works |
 | **6: Relay** | Own ASP.NET Core relay transport (§15, Stage B), including the choice of who may request a pipe to whom | Works with someone at home with no VPN, and with no change to identity, storage, or tools |
 | **7: Session auto** | `auto_session` via channels (research preview, §12): designation by session, delivery over the lease, and the permission guard in the prompt hook (§7.3). Pulled ahead of 3, 5 and 8 at the owner's request once a spike showed channels working in 2.1.284 | Opt-in; documented risks |
-| **8: Sources** | 8a: pipeline (accounts, `rtfc.local.json`, approval, cursors, coalescing, `project forget`; project registration and the project-aware status line shipped early, with §7.6) with **one adapter: Bitbucket review requests**. 8b: Jira, then GitHub and Confluence. 8c: `prepare` mode. 8d: webhook pokes through the relay (§10.1; needs Phase 6) | A Bitbucket review request shows up as 🔀 in the right project's status bar within 2 minutes, appears exactly once, and survives a relaunch |
+| **8: Sources** | 8a: pipeline (accounts, `rtfc.local.json`, approval, cursors, coalescing, `project forget`, the `sources` tool; project registration and the project-aware status line shipped early, with §7.6) with **one adapter: Jira Cloud**, the owner's busiest source. 8b: the `session` mode for sources (§10.4). 8c: Confluence Cloud. 8d: Bitbucket Cloud. Later: GitHub, `prepare` mode, webhook pokes through the relay (§10.1; needs Phase 6) | A comment on a ticket you're on shows up as 🎫 in the right project's status bar within 2 minutes, appears exactly once, survives a relaunch, and in `session` mode reaches your open session with the actions to pick from |
 
 ---
 
@@ -839,6 +843,6 @@ Which phase shipped in which release is in `CHANGELOG.md`; Phase 4 was pulled ah
 5. **Read receipts default.** On (current; off per contact with `rtfc receipts <contact> off`) or off?
 6. **Handle collisions.** How to display two contacts who both chose "alex" as their suggested handle.
 7. **Daemon lifetime matters more with sources.** Polling only happens while some session is open, so items catch up late (not lost) after the laptop has been closed. A login-item daemon would poll all day. Is that wanted?
-8. **Bitbucket flavor.** Cloud or Data Center first? The APIs differ.
+8. ~~**Bitbucket flavor.** Cloud or Data Center first? The APIs differ.~~ Cloud, and Cloud for Jira and Confluence too: the owner's shop is on atlassian.net (2026-09-30). Data Center adapters can follow the same `ISourceAdapter`.
 9. ~~**Project-addressed messages.**~~ Resolved on 2026-09-28: yes, when the sender names the project explicitly, and a message for a project that doesn't exist lands in the shared inbox. See §7.6.
 10. **Account sync.** Should accounts (without secrets) sync between your own devices, so a new device only needs tokens re-entered?

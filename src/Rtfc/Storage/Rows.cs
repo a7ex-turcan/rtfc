@@ -27,6 +27,23 @@ public static class InboxKind
     public const string Notice = "notice";
 }
 
+/// <summary>A subscription's life (spec §10.2): it polls only while active, and an edit sends it back to pending.</summary>
+public static class SubscriptionStatus
+{
+    public const string PendingApproval = "pending_approval";
+    public const string Active = "active";
+    public const string Disabled = "disabled";
+    public const string Error = "error";
+}
+
+/// <summary>What happens to a source item when it lands (spec §10.4).</summary>
+public static class SourceMode
+{
+    public const string Park = "park";
+    public const string Prepare = "prepare";
+    public const string Session = "session";
+}
+
 public static class OutboxKind
 {
     public const string Reply = "reply";
@@ -70,6 +87,9 @@ public static class MessageOrigin
 {
     public const string Human = "human";
     public const string Auto = "auto";
+
+    /// <summary>The origin of a source item: a third party's notification, not a person's message.</summary>
+    public const string Source = "source";
 }
 
 public sealed record SelfRow(
@@ -118,7 +138,11 @@ public enum InviteUse
     Expired,
 }
 
-/// <summary>A message from a person, as stored. Source items (spec §10) get their own row shape when they land.</summary>
+/// <summary>
+/// One inbox row: a message from a person, a notice from rtfc, or a source item (spec §10), which is one row per ticket,
+/// pull request or page with its event history appended. A source item fills the person columns with empty strings and
+/// <see cref="MessageOrigin.Source"/>, and carries its own fields at the end.
+/// </summary>
 public sealed record InboxMessage(
     string Id,
     string ToDevice,
@@ -140,7 +164,24 @@ public sealed record InboxMessage(
     string? Note = null,
     int AutoAttempts = 0,
     string Kind = InboxKind.Person,
-    string? ProjectId = null);
+    string? ProjectId = null,
+    string? SubscriptionId = null,
+    string? EntityKey = null,
+    string? Url = null,
+    string? Title = null,
+    string? Events = null);
+
+/// <summary>What a source item becomes after new events are merged into it: the caller computes it from the stored history, under the lock.</summary>
+public sealed record SourceMerge(string Title, string? Url, string Body, string Events, int Added);
+
+/// <summary>A third-party account (spec §10.5). The token is a file under <c>keys/accounts/</c>, never a column.</summary>
+public sealed record AccountRow(string Name, string Type, string? BaseUrl, string? Login, string? AccountId, DateTimeOffset CreatedAt);
+
+/// <summary>One entry of a project's <c>.claude/rtfc.local.json</c>, as approved or waiting (spec §10.2). <c>Selector</c> and <c>Events</c> are JSON.</summary>
+public sealed record SubscriptionRow(string Id, string ProjectId, string Account, string Selector, string Events, string Mode, string Status, string ConfigHash);
+
+/// <summary>Where one poll left off (spec §10.1): shared by every subscription with the same account and selector.</summary>
+public sealed record SourceCursorRow(string PollKey, string Cursor, string BoundaryIds, DateTimeOffset? NextPollAt, string? LastError);
 
 /// <summary>Something that must reach a peer later (spec §7.2). The envelope is the frame as it will be sent, minus the sequence number and device, which are filled at delivery.</summary>
 public sealed record OutboxRow(

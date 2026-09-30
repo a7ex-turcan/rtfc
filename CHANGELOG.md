@@ -20,7 +20,31 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Added
+
+- Sources, first wave: Jira Cloud tickets that involve you land in your inbox, scoped to
+  the project they belong to, one item per ticket with what happened, who did it and
+  when. `rtfc account add <name> --type jira --url … --login …` stores a token typed with
+  hidden input in a private file; a project's `.claude/rtfc.local.json` lists its
+  subscriptions (account, JQL, events); `rtfc sources approve`, or `/rtfc:sources-approve`,
+  lets them start polling; `rtfc sources` and the new `sources` tool show them and their
+  health. Events: `assigned`, `mentioned`, `status_changed`, `comment_on_mine`; your own
+  actions never notify you.
+- Source items in the inbox: `inbox_list` shows them as kind `source` with title, ticket
+  and link; `inbox_open` wraps them as `<source_item untrusted="true">` with their recent
+  events; `inbox_dismiss` clears them, and a dismissed ticket that moves again comes back
+  with its history. The status line shows `🎫 N` for the project you are in and
+  `⚠ rtfc: N pending` while a subscription waits for approval.
+- `rtfc project forget <dir>` stops polling a project and removes its source items.
+- `rtfc account list` and `rtfc account remove <name>`.
+
+### Changed
+
+- `inbox_reply` refuses source items with `source_item`: rtfc never writes to Jira,
+  Confluence or Bitbucket. Acting on a ticket happens with the tools your session already
+  has.
+- The database schema is version 6 (`accounts.login`, `accounts.account_id`); older files
+  migrate on open.
 
 ## [0.7.1] - 2026-09-29
 

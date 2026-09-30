@@ -63,6 +63,12 @@ public static class EntryPoint
                     return await Commands.RemoveAsync(ctx, rest, block: true).ConfigureAwait(false);
                 case "hints":
                     return await Commands.HintsAsync(ctx, rest).ConfigureAwait(false);
+                case "account":
+                    return await Commands.AccountAsync(ctx, rest, stdin).ConfigureAwait(false);
+                case "sources":
+                    return await Commands.SourcesAsync(ctx, rest).ConfigureAwait(false);
+                case "project":
+                    return await Commands.ProjectAsync(ctx, rest).ConfigureAwait(false);
                 case "away":
                     return await Commands.AwayAsync(ctx, rest).ConfigureAwait(false);
                 case "rename":
@@ -123,11 +129,19 @@ public static class EntryPoint
           away on|off                 stop listening; contacts see nobody home, you can still send
           hints [add <host>...|remove <host>...|auto]
                                       what your invites tell people to connect to; add a VPN address or a Tailscale name
+          account add <name> --type jira --url <https://site.atlassian.net> --login <email>
+                                      store a source account; the token is typed hidden, in a real terminal
+          account list | account remove <name>
+          sources approve [--project <dir>]
+                                      let the subscriptions in <project>/.claude/rtfc.local.json start polling
+          project forget <dir>        stop polling a project and drop its source items
 
         look:
           contacts                    contacts and whether they are home
           inbox [--all] | inbox open <id> | inbox dismiss <id>
           outbox                      what waits to be delivered
+          sources [--project <dir>|--all]
+                                      this project's source subscriptions and their health
 
         plumbing:
           daemon run [--stay] | ensure | status | stop

@@ -181,6 +181,29 @@ public sealed class DaemonClient : IDisposable
         return (await response.Content.ReadFromJsonAsync(IpcJson.Default.ManagementResult, cancellationToken).ConfigureAwait(false))!;
     }
 
+    /// <summary>This project's subscriptions and their health, or every project's (spec §9.2, the <c>sources</c> tool).</summary>
+    public Task<SourceView[]> SourcesAsync(string? projectDirectory, CancellationToken cancellationToken) =>
+        GetAsync(projectDirectory is null ? IpcRoutes.Sources : $"{IpcRoutes.Sources}?project={Uri.EscapeDataString(projectDirectory)}", IpcJson.Default.SourceViewArray, cancellationToken);
+
+    public Task<ManagementResult> ApproveSourcesAsync(string directory, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.SourcesApprove, new ProjectRequest(directory), IpcJson.Default.ProjectRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    public Task<ManagementResult> ForgetProjectAsync(string directory, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.ProjectsForget, new ProjectRequest(directory), IpcJson.Default.ProjectRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    public Task<AccountView[]> AccountsAsync(CancellationToken cancellationToken) =>
+        GetAsync(IpcRoutes.Accounts, IpcJson.Default.AccountViewArray, cancellationToken);
+
+    public Task<ManagementResult> AddAccountAsync(AccountRequest request, CancellationToken cancellationToken) =>
+        PostAsync(IpcRoutes.Accounts, request, IpcJson.Default.AccountRequest, IpcJson.Default.ManagementResult, cancellationToken);
+
+    public async Task<ManagementResult> RemoveAccountAsync(string name, CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsync(IpcRoutes.AccountRemove(name), content: null, cancellationToken).ConfigureAwait(false);
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        return (await response.Content.ReadFromJsonAsync(IpcJson.Default.ManagementResult, cancellationToken).ConfigureAwait(false))!;
+    }
+
     public async Task ShutdownAsync(CancellationToken cancellationToken)
     {
         using var response = await _http.PostAsync(IpcRoutes.Shutdown, content: null, cancellationToken).ConfigureAwait(false);
