@@ -20,6 +20,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 5, one person on several devices.
+
+## [0.10.0] - 2026-10-01
+
 ### Added
 
 - An always-on daemon, opt-in: `rtfc daemon always-on on` (or `/rtfc:always-on on`) starts
@@ -441,7 +445,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.7.1...v0.8.0

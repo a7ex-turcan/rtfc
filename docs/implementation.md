@@ -378,11 +378,12 @@ block per version.
   which the user gives as `--url`; an account keeps one URL, so item links are then built on
   the gateway and do not open in a browser. The per-hour cap on session pushes is counted
   in memory, so it resets with the daemon.
-- **A source item's session mode was not yet driven through a live Claude Code session**;
-  `SourceSessionTests` and `HookTests` cover the push, the prompt, the gate's two questions
-  and the "nothing to do" outcome, and the contact flow it copies was checked live (the
-  verified table). 0.8.0 runs on the owner's machine with an AEXP subscription in session
-  mode, waiting for the first real item.
+- **The 0.9.1 endings and the idle hold have not been seen live yet.** Session mode for source
+  items was driven live on 2026-09-30 in the owner's `isos-admin-2.0` session: a Jira comment
+  and two Bitbucket change requests arrived, were offered as actions, accepted and acted on
+  (which is what showed the endings and the mid-turn arrival that 0.9.1 fixed). "Later",
+  "Dismiss"/"Keep" and the hold for a busy session are covered by `SourceSessionTests`,
+  `SessionIdleTests` and `HookTests` only.
 - **The e2e story does not cover sources**; `SourcesTests`, `SourceSessionTests`, the three
   adapter test classes and `DaemonTests` do, and the opt-in live tests poll the real sites.
 - **The e2e story does not cover project-addressed messages or session mode**;

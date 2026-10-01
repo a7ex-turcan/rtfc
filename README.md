@@ -23,7 +23,7 @@ LAN first, with mutual TLS on every connection, designed so that reaching someon
 a VPN or a relay is a new transport rather than a rewrite. Sibling of
 [rtfm](https://github.com/a7ex-turcan/rtfm) and [rtfq](https://github.com/a7ex-turcan/rtfq).
 
-**Status: 0.9.1, Phases 1, 2, 3, 4, 7 and 8, and messages addressed to a project.** Two people
+**Status: 0.10.0, Phases 1, 2, 3, 4, 7 and 8, and messages addressed to a project.** Two people
 on one LAN or VPN exchange messages between their Claude Code sessions; a contact's message can come
 straight into your live session, where Claude asks you Accept or Decline and then acts; a
 scoped, read-only Claude can answer while you are away; replies to someone who has gone
@@ -63,7 +63,7 @@ and the folder is also the Claude Code marketplace that step 3 installs the plug
 
 ```bash
 mkdir -p ~/.local/share/rtfc
-tar -xzf rtfc-0.9.1-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
+tar -xzf rtfc-0.10.0-osx-arm64.tar.gz --strip-components=1 -C ~/.local/share/rtfc
 export PATH="$HOME/.local/share/rtfc:$PATH"     # add to your shell profile
 rtfc --version
 ```
