@@ -493,7 +493,7 @@ public static class Commands
                         // Quiet by design: this runs from the SessionStart hook on machines that may never use rtfc.
                         return 0;
                     default:
-                        ctx.Error.WriteLine($"rtfc daemon ensure: the daemon did not start. See {ctx.Home.LogPath}.");
+                        ctx.Error.WriteLine($"rtfc daemon ensure: the daemon did not start. {DaemonLauncher.Diagnose(ctx.Home)}");
                         return 1;
                 }
 
@@ -591,7 +591,7 @@ public static class Commands
 
                     if (!await ensure(ctx.Home, ctx.CancellationToken).ConfigureAwait(false))
                     {
-                        ctx.Error.WriteLine($"rtfc daemon always-on: the login item is in place, but the daemon did not start now. See {ctx.Home.LogPath}.");
+                        ctx.Error.WriteLine($"rtfc daemon always-on: the login item is in place, but the daemon did not start now. {DaemonLauncher.Diagnose(ctx.Home)}");
                         return 1;
                     }
 
@@ -1364,7 +1364,7 @@ public static class Commands
                 ctx.Error.WriteLine("rtfc: no identity yet. Run /rtfc:init first.");
                 return null;
             default:
-                ctx.Error.WriteLine($"rtfc: the daemon did not start. See {ctx.Home.LogPath}.");
+                ctx.Error.WriteLine($"rtfc: the daemon did not start. {DaemonLauncher.Diagnose(ctx.Home)}");
                 return null;
         }
     }

@@ -28,6 +28,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
+| §3.1 one daemon per home | `Daemon/DaemonLock.cs` (`rtfcd.lock`, `rtfcd.pid`); `DaemonHost.RunAsync` (lock, `SocketPathProblem`, `Refuse`, `WriteLog`) and the socket watchdog in its loop; `DaemonLauncher.StopAsync(client, pid, …)` and `Diagnose` |
 | §3.1 always on | `Daemon/LoginItems.cs` (the Windows Run value, the LaunchAgent, the systemd unit); `Commands.AlwaysOnAsync`; `DaemonHost.IdleExit`; the `run` guard in `Commands.DaemonAsync`; `DaemonLauncher.IsOlder` and `StopAsync` in `EnsureAsync` |
 | §7.3, §10.4 only into an idle session | `Core/SessionActivity.cs` (the busy marks); the hook's `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `SessionEnd` and `Notification` cases; `Node.SessionPushes.cs` (`PushOrHold`, `FlushHeldPushes`, the loop, `DropHeldPushes`) |
 | §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
@@ -214,6 +215,23 @@ hints, and cost more to get right. See §17's progress line.
 `keys/` (`keys/accounts/<name>.token`, 0600 on Unix, the profile ACL on Windows) and not in
 the OS keychain the spec prefers; the keychain comes for both at once.
 
+**One daemon per home is a lock, not a check (§3.1).** Up to 0.10.0, `daemon run` asked the
+socket whether a daemon answered and then deleted any socket file it found while building the
+host, before it knew it could bind its port. A second daemon starting in the 20-40 ms before
+the first one answered deleted the first one's live socket, died on the port, and logged
+nothing, because `ensure` closes the daemon's stderr; the first daemon ran on unreachable, and
+every later `ensure` repeated the same death. The owner's three sessions starting within three
+seconds hit it, and the report's sweep reproduced it in 14 of 42 runs. Now `DaemonLock` takes an
+exclusive lock on `rtfcd.lock` (`FileShare.None`: a share mode on Windows, `flock` on Unix,
+released by the OS on any exit) before anything touches the socket, and holds it until the
+socket is removed again on the way out. A second daemon waits up to ten seconds for a leaving
+one and gives way at once to one that answers. The TCP port is not the lock because an away
+daemon does not listen and tests bind port 0. Startup failures go to `rtfcd.log` through
+`DaemonHost.WriteLog`, `daemon ensure` and the MCP server say which program holds the port
+(`DaemonLauncher.Diagnose`), a replaced daemon is waited for until its process ends (0.10.0
+deletes its socket on the way out without any lock), and a daemon whose socket file vanishes
+exits so that the next call can start one that answers.
+
 **Always on is a setting the daemon re-reads, plus a login item (§3.1).** The owner chose to
 keep the daemon running all day, opt-in. `alwaysOn` in `config.json` is read on every idle
 check (`DaemonHost.IdleExit`), so turning it on or off takes effect within seconds and
@@ -334,6 +352,8 @@ they were checked; versions are what they were checked against.
 | Bitbucket Cloud with a *scoped* API token as Basic `email:token`: `GET /2.0/user` (`uuid`, `account_id`, `display_name`), `GET /2.0/user/workspaces`, `GET /2.0/repositories/{ws}?role=member`, `GET /2.0/workspaces/{ws}/pullrequests/{uuid}` (authored), `GET .../pullrequests?q=reviewers.uuid="…" AND state="OPEN"` and `q=updated_on >= <ISO>`, `GET .../pullrequests/{id}/activity` with `comment` (global or inline, `parent` on replies), `approval` and `update` entries, `GET .../comments?q=created_on > …&sort=-created_on`, `GET .../statuses`. Bearer works as well. `changes_requested` entries and mention markup were not seen | curl and a probe script against the owner's workspace | 2026-09-30 |
 | `conhost.exe --headless <program>` runs a console program with no visible window (the host's `MainWindowHandle` is 0), its child runs, and both exit when it is done | Windows 11 Pro 10.0.26200, `Start-Process` from this machine | 2026-09-30 |
 | `rtfc daemon ensure` from a newer release replaces a running older daemon (0.9.1 to 0.10.0 in under half a second), the old install folder is then free to delete, and the four open sessions took leases on the new daemon within seconds | installing 0.10.0 on the owner's machine without `rtfc daemon stop` | 2026-10-01 |
+| Two `rtfc daemon run` processes for one home started 0 to 60 ms apart in 3 ms steps, twice: 0.10.0 left the first daemon running without a socket in 14 of 42 runs (the owner's bug report); with the lock, 0 of 42, each second daemon giving way with a log line | `race-sweep.ps1` against the Release build in a scratch `RTFC_HOME`, port 47999 | 2026-10-05 |
+| On Windows, `File.Exists` is true for a live AF_UNIX socket file, so the daemon's watchdog does not mistake its own socket for a missing one | `DaemonLockTests`, a daemon left running past two watchdog checks | 2026-10-05 |
 
 ## Schema history
 

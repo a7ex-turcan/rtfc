@@ -227,6 +227,11 @@ to use with `RTFC_HOME` set.
   compiled into an endpoint that answered 200 with an empty body, and the analyzers said
   nothing; `DaemonTests` drives every endpoint through the real socket to catch a repeat.
   Poke it by hand with `curl --unix-socket "$RTFC_HOME/rtfcd.sock" http://rtfcd/v1/status`.
+- **One daemon per home, by lock.** `DaemonHost.RunAsync` takes `rtfcd.lock` (`DaemonLock`)
+  before anything touches the socket and holds it until the socket is gone again; only the
+  holder deletes or creates `rtfcd.sock`. Never delete the socket outside that lock: a second
+  daemon doing so once left the real one running unreachable. Anything that can stop a start
+  is written to `rtfcd.log` with `DaemonHost.WriteLog`, because nobody reads its stderr.
 - **The daemon is spawned detached** by `rtfc daemon ensure` with all three stdio handles
   redirected and then closed: inheriting them would keep the MCP server's stdout pipe open
   after it exits, and Claude Code waits on that pipe. The child calls `setsid` on Unix so

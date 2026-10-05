@@ -26,7 +26,7 @@ public static class DaemonLauncher
         if (await client.TryStatusAsync(cancellationToken).ConfigureAwait(false) is { } running)
         {
             // A daemon that runs for days outlives an upgrade; the first newer rtfc that finds it replaces it. Never a downgrade.
-            if (!IsOlder(running.Version, EntryPoint.Version) || !await StopAsync(client, cancellationToken).ConfigureAwait(false))
+            if (!IsOlder(running.Version, EntryPoint.Version) || !await StopAsync(client, running.Pid, cancellationToken).ConfigureAwait(false))
             {
                 return Outcome.AlreadyRunning;
             }
@@ -52,11 +52,91 @@ public static class DaemonLauncher
         return Outcome.Failed;
     }
 
+    /// <summary>
+    /// Why a daemon may not have started, for the person who asked: something else holding the port (most likely a daemon that
+    /// lost its socket), or else the log, where every failed start now writes its reason.
+    /// </summary>
+    public static string Diagnose(RtfcHome home)
+    {
+        int port;
+        try
+        {
+            port = Rtfc.Core.ConfigFile.Load(home).Port;
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
+        {
+            return $"See {home.LogPath}.";
+        }
+
+        if (port > 0 && SomethingListens(port))
+        {
+            var stop = OperatingSystem.IsWindows()
+                ? $"Get-NetTCPConnection -LocalPort {port} -State Listen | ForEach-Object {{ Stop-Process -Id $_.OwningProcess }}"
+                : $"lsof -ti tcp:{port} | xargs kill";
+            return $"Port {port} is held by a program that does not answer on {home.SocketPath}, most likely an rtfc daemon that lost its socket. "
+                + $"Stop it ({stop}), then try again. See {home.LogPath}.";
+        }
+
+        return $"See {home.LogPath}.";
+    }
+
+    private static bool SomethingListens(int port)
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            return client.ConnectAsync(System.Net.IPAddress.Loopback, port).Wait(TimeSpan.FromSeconds(1)) && client.Connected;
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or AggregateException or ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Whether <paramref name="running"/> is an older release than <paramref name="mine"/>. Build suffixes are ignored; anything unreadable is not older.</summary>
     public static bool IsOlder(string running, string mine) =>
         Version.TryParse(Core(running), out var r) && Version.TryParse(Core(mine), out var m) && r < m;
 
     private static string Core(string version) => version.Split('-', '+')[0];
+
+    /// <summary>
+    /// Asks the daemon to stop and waits until it no longer answers and, given its <paramref name="pid"/>, until its process has ended:
+    /// rtfc 0.10.0 and older delete the socket on their way out with no lock, which would take the next daemon's. False if it is
+    /// still there after the wait.
+    /// </summary>
+    public static async Task<bool> StopAsync(DaemonClient client, int? pid, CancellationToken cancellationToken)
+    {
+        if (!await StopAsync(client, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        if (pid is not { } id || id == Environment.ProcessId)
+        {
+            return true;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(id);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(StartupWait);
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return true; // already gone
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
 
     /// <summary>Asks the daemon to stop and waits until it no longer answers. False if it is still there after the wait.</summary>
     public static async Task<bool> StopAsync(DaemonClient client, CancellationToken cancellationToken)

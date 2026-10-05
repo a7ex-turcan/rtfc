@@ -22,6 +22,13 @@ public sealed record DaemonOptions(bool IdleExit, bool LogToConsole);
 /// </summary>
 public static class DaemonHost
 {
+    /// <summary>How long a starting daemon waits for one that is leaving to let go of the home.</summary>
+    private static readonly TimeSpan LockWait = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Runs the daemon until it is told to stop or idles out. A second daemon for the same home gives way without touching anything,
+    /// and every way a start can fail is written to <c>rtfcd.log</c>, because <c>rtfc daemon ensure</c> closes the daemon's stderr.
+    /// </summary>
     public static async Task<int> RunAsync(RtfcHome home, DaemonOptions options, CancellationToken cancellationToken)
     {
         if (!IdentityStore.Exists(home))
@@ -31,6 +38,38 @@ public static class DaemonHost
         }
 
         home.EnsureCreated();
+        if (SocketPathProblem(home) is { } tooLong)
+        {
+            return Refuse(home, tooLong);
+        }
+
+        using var client = new DaemonClient(home);
+        using var held = await DaemonLock.AcquireAsync(
+            home, LockWait, async ct => await client.TryStatusAsync(ct).ConfigureAwait(false) is not null, cancellationToken).ConfigureAwait(false);
+        if (held is null)
+        {
+            WriteLog(home, "info", $"Another daemon has this home; pid {Environment.ProcessId} leaves it alone.");
+            return 0;
+        }
+
+        try
+        {
+            return await RunHoldingLockAsync(home, options, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            return Refuse(home, $"Port {ConfigFile.Load(home).Port} is in use by another program, most likely an rtfc daemon that lost its socket "
+                + "(rtfc 0.10.0 and older could leave one behind). Stop that program, or set another `port` in config.json and send your contacts a new invite.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Refuse(home, $"The daemon could not start or stopped unexpectedly: {ex}");
+        }
+    }
+
+    /// <summary>What the daemon does once it holds the home's lock: only then may it delete a stale socket and create its own.</summary>
+    private static async Task<int> RunHoldingLockAsync(RtfcHome home, DaemonOptions options, CancellationToken cancellationToken)
+    {
         var config = ConfigFile.Load(home);
         var self = IdentityStore.Load(home);
         var db = Database.Open(home.DatabasePath);
@@ -86,6 +125,13 @@ public static class DaemonHost
                 if (leases.IsIdle() && IdleExit(options, home))
                 {
                     logger.LogInformation("No session has held a lease for {Grace}; exiting", Leases.Grace);
+                    break;
+                }
+
+                if (!File.Exists(home.SocketPath))
+                {
+                    // Nothing can reach a daemon without its socket. Leaving lets the next rtfc call start one that can be reached.
+                    logger.LogWarning("The socket {Socket} is gone, so nothing can reach this daemon; exiting", home.SocketPath);
                     break;
                 }
             }
@@ -377,6 +423,46 @@ public static class DaemonHost
         {
             // Half written, or being replaced: staying a little longer is the safe side.
             return false;
+        }
+    }
+
+    /// <summary>A Unix socket path has a fixed size limit; past it the daemon could not listen at all.</summary>
+    internal static string? SocketPathProblem(RtfcHome home)
+    {
+        var max = OperatingSystem.IsMacOS() ? 103 : 107; // bytes, without the terminating NUL
+        var length = System.Text.Encoding.UTF8.GetByteCount(home.SocketPath);
+        return length > max
+            ? $"The socket path {home.SocketPath} is {length} bytes long, and a Unix socket path can be at most {max} here. Use a shorter RTFC_HOME."
+            : null;
+    }
+
+    /// <summary>Writes why the daemon will not run to the log and stderr, and returns the exit code for it.</summary>
+    private static int Refuse(RtfcHome home, string reason)
+    {
+        WriteLog(home, "fail", reason);
+        Console.Error.WriteLine($"rtfc daemon: {reason}");
+        return 1;
+    }
+
+    /// <summary>A line in <c>rtfcd.log</c> from outside the logging pipeline, in its format: before the host exists, or after it failed.</summary>
+    internal static void WriteLog(RtfcHome home, string level, string message)
+    {
+        var line = $"{DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)} {level} rtfcd: {message}{Environment.NewLine}";
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                File.AppendAllText(home.LogPath, line);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(20);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
         }
     }
 

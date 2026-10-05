@@ -20,7 +20,21 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- Several Claude Code sessions starting at once, or an always-on daemon starting while a
+  session did, could leave the daemon running with its socket deleted. After that every
+  rtfc command and tool said the daemon did not start until you stopped the stray process
+  by hand. Now exactly one daemon runs per home, held by a lock on `rtfcd.lock`, and only
+  that daemon creates or deletes the socket. A second one gives way and says so in
+  `rtfcd.log`; an older one being replaced is waited for until its process has ended.
+- A daemon that cannot start writes the reason to `rtfcd.log`: its port is taken, its
+  socket path is too long, or anything else that stops it. Before, it died without a
+  trace.
+- When the daemon does not start, rtfc says why: if another program holds the port, it
+  names the port and the command that stops it.
+- A daemon whose socket file disappears exits within seconds, so the next rtfc call starts
+  one that can be reached.
 
 ## [0.10.0] - 2026-10-01
 

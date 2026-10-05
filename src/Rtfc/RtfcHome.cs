@@ -25,6 +25,12 @@ public sealed class RtfcHome
     public string StatusPath => Path.Combine(Root, "status.json");
     public string LogPath => Path.Combine(Root, "rtfcd.log");
 
+    /// <summary>Held exclusively by the one daemon of this home, for its whole life (spec §3.1).</summary>
+    public string LockPath => Path.Combine(Root, "rtfcd.lock");
+
+    /// <summary>The pid of the daemon holding the lock, for people; written after the lock is taken.</summary>
+    public string PidPath => Path.Combine(Root, "rtfcd.pid");
+
     /// <summary>One small file per Claude Code session: the accept gate for a contact's message pushed into it (spec §7.3).</summary>
     public string GatesDirectory => Path.Combine(Root, "gates");
 

@@ -185,7 +185,7 @@ public sealed class McpServer(RtfcHome home, TextReader input, TextWriter output
         if (!await EnsureDaemonAsync(cancellationToken).ConfigureAwait(false))
         {
             return ToolError("rtfcd is not running and could not be started. If this machine has no rtfc identity yet, run /rtfc:init. "
-                + $"Otherwise see {home.LogPath}.");
+                + $"Otherwise: {DaemonLauncher.Diagnose(home)}");
         }
 
         try
