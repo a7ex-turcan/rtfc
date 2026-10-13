@@ -135,10 +135,11 @@ public sealed partial class Node
                 {
                     PushOutcome.Sent => Sent(now),
                     PushOutcome.Held => $"Waiting for the Claude Code session that answers {contact.Handle} to finish what it is doing; it goes in when the turn ends.",
+                    PushOutcome.NotShown => $"Not sent into the Claude Code session that answers {contact.Handle}: it does not show rtfc's pushes, most likely because it was started without {ChannelsFlag}. Restart it with that flag and this is offered again. It waits here.",
                     _ => note,
                 };
                 // A held push counts toward the hourly caps now, so a flood cannot slip past them while the session is busy.
-                _db.SetAutoState(message.Id, InboxState.Parked, note, draft: null, countAttempt: outcome != PushOutcome.NotOpen, now);
+                _db.SetAutoState(message.Id, InboxState.Parked, note, draft: null, countAttempt: outcome is PushOutcome.Sent or PushOutcome.Held, now);
             });
         }
         else
@@ -184,6 +185,7 @@ public sealed partial class Node
         }
 
         var now = _clock.GetUtcNow();
+        ShownSomewhere(id);
         var where = message.Kind == InboxKind.Source && message.ProjectId is { } p && _db.GetProject(p) is { } project ? $" in {project.Name}" : "";
         switch (outcome)
         {

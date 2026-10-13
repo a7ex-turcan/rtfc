@@ -5,11 +5,13 @@ namespace Rtfc.Core;
 
 /// <summary>
 /// How often held pushes are checked, how long a session counts as busy right after a push, and how long after a session opens
-/// the first push may go in: Claude Code drops a channel event sent before the session's channel is live. Tests shorten all three.
+/// the first push may go in: Claude Code drops a channel event sent before the session's channel is live. <c>Confirm</c> is how
+/// long a push may go unseen while its session sits idle before the session counts as not showing pushes at all; null or infinite
+/// turns confirmation off. Tests shorten or switch off all four.
 /// </summary>
-public sealed record SessionPushSettings(TimeSpan Check, TimeSpan Settle, TimeSpan OpenGrace)
+public sealed record SessionPushSettings(TimeSpan Check, TimeSpan Settle, TimeSpan OpenGrace, TimeSpan? Confirm = null)
 {
-    public static readonly SessionPushSettings Default = new(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15));
+    public static readonly SessionPushSettings Default = new(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2));
 }
 
 /// <summary>
@@ -18,18 +20,35 @@ public sealed record SessionPushSettings(TimeSpan Check, TimeSpan Settle, TimeSp
 /// the session counts as busy for a moment, until Claude Code has turned the push into a prompt and the hook has seen it, so two
 /// items that arrive together go in one turn after the other. Everything held is parked in the inbox as well, with a note, so
 /// nothing is lost when the daemon restarts or the session closes.
+///
+/// Claude Code drops a push it cannot show without a word, which a session started without the channels flag does to every one.
+/// So each push waits to be seen: the hook reports it when it becomes a prompt, and until then nothing more goes to that session.
+/// A push still unseen after <see cref="SessionPushSettings.Confirm"/> of the session sitting idle means the session does not show
+/// pushes. The item gives its attempt back and says why, nothing more is sent there, the status line warns, and the session is
+/// offered everything again when it restarts.
 /// </summary>
 public sealed partial class Node
 {
-    private enum PushOutcome { Sent, Held, NotOpen }
+    private enum PushOutcome { Sent, Held, NotOpen, NotShown }
 
     private sealed record HeldPush(string MessageId, SessionEvent Event, Func<DateTimeOffset, string> SentNote);
+
+    /// <summary>A push sent into a session and not yet seen there. <c>Since</c> moves on while the session is busy.</summary>
+    private sealed record UnseenPush(SessionEvent Event, DateTimeOffset SentAt, DateTimeOffset Since);
 
     private readonly Lock _pushLock = new();
     private readonly Dictionary<string, List<HeldPush>> _held = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _lastPush = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _notBefore = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, UnseenPush> _unseen = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _notShowing = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _givenUp = new(StringComparer.Ordinal);
     private Task? _pushLoop;
+
+    private TimeSpan? ConfirmWindow => _pushSettings.Confirm is { } confirm && confirm != Timeout.InfiniteTimeSpan ? confirm : null;
+
+    /// <summary>The flag a session needs for rtfc's pushes to show, as the notes quote it.</summary>
+    public const string ChannelsFlag = "--dangerously-load-development-channels plugin:rtfc@rtfc";
 
     /// <summary>What a session that opens is offered: items and messages from no further back than this.</summary>
     private static readonly TimeSpan OfferWindow = TimeSpan.FromDays(7);
@@ -54,9 +73,13 @@ public sealed partial class Node
             {
                 outcome = PushOutcome.NotOpen;
             }
+            else if (_notShowing.ContainsKey(session))
+            {
+                outcome = PushOutcome.NotShown;
+            }
             else if (!(_held.TryGetValue(session, out var waiting) && waiting.Count > 0) && IsIdle(session, now) && _sessions.TryPush(session, sessionEvent))
             {
-                _lastPush[session] = now;
+                Sent(session, sessionEvent, now);
                 outcome = PushOutcome.Sent;
             }
             else
@@ -77,8 +100,174 @@ public sealed partial class Node
 
     private bool IsIdle(string session, DateTimeOffset now) =>
         !SessionActivity.IsBusy(_home, session, now)
+        && !_unseen.ContainsKey(session)
         && !(_lastPush.TryGetValue(session, out var last) && now - last < _pushSettings.Settle)
         && !(_notBefore.TryGetValue(session, out var notBefore) && now < notBefore);
+
+    /// <summary>Under the lock: a push went into the session, and waits to be seen there.</summary>
+    private void Sent(string session, SessionEvent sessionEvent, DateTimeOffset now)
+    {
+        _lastPush[session] = now;
+        if (ConfirmWindow is not null)
+        {
+            _unseen[session] = new UnseenPush(sessionEvent, now, now);
+        }
+    }
+
+    /// <summary>Where a push went, in the words of its notes.</summary>
+    private string SessionLabel(string session, SessionEvent pushed) =>
+        pushed.Kind == InboxKind.Source
+            ? $"your Claude Code session in {(_openSessions.TryGetValue(session, out var open) && _db.GetProject(open.ProjectId) is { } project ? project.Name : "its project")}"
+            : $"the Claude Code session that answers {pushed.From}";
+
+    private string NotShownNote(string session, SessionEvent pushed) =>
+        $"Not sent into {SessionLabel(session, pushed)}: it does not show rtfc's pushes, most likely because it was started without {ChannelsFlag}. Restart it with that flag and this is offered again. It waits here.";
+
+    /// <summary>
+    /// From the plugin's hook (spec §7.3): a pushed item became a prompt in the session, so the session shows rtfc's pushes. A
+    /// push already given up on came late after all: its note says so and its attempt counts again.
+    /// </summary>
+    public void PushShown(string session, string id)
+    {
+        bool late, wasNotShowing;
+        lock (_pushLock)
+        {
+            if (_unseen.TryGetValue(session, out var unseen) && unseen.Event.Id == id)
+            {
+                _unseen.Remove(session);
+            }
+
+            late = _givenUp.Remove(id);
+            wasNotShowing = _notShowing.Remove(session);
+        }
+
+        var now = _clock.GetUtcNow();
+        if (late && _db.GetMessage(id) is { State: InboxState.Parked })
+        {
+            _db.CountAttempt(id);
+            _db.SetMessageNote(id, $"Sent into your Claude Code session; it showed up there late, at {Timestamps.Format(now)}.", now);
+        }
+
+        if (wasNotShowing)
+        {
+            _logger.LogInformation("Session {Session} shows rtfc's pushes again", session);
+        }
+
+        if (late || wasNotShowing)
+        {
+            WriteStatus();
+            InboxChanged?.Invoke();
+        }
+    }
+
+    /// <summary>A decision the hook reported about an item is proof enough that it showed up.</summary>
+    private void ShownSomewhere(string id)
+    {
+        string? session;
+        lock (_pushLock)
+        {
+            session = _unseen.FirstOrDefault(u => u.Value.Event.Id == id).Key;
+        }
+
+        if (session is not null)
+        {
+            PushShown(session, id);
+        }
+    }
+
+    /// <summary>
+    /// Gives up on pushes that were never seen. A session that is busy is not counted against: Claude Code may hold the push until
+    /// the turn ends. The gate file is checked too, in case the hook could not reach the daemon. The loop calls it; tests by hand.
+    /// </summary>
+    internal void CheckPushesShown()
+    {
+        if (ConfirmWindow is not { } confirm)
+        {
+            return;
+        }
+
+        var now = _clock.GetUtcNow();
+        var lost = new List<(string Session, UnseenPush Push)>();
+        var notSent = new List<(string Session, HeldPush Push)>();
+        lock (_pushLock)
+        {
+            foreach (var (session, unseen) in _unseen.ToList())
+            {
+                if (_sessions is null || !_sessions.IsOpen(session) || SessionGates.Read(_home, session)?.Id == unseen.Event.Id)
+                {
+                    _unseen.Remove(session);
+                }
+                else if (SessionActivity.IsBusy(_home, session, now))
+                {
+                    _unseen[session] = unseen with { Since = now };
+                }
+                else if (now - unseen.Since >= confirm)
+                {
+                    _unseen.Remove(session);
+                    _notShowing[session] = now;
+                    _givenUp.Add(unseen.Event.Id);
+                    lost.Add((session, unseen));
+                    if (_held.Remove(session, out var held))
+                    {
+                        notSent.AddRange(held.Select(h => (session, h)));
+                    }
+                }
+            }
+        }
+
+        foreach (var (session, unseen) in lost)
+        {
+            var label = SessionLabel(session, unseen.Event);
+            _db.UncountAttempt(unseen.Event.Id);
+            _db.SetMessageNote(unseen.Event.Id,
+                $"Sent into {label} at {Timestamps.Format(unseen.SentAt)}, but it never showed up there. Claude Code drops rtfc's pushes in a session started without {ChannelsFlag}, so nothing more is sent there until it restarts with that flag; then this is offered again. It waits here.",
+                now);
+            _logger.LogWarning("A push into {Label} ({Session}) never showed up there; nothing more goes to that session until it restarts", label, session);
+        }
+
+        foreach (var (session, push) in notSent)
+        {
+            _db.UncountAttempt(push.MessageId);
+            _db.SetMessageNote(push.MessageId, NotShownNote(session, push.Event), now);
+        }
+
+        if (lost.Count > 0)
+        {
+            WriteStatus();
+            InboxChanged?.Invoke();
+        }
+    }
+
+    /// <summary>The projects whose open session does not show pushes, for the status line.</summary>
+    private HashSet<string> ProjectsNotShowingPushes()
+    {
+        lock (_pushLock)
+        {
+            return [.. _notShowing.Keys.Select(s => _openSessions.TryGetValue(s, out var open) ? open.ProjectId : null).OfType<string>()];
+        }
+    }
+
+    /// <summary>
+    /// A session registered again: a new Claude Code process for the same session, or the same one after a blip. What it was sent
+    /// and never showed is offered again, and it gets a fresh chance to show pushes.
+    /// </summary>
+    private void SessionRestarted(string session)
+    {
+        UnseenPush? unseen;
+        lock (_pushLock)
+        {
+            _notShowing.Remove(session);
+            _unseen.Remove(session, out unseen);
+        }
+
+        if (unseen is not null)
+        {
+            _db.UncountAttempt(unseen.Event.Id);
+            _db.SetMessageNote(unseen.Event.Id,
+                $"Sent into {SessionLabel(session, unseen.Event)} at {Timestamps.Format(unseen.SentAt)}, which restarted before it showed up there. It is offered again.",
+                _clock.GetUtcNow());
+        }
+    }
 
     /// <summary>
     /// A session opened (issue #2): offer it what never reached a session while none was there, oldest first, through the same
@@ -135,6 +324,7 @@ public sealed partial class Node
     {
         var sent = new List<HeldPush>();
         var dropped = new List<HeldPush>();
+        var notShown = new List<(string Session, HeldPush Push)>();
         var now = _clock.GetUtcNow();
         lock (_pushLock)
         {
@@ -143,6 +333,13 @@ public sealed partial class Node
                 if (_sessions is null || !_sessions.IsOpen(session))
                 {
                     dropped.AddRange(list);
+                    _held.Remove(session);
+                    continue;
+                }
+
+                if (_notShowing.ContainsKey(session))
+                {
+                    notShown.AddRange(list.Select(h => (session, h)));
                     _held.Remove(session);
                     continue;
                 }
@@ -163,7 +360,7 @@ public sealed partial class Node
 
                     if (_sessions.TryPush(session, next.Event))
                     {
-                        _lastPush[session] = now;
+                        Sent(session, next.Event, now);
                         sent.Add(next);
                     }
                     else
@@ -193,7 +390,13 @@ public sealed partial class Node
             _db.SetMessageNote(push.MessageId, "Not sent into a session: it closed while it was busy. It waits here.", now);
         }
 
-        if (sent.Count > 0 || dropped.Count > 0)
+        foreach (var (session, push) in notShown)
+        {
+            _db.UncountAttempt(push.MessageId);
+            _db.SetMessageNote(push.MessageId, NotShownNote(session, push.Event), now);
+        }
+
+        if (sent.Count > 0 || dropped.Count > 0 || notShown.Count > 0)
         {
             WriteStatus();
             InboxChanged?.Invoke();
@@ -229,13 +432,19 @@ public sealed partial class Node
             try
             {
                 await Task.Delay(_pushSettings.Check, cancellationToken).ConfigureAwait(false);
-                bool any;
+                bool held, unseen;
                 lock (_pushLock)
                 {
-                    any = _held.Count > 0;
+                    held = _held.Count > 0;
+                    unseen = _unseen.Count > 0;
                 }
 
-                if (any)
+                if (unseen)
+                {
+                    CheckPushesShown();
+                }
+
+                if (held)
                 {
                     FlushHeldPushes();
                 }
@@ -255,15 +464,28 @@ public sealed partial class Node
     private void DropHeldPushes(string session)
     {
         List<HeldPush>? list;
+        bool wasNotShowing;
         lock (_pushLock)
         {
             _notBefore.Remove(session);
+            _unseen.Remove(session);
+            wasNotShowing = _notShowing.Remove(session);
             if (!_held.Remove(session, out list))
             {
-                return;
+                list = null;
             }
 
             _lastPush.Remove(session);
+        }
+
+        if (list is null)
+        {
+            if (wasNotShowing)
+            {
+                WriteStatus();
+            }
+
+            return;
         }
 
         var now = _clock.GetUtcNow();

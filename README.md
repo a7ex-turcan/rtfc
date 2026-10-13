@@ -448,7 +448,9 @@ item that arrives while no session is open in the project waits in the inbox, an
 session that opens next is offered it, oldest first, from the last week, starting about 15
 seconds after it opens. The same goes for a contact's message for your designated session.
 After you interrupt a turn with Esc, anything waiting goes in once Claude Code reports the
-session idle; if it doesn't, the next turn you finish releases it.
+session idle; if it doesn't, the next turn you finish releases it. Every push has to show up in the session; if one does not, rtfc stops sending
+that session more, the status line shows `⚠ rtfc: pushes not showing`, and the items wait
+in the inbox until the session is restarted with the flag.
 
 A subscription sends at most twenty items an hour into a session; the rest wait in the
 inbox. With no session open in the project the item waits too, and its note says so. A
@@ -575,6 +577,7 @@ project's `.claude/rtfc.local.json` (step 9).
 | A queued reply never arrives | Both of you need Claude Code open at the same time for a moment: your daemon delivers, theirs receives. `rtfc outbox` shows attempts; after a week it expires with a notice. |
 | A message sent to a project landed in the shared inbox | Its note says why: no project by that name, or several. A project is known once a Claude Code session with the plugin has run in it; the name is its git root's folder name (or the folder's, outside git). `rtfc inbox` shows which project each message went to. |
 | Session mode: a contact's message never shows up in the session | Was the session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`, and did you run `/rtfc:auto <contact> session` in that same session? Claude Code drops a channel event it cannot deliver without a word; the message still waits in `/rtfc:inbox`. Team/Enterprise organisations must allow channels. |
+| The status line says `⚠ rtfc: pushes not showing` | A push into that session never showed up, so rtfc stopped sending it more. Almost always the session was started (or resumed) without the flag: quit it and run `claude --dangerously-load-development-channels plugin:rtfc@rtfc --resume`. It is offered everything that waited, oldest first. |
 | Session mode: Claude says rtfc blocked a tool | You have not accepted the contact's message yet, or you declined it. Answer the Accept/Decline question; the gate lifts for the rest of that turn and closes when the turn ends. |
 | The status line says `⚠ rtfc: 1 pending` | A subscription in `.claude/rtfc.local.json` waits for you. `/rtfc:sources-approve` in a session in that project; an entry you edit goes back to pending. |
 | Nothing arrives from a source | `/rtfc:sources` (or `rtfc sources`) shows each subscription's status, how far it has read and its last error. A new subscription starts from the moment you approved it; your own actions never notify you; polling happens only while a session is open; and the JQL, space or repository must match what you expect. `rtfcd.log` logs each subscription's first poll. |

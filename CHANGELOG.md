@@ -20,7 +20,15 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- A session that did not show rtfc's pushes, most often one started or resumed without
+  `--dangerously-load-development-channels plugin:rtfc@rtfc`, silently lost every item sent
+  into it, while the inbox said "Sent into your Claude Code session". Now each push has to
+  show up: if one does not within two minutes of the session sitting idle, rtfc stops sending
+  that session more, says why in the item's note, and shows `⚠ rtfc: pushes not showing` in
+  that project's status line. Everything that waited is offered again, oldest first, once the
+  session is restarted with the flag.
 
 ## [0.12.0] - 2026-10-13
 

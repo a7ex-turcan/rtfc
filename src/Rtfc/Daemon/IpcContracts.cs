@@ -30,6 +30,7 @@ public static class IpcRoutes
     public static string InboxReply(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/reply";
     public static string InboxDismiss(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/dismiss";
     public static string InboxGate(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/gate";
+    public static string InboxShown(string id) => $"{Inbox}/{Uri.EscapeDataString(id)}/shown";
 
     // Management (spec §9.3). On the user-only socket, reached by the CLI; never an MCP tool.
     public static string ContactAuto(string handle) => $"{Contacts}/{Uri.EscapeDataString(handle)}/auto";
@@ -73,6 +74,9 @@ public sealed record AutoRequest(string Mode, string? Scope, string? Session = n
 /// <summary>From the plugin's hook: what became of a pushed item in the session (spec §7.3, §10.4). <c>Outcome</c> is a <see cref="GateOutcome"/>; <c>Accepted</c> is kept for older hooks.</summary>
 public sealed record GateRequest(bool Accepted, string? Outcome = null);
 
+/// <summary>From the plugin's hook: a pushed item became a prompt in this session, so the session shows rtfc's pushes (spec §7.3).</summary>
+public sealed record ShownRequest(string Session);
+
 /// <summary>A third-party account's public half (spec §10.5). The token never travels here: the CLI wrote it to a file.</summary>
 public sealed record AccountRequest(string Name, string Type, string BaseUrl, string Login, string? AccountId);
 
@@ -88,6 +92,7 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(AcceptRequest))]
 [JsonSerializable(typeof(AutoRequest))]
 [JsonSerializable(typeof(GateRequest))]
+[JsonSerializable(typeof(ShownRequest))]
 [JsonSerializable(typeof(AccountRequest))]
 [JsonSerializable(typeof(AccountView[]))]
 [JsonSerializable(typeof(SourceView[]))]

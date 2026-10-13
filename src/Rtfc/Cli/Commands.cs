@@ -680,6 +680,11 @@ public static class Commands
             {
                 segments.Add($"⚠ rtfc: {projects[here].PendingSubscriptions.ToString(CultureInfo.InvariantCulture)} pending");
             }
+
+            if (projects[here].PushesNotShown == true)
+            {
+                segments.Add("⚠ rtfc: pushes not showing");
+            }
         }
 
         if (status.Global.Pending > 0)
@@ -796,6 +801,7 @@ public static class Commands
                     if (PushedMessage(StringProperty(root, "prompt")) is { } pushed)
                     {
                         SessionGates.Write(ctx.Home, session, new SessionGate(pushed.Id, pushed.From, GateState.Pending, pushed.Kind));
+                        await NoteShownAsync(ctx, session, pushed.Id).ConfigureAwait(false);
                     }
 
                     break;
@@ -947,6 +953,20 @@ public static class Commands
                 ["permissionDecisionReason"] = reason,
             },
         }.ToJsonString();
+    }
+
+    /// <summary>Tells the daemon the push showed up in this session (spec §7.3): without it, the daemon stops pushing here after a while.</summary>
+    private static async Task NoteShownAsync(CommandContext ctx, string session, string id)
+    {
+        try
+        {
+            using var client = new DaemonClient(ctx.Home, TimeSpan.FromSeconds(2));
+            await client.PushShownAsync(id, session, ctx.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is DaemonException or HttpRequestException or IOException or OperationCanceledException or JsonException)
+        {
+            // The gate file says the same, and the daemon reads it before giving up on a push.
+        }
     }
 
     private static async Task NoteDecisionAsync(CommandContext ctx, SessionGate gate, string outcome)

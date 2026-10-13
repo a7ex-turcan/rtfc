@@ -289,6 +289,20 @@ public static class DaemonHost
                 : Results.Json(new IpcError($"No message with id '{id}'."), IpcJson.Default.IpcError, statusCode: 404);
         });
 
+        // From the plugin's hook: a pushed item showed up in its session (spec §7.3). Unseen pushes are how a session that does
+        // not show them is found.
+        app.MapPost(IpcRoutes.Inbox + "/{id}/shown", async Task<IResult> (string id, HttpContext context) =>
+        {
+            var request = await context.Request.ReadFromJsonAsync(IpcJson.Default.ShownRequest, context.RequestAborted);
+            if (request is null || string.IsNullOrEmpty(request.Session))
+            {
+                return Results.Json(new IpcError("A JSON body with 'session' is required."), IpcJson.Default.IpcError, statusCode: 400);
+            }
+
+            node.PushShown(request.Session, id);
+            return Results.StatusCode(204);
+        });
+
         app.MapGet(IpcRoutes.Outbox, IResult () => Results.Json(node.ListOutbox(), IpcJson.Default.OutboxViewArray));
 
         app.MapPost(IpcRoutes.Away, async Task<IResult> (HttpContext context) =>

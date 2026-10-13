@@ -174,6 +174,14 @@ public sealed class DaemonClient : IDisposable
         return true;
     }
 
+    /// <summary>For the plugin's hook: the pushed item showed up in the session as a prompt (spec §7.3).</summary>
+    public async Task PushShownAsync(string id, string session, CancellationToken cancellationToken)
+    {
+        using var content = JsonContent.Create(new ShownRequest(session), IpcJson.Default.ShownRequest);
+        using var response = await _http.PostAsync(IpcRoutes.InboxShown(id), content, cancellationToken).ConfigureAwait(false);
+        await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<ManagementResult> RemoveAsync(string handle, CancellationToken cancellationToken)
     {
         using var response = await _http.PostAsync(IpcRoutes.ContactRemove(handle), content: null, cancellationToken).ConfigureAwait(false);

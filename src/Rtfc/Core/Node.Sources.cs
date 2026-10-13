@@ -283,15 +283,17 @@ public sealed partial class Node
                 {
                     PushOutcome.Sent => Sent(now),
                     PushOutcome.Held => $"Waiting for your Claude Code session in {project.Name} to finish what it is doing; it goes in when the turn ends.",
+                    PushOutcome.NotShown => $"Not sent into your Claude Code session in {project.Name}: it does not show rtfc's pushes, most likely because it was started without {ChannelsFlag}. Restart it with that flag and this is offered again. It waits here.",
                     _ => note,
                 };
-                if (outcome != PushOutcome.NotOpen)
+                var counted = outcome is PushOutcome.Sent or PushOutcome.Held;
+                if (counted)
                 {
                     // Held counts toward the hourly cap now, so a storm of updates cannot pile up behind a busy session.
                     recent.Enqueue(now);
                 }
 
-                _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: outcome != PushOutcome.NotOpen, now);
+                _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: counted, now);
             });
         }
 

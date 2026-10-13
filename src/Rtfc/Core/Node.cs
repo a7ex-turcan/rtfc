@@ -997,6 +997,7 @@ public sealed partial class Node : IAsyncDisposable
         var projects = _db.ListProjects().ToDictionary(p => p.Id);
         var shared = parked.Where(m => ProjectIdOf(m, projects) is null).ToList();
         var pending = _db.ListSubscriptions().Where(s => s.Status == SubscriptionStatus.PendingApproval).GroupBy(s => s.ProjectId).ToDictionary(g => g.Key, g => g.Count());
+        var notShowing = ProjectsNotShowingPushes();
         var perProject = new Dictionary<string, ProjectStatus>();
         foreach (var project in projects.Values)
         {
@@ -1005,9 +1006,11 @@ public sealed partial class Node : IAsyncDisposable
             var reviews = _db.CountSourceItems(project.Id, "bitbucket:") + _db.CountSourceItems(project.Id, "github:");
             var pages = _db.CountSourceItems(project.Id, "confluence:");
             var waiting = pending.GetValueOrDefault(project.Id);
-            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || waiting > 0)
+            var deaf = notShowing.Contains(project.Id);
+            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || waiting > 0 || deaf)
             {
-                perProject[project.RootPath] = new ProjectStatus(project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages);
+                perProject[project.RootPath] = new ProjectStatus(
+                    project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages, deaf ? true : null);
             }
         }
 

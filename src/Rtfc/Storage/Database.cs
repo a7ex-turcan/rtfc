@@ -419,6 +419,10 @@ public sealed class Database : IDisposable
     public void UncountAttempt(string id) =>
         Execute($"UPDATE inbox SET auto_attempts = MAX(auto_attempts - 1, 0) WHERE id = $id AND {MessageKinds}", ("$id", id));
 
+    /// <summary>Counts an attempt again, for a push that was given up on and showed up after all.</summary>
+    public void CountAttempt(string id) =>
+        Execute($"UPDATE inbox SET auto_attempts = auto_attempts + 1 WHERE id = $id AND {MessageKinds}", ("$id", id));
+
     /// <summary>Auto-answer runs started since <paramref name="since"/>, for one person or for everyone (spec §7.4).</summary>
     public int CountAutoAnswers(string? fromPerson, DateTimeOffset since) => (int)(fromPerson is null
         ? Scalar<long>("SELECT COUNT(*) FROM inbox WHERE kind = 'person' AND auto_attempts > 0 AND received_at > $since", ("$since", Timestamps.Format(since)))

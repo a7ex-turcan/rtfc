@@ -32,6 +32,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §3.1 always on | `Daemon/LoginItems.cs` (the Windows Run value, the LaunchAgent, the systemd unit); `Commands.AlwaysOnAsync`; `DaemonHost.IdleExit`; the `run` guard in `Commands.DaemonAsync`; `DaemonLauncher.IsOlder` and `StopAsync` in `EnsureAsync` |
 | §7.3, §10.4 offered when a session opens | `Node.OfferWaiting` (from `RegisterProject(directory, session)`), `Database.ListNeverPushed` and `UncountAttempt`, `SessionPushSettings.OpenGrace` |
 | §7.3, §10.4 only into an idle session | `Core/SessionActivity.cs` (the busy marks); the hook's `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `SessionEnd` and `Notification` cases; `Node.SessionPushes.cs` (`PushOrHold`, `FlushHeldPushes`, the loop, `DropHeldPushes`) |
+| §7.3, §10.4 a push waits to be seen | `Node.PushShown`, `CheckPushesShown` and `SessionRestarted` in `Node.SessionPushes.cs`; the hook's `NoteShownAsync`; `ProjectStatus.PushesNotShown` |
 | §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs` (and `DaemonHost.RefreshHints` every 30 s), `Commands.HintsAsync`, `Node.SetHintHosts`, `LearnHints` and `RecordTold`, `Node.Announce.cs`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
@@ -190,6 +191,22 @@ wrapper script that calls rtfc counts as the user's own. The file goes through `
 other keys survive in order; comments do not, and characters outside the Basic Multilingual
 Plane come back escaped (System.Text.Json always escapes them), which is why the previous copy
 is kept as `settings.json.rtfc-backup`.
+
+**A push waits to be seen (§7.3).** The owner's `isos-admin-2.0` session took every push for
+days and then none for three: 25 items between a resume on 2026-10-06 and the next one on
+10-09 never reached its transcript, while the daemon's notes said "Sent into your Claude Code
+session", and 17 of 17 arrived after the 10-09 resume. Idle, away and busy made no
+difference; the run that dropped them was most likely started without the channels flag,
+which Claude Code accepts without a word. There is no acknowledgement in the channels
+protocol, but the plugin's hook already sees every push become a prompt, so it now tells the
+daemon (`POST /v1/inbox/{id}/shown`, `Node.PushShown`). The gate file and any reported
+answer count too, so a hook that cannot reach the daemon does not cost a session its pushes.
+One unseen push at a time per session keeps a deaf session's loss to one item; busy time
+does not count toward the two minutes, because Claude Code holds a push that lands just as a
+turn starts until the turn ends. A session found not to show pushes is in memory only: a
+daemon restart forgets it and costs one more push to find it again, which was judged cheaper
+than a table. Tests switch confirmation off unless they test it (`SessionPushSettings.Confirm`
+null), so the timing of every other session test is unchanged.
 
 **Hints follow the machine, and contacts are told (§8.4, issue #11).** The owner's DHCP
 lease moved while `config.json` still advertised the old address: `rtfc hints add` for the
@@ -400,6 +417,8 @@ they were checked; versions are what they were checked against.
 | Two `rtfc daemon run` processes for one home started 0 to 60 ms apart in 3 ms steps, twice: 0.10.0 left the first daemon running without a socket in 14 of 42 runs (the owner's bug report); with the lock, 0 of 42, each second daemon giving way with a log line | `race-sweep.ps1` against the Release build in a scratch `RTFC_HOME`, port 47999 | 2026-10-05 |
 | On Windows, `File.Exists` is true for a live AF_UNIX socket file, so the daemon's watchdog does not mistake its own socket for a missing one | `DaemonLockTests`, a daemon left running past two watchdog checks | 2026-10-05 |
 | The idle hold and the 0.9.1 endings in a real session: 27 pushes held for a busy session and released when it was idle (2026-10-01 to 10-12); source items ended "Handled … and dismissed" from the Dismiss answer (3), dismissed because Claude found nothing to do (7) or the user chose nothing to do (1), declined (1), and accepted (1) | the owner's `isos-admin-2.0` session with 12 subscriptions in `session` mode, read from `rtfcd.log` and the inbox notes | 2026-10-13 |
+| A session resumed without the channels flag drops every push silently: the owner's `isos-admin-2.0` session, matched push by push against its transcript, lost all 25 pushes between its 2026-10-06 resume and its 2026-10-09 resume, idle or not, and received 17 of 17 after; every Claude Code process running with the flag on 10-13 received its pushes | `rtfcd.log`, the session transcript, `Win32_Process` command lines | 2026-10-13 |
+| Stale hints against a real contact, and both repairs: the owner's DHCP address had moved from .212 to .217 under a frozen `hintHosts`, so a contact on macOS could not reach them while the owner's sends to the contact worked. After `rtfc hints auto`, the owner's next send carried the new hints in its hello and the contact's queued reply arrived within minutes; one second after the 0.12.0 daemon started, it logged `Told maxim/maxims-macbook-pro where to reach us` against that contact's older release | `rtfcd.log`, the inbox, the `seq_in` table | 2026-10-13 |
 
 ## Schema history
 
@@ -452,10 +471,9 @@ block per version.
   `ProjectMessageTests`, `SessionModeTests` and `DaemonTests` do, with real daemons and
   real TLS. Delivery into a live Claude Code session was checked by hand (see the verified
   table); no test can start an interactive session.
-- **Session mode cannot confirm delivery.** Claude Code drops a channel event it cannot
-  deliver without telling the server, so a pushed message stays parked and its note says
-  where it was sent, not that it arrived. It rests on the channels research preview and on
-  a launch flag with `dangerously` in its name.
+- **Session mode rests on the channels research preview** and on a launch flag with
+  `dangerously` in its name. Delivery is confirmed by the plugin's hook, not by Claude Code,
+  which says nothing when it drops a push.
 - **Held pushes live in the daemon's memory.** A daemon restart forgets them; the items and
   messages stay parked with a note saying they waited, and nothing re-pushes them. Whether
   Claude Code's `idle_prompt` notification follows an interrupted turn, and how soon, was
