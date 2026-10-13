@@ -160,3 +160,22 @@ jobs:
             --title "rtfc $version" \
             --notes-file artifacts/notes/notes.md \
             artifacts/binary-*/* artifacts/nupkg/*
+
+  # Rebuild nutrx-labs.com so its version badge shows this release right away
+  # (otherwise the site picks it up on its daily build). Needs a repo secret
+  # SITE_DEPLOY_TOKEN: a fine-grained token for a7ex-turcan/nutrx-web with
+  # Actions read/write. Never fails the release.
+  site:
+    needs: release
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Rebuild nutrx-labs.com
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::SITE_DEPLOY_TOKEN is not set; nutrx-labs.com will pick this release up on its daily build."
+            exit 0
+          fi
+          gh workflow run deploy.yml --repo a7ex-turcan/nutrx-web
