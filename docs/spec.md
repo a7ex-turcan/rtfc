@@ -440,6 +440,7 @@ Tell the user the result above in one sentence. Do not run any other rtfc comman
 | `/rtfc:init` · `/rtfc:invite` · `/rtfc:accept <token>` | CLI |
 | `/rtfc:rename <contact> <handle>` · `/rtfc:remove <contact>` · `/rtfc:block <contact>` | CLI |
 | `/rtfc:auto <contact>\|--all off\|headless\|session [--scope <dir>]` · `/rtfc:receipts <contact> on\|off` · `/rtfc:away on\|off` · `/rtfc:hints [add\|remove <host>…\|auto]` · `/rtfc:always-on [on\|off]` | CLI |
+| `/rtfc:statusline [--replace]` | CLI: `rtfc statusline install`, which adds the status line to Claude Code's user settings (§11) |
 | `/rtfc:sources` | Prompt: asks Claude to show this project's subscriptions and their health via the `sources` tool |
 | `/rtfc:sources-approve` · `/rtfc:project-forget` | CLI |
 | *(terminal only)* `rtfc account add` / `remove` | CLI in a real terminal; prompts for a secret, which must never pass through Claude |
@@ -562,7 +563,8 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 - Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 2 · Sasha, Alex  🔀 2  🎫 3  📄 1`, and `⚠ rtfc: 1 pending` while a subscription waits for approval, or nothing when there's nothing to show. The current project's messages count with the shared inbox; another project's appear as a pointer, `📨 1 · Alex → payments-api`. Reading a file keeps it fast, since status lines run often.
 - Configure it once in `~/.claude/settings.json`:
   `{ "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }`
-- Claude Code has **one** `statusLine` setting per user, so ship this as a composable segment: users with an existing status line call `rtfc statusline` from their own script. Offer a standalone config for everyone else.
+  `rtfc statusline install` (or `/rtfc:statusline`) writes exactly that into Claude Code's user settings (`$CLAUDE_CONFIG_DIR/settings.json` when set, `--settings <file>` for another file), keeps the rest of the file, and saves the previous copy as `settings.json.rtfc-backup`. It is the only place rtfc writes Claude Code's settings, and only when the user runs it. `rtfc statusline uninstall` removes the entry when it is rtfc's.
+- Claude Code has **one** `statusLine` setting per user, so ship this as a composable segment: users with an existing status line call `rtfc statusline` from their own script. Offer a standalone config for everyone else. `install` never overwrites a status line that is not rtfc's unless given `--replace`; it says what is there and how to append the segment instead.
 - Set `refreshInterval` (in seconds; minimum 1) so the counter updates while the session is idle. Otherwise the status line only refreshes on session events.
 
 ---

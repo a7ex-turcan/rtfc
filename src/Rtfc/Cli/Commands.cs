@@ -50,6 +50,7 @@ public static class Commands
         ctx.Out.WriteLine($"  hints        {string.Join(", ", hints)}");
         ctx.Out.WriteLine();
         ctx.Out.WriteLine("Next: /rtfc:invite to invite someone, or /rtfc:accept <token> to accept an invite.");
+        ctx.Out.WriteLine("To see waiting messages in Claude Code's status line: rtfc statusline install (or /rtfc:statusline).");
         return 0;
     }
 
@@ -692,6 +693,64 @@ public static class Commands
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// <c>rtfc statusline install [--replace]</c> and <c>uninstall</c>, with <c>--settings &lt;file&gt;</c> for another settings file (spec
+    /// §11): the setting step 4 of the README used to leave to the user's own JSON editing, which a new contact skipped and then saw no
+    /// icon. Claude Code shows one status line, so somebody else's is never overwritten without <c>--replace</c>.
+    /// </summary>
+    public static int StatuslineSetup(CommandContext ctx, IReadOnlyList<string> args)
+    {
+        var line = new CommandLine(args, "replace");
+        var path = line.Value("settings") ?? StatuslineSettings.DefaultPath();
+        if (line.Positionals is not ([_]))
+        {
+            ctx.Error.WriteLine("usage: rtfc statusline install [--replace] [--settings <file>] | uninstall [--settings <file>]");
+            return 2;
+        }
+
+        var install = line.Positionals[0] == "install";
+        var result = install ? StatuslineSettings.Install(path, line.Flag("replace")) : StatuslineSettings.Uninstall(path);
+        switch (result.Outcome)
+        {
+            case StatuslineSettings.Outcome.Installed:
+                ctx.Out.WriteLine($"Added the rtfc status line to {path}: `{StatuslineSettings.Command}`, refreshed every {StatuslineSettings.RefreshSeconds} seconds.");
+                if (result.Existing is not null)
+                {
+                    ctx.Out.WriteLine($"It replaced: {result.Existing}");
+                    ctx.Out.WriteLine($"The settings as they were are in {StatuslineSettings.BackupPath(path)}.");
+                }
+
+                ctx.Out.WriteLine("It shows 📨 1 · <who> while a message waits, and nothing otherwise. Start a new Claude Code session to see it.");
+                return 0;
+
+            case StatuslineSettings.Outcome.AlreadyInstalled:
+                ctx.Out.WriteLine($"{path} already shows the rtfc status line ({result.Existing}). Nothing to do.");
+                return 0;
+
+            case StatuslineSettings.Outcome.OtherStatusLine when install:
+                ctx.Error.WriteLine($"{path} already has a status line: {result.Existing}");
+                ctx.Error.WriteLine("Claude Code shows only one. If that is a script of yours, have it run `rtfc statusline` and append its output;");
+                ctx.Error.WriteLine("or run `rtfc statusline install --replace` to show rtfc's instead.");
+                return 1;
+
+            case StatuslineSettings.Outcome.OtherStatusLine:
+                ctx.Error.WriteLine($"The status line in {path} is not rtfc's ({result.Existing}); it was left as it is.");
+                return 1;
+
+            case StatuslineSettings.Outcome.Removed:
+                ctx.Out.WriteLine($"Removed the rtfc status line from {path}.");
+                return 0;
+
+            case StatuslineSettings.Outcome.NotInstalled:
+                ctx.Out.WriteLine($"{path} has no status line. Nothing to remove.");
+                return 0;
+
+            default:
+                ctx.Error.WriteLine($"rtfc statusline: {path} could not be read as JSON ({result.Reason}); it was left as it is.");
+                return 1;
+        }
     }
 
     /// <summary>

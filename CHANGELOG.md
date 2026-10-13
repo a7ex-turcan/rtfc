@@ -22,6 +22,12 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ### Added
 
+- `rtfc statusline install`, or `/rtfc:statusline` in a session, adds the rtfc status line to
+  Claude Code's settings, so you no longer edit `~/.claude/settings.json` by hand to see 📨
+  when a message waits. It keeps the rest of the file and a copy of it, and if you already have
+  a status line it leaves it alone and tells you how to add rtfc's segment to it, or to use
+  `--replace`. `rtfc statusline uninstall` takes it out again. `rtfc init` mentions it.
+
 - Your contacts are told when your address changes. Before, they only learned it the next
   time one of you sent something, and if your old address no longer reached you they could
   not send anything: they were told you were not home. Now the daemon tells each contact's

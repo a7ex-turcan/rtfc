@@ -146,19 +146,28 @@ The plugin adds:
 
 ### 4. Show parked messages in the status line
 
-Add to `~/.claude/settings.json`:
+```bash
+rtfc statusline install       # or /rtfc:statusline in a session
+```
+
+That adds this to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), keeping the
+rest of the file and a copy of it beside it as `settings.json.rtfc-backup`:
 
 ```json
 { "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }
 ```
 
+Claude Code shows one status line, so if you already have one, `install` leaves it alone and
+says so: have your script call `rtfc statusline` and append its output, or run
+`rtfc statusline install --replace` to show rtfc's instead. `rtfc statusline uninstall`
+takes rtfc's out again. Start a new session to see it.
+
 You'll see `📨 1 · sasha` when something is waiting, `📨 1 · sasha → payments-api` when it
 waits in another of your projects, `📤 2` when replies wait in your outbox, `💤 away` when
 you are away, `🎫 3` when tickets, `📄 2` when pages and `🔀 1` when pull requests from a
 source wait in the project you are in, `⚠ rtfc: 1 pending` when a subscription there waits
-for your approval, and nothing otherwise. If you
-already have a status line script, call `rtfc statusline` from it and append its output;
-`refreshInterval` (seconds) keeps the counter current while you're idle.
+for your approval, and nothing otherwise. `refreshInterval` (seconds) keeps the counter
+current while you're idle.
 
 ### 5. Become contacts
 
@@ -559,6 +568,7 @@ project's `.claude/rtfc.local.json` (step 9).
 | The plugin's tools say the daemon could not be started | `~/.claude/rtfc/rtfcd.log`. Common cause: `rtfc` isn't on the `PATH` Claude Code sees. |
 | Port already in use | Another rtfcd, or something else on 47821: `rtfc daemon status`, or change `port` in `config.json` and re-invite. |
 | Every command says the daemon did not start, and names a port held by another program | Most likely a daemon from rtfc 0.10.0 or older that lost its socket, so nothing can reach it. Stop it with the command the message gives, for example `Get-NetTCPConnection -LocalPort 47821 -State Listen \| ForEach-Object { Stop-Process -Id $_.OwningProcess }` on Windows or `lsof -ti tcp:47821 \| xargs kill` elsewhere; the next rtfc call starts a clean one. From 0.10.1 a second daemon can no longer cause this, and a daemon that loses its socket exits by itself. |
+| No 📨 in the status line at all | Is it set up? `rtfc statusline install`; it tells you if another status line is in the way. |
 | The status line never changes | `refreshInterval` set? `rtfc statusline` prints nothing when nothing is parked; try `cat ~/.claude/rtfc/status.json`. |
 | A message shows an odd `</contact_message​>` inside | Someone tried to close the untrusted wrapper from inside a message. It was defused; treat the message with suspicion. |
 | Auto-answer never answers | `rtfc inbox` shows the note: scope missing, limit reached, or the run failed. `rtfcd.log` has the details. Is `claude` on the daemon's `PATH`? Set `claudePath` in `config.json` otherwise. A message from an automatic reply, or a thread two replies deep, is parked on purpose. |

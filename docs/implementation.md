@@ -36,7 +36,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs` (and `DaemonHost.RefreshHints` every 30 s), `Commands.HintsAsync`, `Node.SetHintHosts`, `LearnHints` and `RecordTold`, `Node.Announce.cs`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
-| §11 status bar | `Core/StatusFile.cs`, `Node.Status`, `Commands.Statusline` |
+| §11 status bar | `Core/StatusFile.cs`, `Node.Status`, `Commands.Statusline`; `rtfc statusline install` in `Cli/StatuslineSettings.cs` and `Commands.StatuslineSetup` |
 | §13 storage | `Storage/schema.sql`, `Database.cs`, `Rows.cs` |
 | §16 stack and distribution | `Rtfc.csproj`, `Directory.Build.props`, `.github/workflows/ci.yml`, `release.yml` |
 | §17 phasing | this file's history section and `CHANGELOG.md` |
@@ -176,6 +176,20 @@ advertised five of them. There is no Tailscale CLI probe: the tailnet's IPv4 add
 an ordinary adapter and is detected anyway, and the MagicDNS name is one `rtfc hints add`
 away. IPv6 is left to `rtfc hints add` too, since most IPv6 addresses a machine has are
 temporary.
+
+**The status line installs itself, on request (§11).** Step 4 of the README asked people to
+edit `~/.claude/settings.json` by hand; the first contact outside the project skipped it and
+never saw 📨. `rtfc statusline install` writes the entry, and `/rtfc:statusline` runs it from a
+session (user-only, like every skill that runs rtfc). It writes `rtfc statusline` by name, not
+the absolute path of the running binary: the plugin's MCP server and hooks already find `rtfc`
+on the PATH Claude Code sees, so a status line that cannot is the least of that machine's
+problems, and a path written into JSON would need quoting that differs between the shells
+Claude Code may run it in. Claude Code shows one status line, so a command that is not rtfc's
+(`rtfc statusline` itself, by name or path) is never overwritten without `--replace`, and a
+wrapper script that calls rtfc counts as the user's own. The file goes through `JsonNode`, so
+other keys survive in order; comments do not, and characters outside the Basic Multilingual
+Plane come back escaped (System.Text.Json always escapes them), which is why the previous copy
+is kept as `settings.json.rtfc-backup`.
 
 **Hints follow the machine, and contacts are told (§8.4, issue #11).** The owner's DHCP
 lease moved while `config.json` still advertised the old address: `rtfc hints add` for the

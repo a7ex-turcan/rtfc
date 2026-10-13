@@ -85,6 +85,8 @@ public static class EntryPoint
                     return await Commands.DaemonAsync(ctx, rest).ConfigureAwait(false);
                 case "hook":
                     return await Commands.HookAsync(ctx, rest, stdin ?? Console.In).ConfigureAwait(false);
+                case "statusline" when rest is ["install" or "uninstall", ..]:
+                    return Commands.StatuslineSetup(ctx, rest);
                 case "statusline":
                     return Commands.Statusline(ctx, stdin ?? Console.In, Console.IsInputRedirected);
                 case "mcp":
@@ -148,6 +150,8 @@ public static class EntryPoint
           daemon always-on [on|off]   start the daemon at login and keep it running with Claude Code closed
           mcp                         stdio MCP server, launched by Claude Code
           statusline                  the status-bar segment
+          statusline install [--replace] | uninstall
+                                      add it to Claude Code's settings (--settings <file>; default ~/.claude/settings.json)
           hook                        the plugin's hook, fed Claude Code's event JSON: the accept gate for a contact's message
           --version
         """;
