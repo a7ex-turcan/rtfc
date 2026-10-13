@@ -83,7 +83,9 @@ public class ConfluenceCloudAdapterTests
     public async Task Errors_are_told_apart_and_identify_returns_the_account_id()
     {
         var refused = new ConfluenceCloudAdapter(new HttpClient(new ScriptedHttpHandler { Status = HttpStatusCode.Forbidden }));
-        Assert.True((await Assert.ThrowsAsync<SourceException>(() => refused.PollAsync(Account, new JsonObject(), SourceCursor.Empty, Now, Ct))).Permanent);
+        var refusal = await Assert.ThrowsAsync<SourceException>(() => refused.PollAsync(Account, new JsonObject(), SourceCursor.Empty, Now, Ct));
+        Assert.True(refusal.Permanent);
+        Assert.True(refusal.TokenRefused);
         var limited = new ConfluenceCloudAdapter(new HttpClient(new ScriptedHttpHandler { Status = HttpStatusCode.TooManyRequests, RetryAfterSeconds = 30 }));
         Assert.Equal(TimeSpan.FromSeconds(30), (await Assert.ThrowsAsync<SourceException>(() => limited.PollAsync(Account, new JsonObject(), SourceCursor.Empty, Now, Ct))).RetryAfter);
 

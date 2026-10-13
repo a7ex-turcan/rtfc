@@ -29,6 +29,11 @@ public sealed partial class Node
     private static readonly TimeSpan PermanentErrorRetry = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan TransientErrorRetry = TimeSpan.FromMinutes(5);
 
+    /// <summary>Refusals in a row before a token counts as refused: one is a blip a real site produced with a good token (issue #1).</summary>
+    public const int RefusalsBeforeError = 3;
+    private static readonly TimeSpan RefusalRetry = TimeSpan.FromMinutes(1);
+    private readonly ConcurrentDictionary<string, int> _refusals = new(StringComparer.Ordinal);
+
     /// <summary>Pushes into a session per subscription per hour (spec §10.4): a busy ticket must not flood the session.</summary>
     public const int SourcePushesPerHour = 20;
 
@@ -162,6 +167,7 @@ public sealed partial class Node
                 }
 
                 _db.UpsertCursor(new SourceCursorRow(group.Key, FormatCursor(result.Next), BoundaryJson(result.Next), now + NextInterval(result.RetryAfter), LastError: null));
+                _refusals.TryRemove(group.Key, out _);
                 if (delivered > 0)
                 {
                     _logger.LogInformation("{Account}: {Count} source event(s) landed in {Projects} project(s)", account.Name, delivered, group.Count());
@@ -171,6 +177,12 @@ public sealed partial class Node
                     // The first poll, or the first good one after an error: worth a line, so a quiet subscription is known to work.
                     _logger.LogInformation("{Account}: polled, nothing new; seen up to {Watermark}", account.Name, FormatCursor(result.Next));
                 }
+            }
+            catch (SourceException ex) when (ex.TokenRefused && _refusals.AddOrUpdate(group.Key, 1, (_, n) => n + 1) is var refusals && refusals < RefusalsBeforeError)
+            {
+                // Not yet: retry soon, and keep the subscription active until the refusal repeats.
+                Fail(group, cursorRow, $"{ex.Message} Retrying in a minute ({refusals} of {RefusalsBeforeError} before it counts).", permanent: false, now, RefusalRetry);
+                _logger.LogWarning("Polling {Account} was refused ({Count} of {Limit} in a row): {Reason}", account.Name, refusals, RefusalsBeforeError, ex.Message);
             }
             catch (SourceException ex)
             {

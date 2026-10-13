@@ -56,12 +56,14 @@ public sealed record SourceIdentity(string AccountId, string DisplayName, string
 
 /// <summary>
 /// A service said no, or not now. <c>Permanent</c> is a refused token or a broken selector, which polling again would
-/// not fix; anything else is retried after <c>RetryAfter</c> or the back-off.
+/// not fix; anything else is retried after <c>RetryAfter</c> or the back-off. <c>TokenRefused</c> marks a 401 or 403: an
+/// Atlassian site sometimes answers one poll that way with a good token, so the poller only believes it when it repeats.
 /// </summary>
-public sealed class SourceException(string message, bool permanent = false, TimeSpan? retryAfter = null) : Exception(message)
+public sealed class SourceException(string message, bool permanent = false, TimeSpan? retryAfter = null, bool tokenRefused = false) : Exception(message)
 {
     public bool Permanent { get; } = permanent;
     public TimeSpan? RetryAfter { get; } = retryAfter;
+    public bool TokenRefused { get; } = tokenRefused;
 }
 
 /// <summary>What one adapter needs from the daemon: read the service, report what changed, and say who the token belongs to.</summary>

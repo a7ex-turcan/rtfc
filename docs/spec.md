@@ -463,7 +463,7 @@ Webhooks don't fit v1, for three reasons:
 How polling works:
 
 - **Cursor per subscription.** A watermark (last `updated` time or the service's own cursor) plus the external IDs seen at the boundary, for dedupe. After a relaunch, the daemon polls from the cursor and catches up. Catch-up is capped (e.g. 7 days); older items are summarized as a single "N older updates" item.
-- **Intervals.** Default 60–120 s per subscription, with jitter. Back off on errors, and honor the service's rate-limit and `Retry-After` responses.
+- **Intervals.** Default 60–120 s per subscription, with jitter. Back off on errors, and honor the service's rate-limit and `Retry-After` responses. A refused token (401, 403) counts only when it repeats: one refusal is retried within a minute, and the subscription shows `error` after three in a row.
 - **Shared polls.** Subscriptions with the same account and selector across projects share one poll, and the results fan out to each project.
 - **Later: webhook as a poke.** A webhook through the relay (§15, Stage B) can trigger an immediate poll. The relay still stores nothing. A missed poke costs only latency, because the next scheduled poll catches up.
 

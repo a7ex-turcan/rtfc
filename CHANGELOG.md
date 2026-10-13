@@ -20,7 +20,12 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- A single 401 or 403 from Jira, Confluence or Bitbucket no longer stops a subscription for
+  half an hour. Atlassian sometimes refuses one poll with a good token; rtfc now retries
+  within a minute and only marks the subscription as failing, with the long back-off, after
+  three refusals in a row.
 
 ## [0.10.1] - 2026-10-05
 

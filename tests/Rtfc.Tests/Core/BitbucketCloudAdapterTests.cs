@@ -104,6 +104,7 @@ public class BitbucketCloudAdapterTests
         var refused = new BitbucketCloudAdapter(new HttpClient(new ScriptedHttpHandler { Status = HttpStatusCode.Unauthorized }));
         var ex = await Assert.ThrowsAsync<SourceException>(() => refused.PollAsync(Account, new JsonObject { ["repo"] = "acme/x" }, SourceCursor.Empty, Now, Ct));
         Assert.True(ex.Permanent);
+        Assert.True(ex.TokenRefused);
         Assert.Contains("scoped API token", ex.Message);
         var missing = new BitbucketCloudAdapter(new HttpClient(new ScriptedHttpHandler { Status = HttpStatusCode.NotFound }));
         Assert.True((await Assert.ThrowsAsync<SourceException>(() => missing.PollAsync(Account, new JsonObject { ["repo"] = "acme/x" }, SourceCursor.Empty, Now, Ct))).Permanent);

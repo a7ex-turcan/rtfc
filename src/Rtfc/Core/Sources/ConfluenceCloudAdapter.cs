@@ -224,7 +224,7 @@ public sealed partial class ConfluenceCloudAdapter(HttpClient http) : ISourceAda
             switch (response.StatusCode)
             {
                 case HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden:
-                    throw new SourceException($"Confluence refused the token for {account.Name} ({(int)response.StatusCode}). It may have expired; run `rtfc account add {account.Name}` again.", permanent: true);
+                    throw new SourceException($"Confluence refused the token for {account.Name} ({(int)response.StatusCode}). It may have expired; run `rtfc account add {account.Name}` again.", permanent: true, tokenRefused: true);
                 case HttpStatusCode.TooManyRequests:
                     throw new SourceException("Confluence is rate-limiting; backing off.", retryAfter: response.Headers.RetryAfter?.Delta ?? TimeSpan.FromMinutes(2));
                 case HttpStatusCode.BadRequest or HttpStatusCode.Gone:

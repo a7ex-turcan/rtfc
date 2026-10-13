@@ -294,7 +294,7 @@ public sealed class JiraCloudAdapter(HttpClient http) : ISourceAdapter
             switch (response.StatusCode)
             {
                 case HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden:
-                    throw new SourceException($"Jira refused the token for {account.Name} ({(int)response.StatusCode}). It may have expired; run `rtfc account add {account.Name}` again.", permanent: true);
+                    throw new SourceException($"Jira refused the token for {account.Name} ({(int)response.StatusCode}). It may have expired; run `rtfc account add {account.Name}` again.", permanent: true, tokenRefused: true);
                 case HttpStatusCode.TooManyRequests:
                     throw new SourceException("Jira is rate-limiting; backing off.", retryAfter: response.Headers.RetryAfter?.Delta ?? TimeSpan.FromMinutes(2));
                 case HttpStatusCode.BadRequest or HttpStatusCode.Gone:

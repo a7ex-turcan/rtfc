@@ -107,6 +107,7 @@ public class JiraCloudAdapterTests
         var refused = new JiraCloudAdapter(new HttpClient(new ScriptedHandler { Status = HttpStatusCode.Unauthorized }));
         var ex = await Assert.ThrowsAsync<SourceException>(() => refused.PollAsync(Account, Selector("x"), SourceCursor.Empty, Now, Ct));
         Assert.True(ex.Permanent);
+        Assert.True(ex.TokenRefused);
         Assert.Contains("rtfc account add jira-work", ex.Message);
 
         var limited = new JiraCloudAdapter(new HttpClient(new ScriptedHandler { Status = HttpStatusCode.TooManyRequests, RetryAfterSeconds = 90 }));

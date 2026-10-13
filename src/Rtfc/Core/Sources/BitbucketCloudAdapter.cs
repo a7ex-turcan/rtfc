@@ -350,7 +350,7 @@ public sealed class BitbucketCloudAdapter(HttpClient http) : ISourceAdapter
             switch (response.StatusCode)
             {
                 case HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden:
-                    throw new SourceException($"Bitbucket refused the token for {account.Name} ({(int)response.StatusCode}). It must be a scoped API token for the Bitbucket app with read scopes; run `rtfc account add {account.Name}` again.", permanent: true);
+                    throw new SourceException($"Bitbucket refused the token for {account.Name} ({(int)response.StatusCode}). It must be a scoped API token for the Bitbucket app with read scopes; run `rtfc account add {account.Name}` again.", permanent: true, tokenRefused: true);
                 case HttpStatusCode.TooManyRequests:
                     throw new SourceException("Bitbucket is rate-limiting; backing off.", retryAfter: response.Headers.RetryAfter?.Delta ?? TimeSpan.FromMinutes(5));
                 case HttpStatusCode.NotFound or HttpStatusCode.BadRequest or HttpStatusCode.Gone:

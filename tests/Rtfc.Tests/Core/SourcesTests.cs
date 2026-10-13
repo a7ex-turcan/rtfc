@@ -225,6 +225,40 @@ public class SourcesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_lone_refused_token_is_retried_soon_and_only_a_repeated_one_stops_the_subscription()
+    {
+        WriteSubscriptions("""{"sources":[{"account":"jira-work","jql":"project = PAY"}]}""");
+        _alex.Node.ApproveSources(_project);
+        var key = SubscriptionsFile.PollKey("jira-work", new JsonObject { ["jql"] = "project = PAY" });
+        void Due() => _alex.Database.UpsertCursor(_alex.Database.GetCursor(key)! with { NextPollAt = null });
+
+        // One refusal: still active, the reason shown, the next poll in about a minute rather than half an hour.
+        _jira.Fail = new SourceException("Jira refused the token (401).", permanent: true, tokenRefused: true);
+        await _alex.Node.PollDueAsync(Ct);
+        var once = Assert.Single(_alex.Node.SourceViews(_project));
+        Assert.Equal(SubscriptionStatus.Active, once.Status);
+        Assert.Contains("Retrying in a minute (1 of 3", once.LastError);
+        Assert.InRange(once.NextPollAt!.Value, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(2));
+
+        // A good poll in between starts the count again.
+        Due();
+        _jira.Fail = null;
+        await _alex.Node.PollDueAsync(Ct);
+        Assert.Null(Assert.Single(_alex.Node.SourceViews(_project)).LastError);
+
+        // Three in a row: now it is the token, and the subscription says so.
+        _jira.Fail = new SourceException("Jira refused the token (401).", permanent: true, tokenRefused: true);
+        for (var i = 1; i <= Node.RefusalsBeforeError; i++)
+        {
+            Due();
+            await _alex.Node.PollDueAsync(Ct);
+            Assert.Equal(i < Node.RefusalsBeforeError ? SubscriptionStatus.Active : SubscriptionStatus.Error, Assert.Single(_alex.Node.SourceViews(_project)).Status);
+        }
+
+        Assert.Equal("Jira refused the token (401).", Assert.Single(_alex.Node.SourceViews(_project)).LastError);
+    }
+
+    [Fact]
     public async Task Without_a_token_or_an_account_nothing_is_polled_and_the_reason_is_shown()
     {
         WriteSubscriptions("""{"sources":[{"account":"jira-work","jql":"project = PAY"},{"account":"ghost","jql":"project = X"}]}""");
