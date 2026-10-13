@@ -366,6 +366,7 @@ they were checked; versions are what they were checked against.
 | `rtfc daemon ensure` from a newer release replaces a running older daemon (0.9.1 to 0.10.0 in under half a second), the old install folder is then free to delete, and the four open sessions took leases on the new daemon within seconds | installing 0.10.0 on the owner's machine without `rtfc daemon stop` | 2026-10-01 |
 | Two `rtfc daemon run` processes for one home started 0 to 60 ms apart in 3 ms steps, twice: 0.10.0 left the first daemon running without a socket in 14 of 42 runs (the owner's bug report); with the lock, 0 of 42, each second daemon giving way with a log line | `race-sweep.ps1` against the Release build in a scratch `RTFC_HOME`, port 47999 | 2026-10-05 |
 | On Windows, `File.Exists` is true for a live AF_UNIX socket file, so the daemon's watchdog does not mistake its own socket for a missing one | `DaemonLockTests`, a daemon left running past two watchdog checks | 2026-10-05 |
+| The idle hold and the 0.9.1 endings in a real session: 27 pushes held for a busy session and released when it was idle (2026-10-01 to 10-12); source items ended "Handled … and dismissed" from the Dismiss answer (3), dismissed because Claude found nothing to do (7) or the user chose nothing to do (1), declined (1), and accepted (1) | the owner's `isos-admin-2.0` session with 12 subscriptions in `session` mode, read from `rtfcd.log` and the inbox notes | 2026-10-13 |
 
 ## Schema history
 
@@ -408,12 +409,9 @@ block per version.
   which the user gives as `--url`; an account keeps one URL, so item links are then built on
   the gateway and do not open in a browser. The per-hour cap on session pushes is counted
   in memory, so it resets with the daemon.
-- **The 0.9.1 endings and the idle hold have not been seen live yet.** Session mode for source
-  items was driven live on 2026-09-30 in the owner's `isos-admin-2.0` session: a Jira comment
-  and two Bitbucket change requests arrived, were offered as actions, accepted and acted on
-  (which is what showed the endings and the mid-turn arrival that 0.9.1 fixed). "Later",
-  "Dismiss"/"Keep" and the hold for a busy session are covered by `SourceSessionTests`,
-  `SessionIdleTests` and `HookTests` only.
+- **Some session endings have not been seen live yet:** "Later", "Keep", and the idle
+  notification after an interrupted turn. They are covered by `SourceSessionTests`,
+  `SessionIdleTests` and `HookTests` only. The rest ran live (the verified table).
 - **The e2e story does not cover sources**; `SourcesTests`, `SourceSessionTests`, the three
   adapter test classes and `DaemonTests` do, and the opt-in live tests poll the real sites.
 - **The e2e story does not cover project-addressed messages or session mode**;
