@@ -20,6 +20,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 5, one person on several devices.
+
+## [0.12.1] - 2026-10-13
+
 ### Fixed
 
 - A session that did not show rtfc's pushes, most often one started or resumed without
@@ -525,7 +529,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.10.0...v0.10.1
