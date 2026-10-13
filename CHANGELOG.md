@@ -20,6 +20,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 5, one person on several devices.
+
+## [0.12.0] - 2026-10-13
+
 ### Added
 
 - `rtfc statusline install`, or `/rtfc:statusline` in a session, adds the rtfc status line to
@@ -27,7 +31,6 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
   when a message waits. It keeps the rest of the file and a copy of it, and if you already have
   a status line it leaves it alone and tells you how to add rtfc's segment to it, or to use
   `--replace`. `rtfc statusline uninstall` takes it out again. `rtfc init` mentions it.
-
 - Your contacts are told when your address changes. Before, they only learned it the next
   time one of you sent something, and if your old address no longer reached you they could
   not send anything: they were told you were not home. Now the daemon tells each contact's
@@ -514,7 +517,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.9.1...v0.10.0
