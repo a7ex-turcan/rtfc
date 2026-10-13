@@ -125,7 +125,7 @@ public class SessionIdleTests : IAsyncLifetime
     public async Task Right_after_a_push_the_session_counts_as_busy_so_two_items_do_not_arrive_together()
     {
         await using var alex = await TestNode.StartAsync("alex2", "desktop", adapters: [_jira],
-            sources: new SourceSettings(Timeout.InfiniteTimeSpan, TimeSpan.Zero), pushes: new SessionPushSettings(Timeout.InfiniteTimeSpan, TimeSpan.FromHours(1)));
+            sources: new SourceSettings(Timeout.InfiniteTimeSpan, TimeSpan.Zero), pushes: new SessionPushSettings(Timeout.InfiniteTimeSpan, TimeSpan.FromHours(1), TimeSpan.Zero));
         var project = Directory.CreateDirectory(Path.Combine(alex.Home.Root, "billing")).FullName;
         Directory.CreateDirectory(Path.Combine(project, ".git"));
         Directory.CreateDirectory(Path.Combine(project, ".claude"));

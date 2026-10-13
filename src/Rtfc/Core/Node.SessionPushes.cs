@@ -3,10 +3,13 @@ using Rtfc.Storage;
 
 namespace Rtfc.Core;
 
-/// <summary>How often held pushes are checked, and how long a session counts as busy right after a push. Tests shorten both.</summary>
-public sealed record SessionPushSettings(TimeSpan Check, TimeSpan Settle)
+/// <summary>
+/// How often held pushes are checked, how long a session counts as busy right after a push, and how long after a session opens
+/// the first push may go in: Claude Code drops a channel event sent before the session's channel is live. Tests shorten all three.
+/// </summary>
+public sealed record SessionPushSettings(TimeSpan Check, TimeSpan Settle, TimeSpan OpenGrace)
 {
-    public static readonly SessionPushSettings Default = new(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10));
+    public static readonly SessionPushSettings Default = new(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15));
 }
 
 /// <summary>
@@ -25,7 +28,11 @@ public sealed partial class Node
     private readonly Lock _pushLock = new();
     private readonly Dictionary<string, List<HeldPush>> _held = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _lastPush = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _notBefore = new(StringComparer.Ordinal);
     private Task? _pushLoop;
+
+    /// <summary>What a session that opens is offered: items and messages from no further back than this.</summary>
+    private static readonly TimeSpan OfferWindow = TimeSpan.FromDays(7);
 
     /// <summary>
     /// Sends the push now if the session is idle and nothing of its waits ahead, else holds it. <paramref name="record"/> writes the
@@ -70,7 +77,58 @@ public sealed partial class Node
 
     private bool IsIdle(string session, DateTimeOffset now) =>
         !SessionActivity.IsBusy(_home, session, now)
-        && !(_lastPush.TryGetValue(session, out var last) && now - last < _pushSettings.Settle);
+        && !(_lastPush.TryGetValue(session, out var last) && now - last < _pushSettings.Settle)
+        && !(_notBefore.TryGetValue(session, out var notBefore) && now < notBefore);
+
+    /// <summary>
+    /// A session opened (issue #2): offer it what never reached a session while none was there, oldest first, through the same
+    /// guards, caps, idle hold and gate as a live push. Source items of its project in <c>session</c> mode, and messages from
+    /// contacts that designate this session. The first goes in only after the open grace, once the session's channel is live.
+    /// </summary>
+    private void OfferWaiting(string session, ProjectRow project)
+    {
+        lock (_pushLock)
+        {
+            _notBefore[session] = _clock.GetUtcNow() + _pushSettings.OpenGrace;
+        }
+
+        var contacts = _db.ListContacts().Where(c => c.Status == ContactStatus.Active).ToDictionary(c => c.PersonId, StringComparer.Ordinal);
+        var subscriptions = new Dictionary<string, SubscriptionRow?>(StringComparer.Ordinal);
+        var offered = 0;
+        foreach (var item in _db.ListNeverPushed(_clock.GetUtcNow() - OfferWindow))
+        {
+            if (item.Kind == InboxKind.Source)
+            {
+                if (item.ProjectId != project.Id || item.SubscriptionId is not { } subscriptionId)
+                {
+                    continue;
+                }
+
+                if (!subscriptions.TryGetValue(subscriptionId, out var subscription))
+                {
+                    subscriptions[subscriptionId] = subscription = _db.GetSubscription(subscriptionId);
+                }
+
+                if (subscription is { Mode: SourceMode.Session, Status: SubscriptionStatus.Active or SubscriptionStatus.Error })
+                {
+                    PushSourceItem(subscription, item);
+                    offered++;
+                }
+            }
+            else if (contacts.TryGetValue(item.FromPerson, out var contact) && contact.InboundMode == InboundMode.AutoSession && contact.AutoSession == session)
+            {
+                PushToSession(contact, item);
+                offered++;
+            }
+        }
+
+        if (offered > 0)
+        {
+            _logger.LogInformation("Offering {Count} item(s) that waited for a session to the session in {Project}", offered, project.Name);
+            WriteStatus();
+            InboxChanged?.Invoke();
+        }
+    }
 
     /// <summary>Sends the next held push of every session that is idle now. The loop calls it; tests call it by hand.</summary>
     internal void FlushHeldPushes()
@@ -131,6 +189,7 @@ public sealed partial class Node
 
         foreach (var push in dropped)
         {
+            _db.UncountAttempt(push.MessageId);
             _db.SetMessageNote(push.MessageId, "Not sent into a session: it closed while it was busy. It waits here.", now);
         }
 
@@ -198,6 +257,7 @@ public sealed partial class Node
         List<HeldPush>? list;
         lock (_pushLock)
         {
+            _notBefore.Remove(session);
             if (!_held.Remove(session, out list))
             {
                 return;
@@ -209,6 +269,8 @@ public sealed partial class Node
         var now = _clock.GetUtcNow();
         foreach (var push in list)
         {
+            // It never went in: the attempt it counted goes back, so the next session that opens is offered it.
+            _db.UncountAttempt(push.MessageId);
             _db.SetMessageNote(push.MessageId, "Not sent into a session: it closed while it was busy. It waits here.", now);
         }
 

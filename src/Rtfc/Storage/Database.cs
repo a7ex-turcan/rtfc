@@ -387,6 +387,18 @@ public sealed class Database : IDisposable
         """,
         ("$state", state), ("$now", Timestamps.Format(now)), ("$note", note), ("$draft", draft), ("$attempt", countAttempt ? 1L : 0L), ("$id", id));
 
+    /// <summary>
+    /// Parked messages and source items that no session has received yet, received since <paramref name="since"/>, oldest first:
+    /// what a session that opens is offered (spec §7.3, §10.4). A push counts an attempt; one that never reached a session has none.
+    /// </summary>
+    public IReadOnlyList<InboxMessage> ListNeverPushed(DateTimeOffset since) => Query(
+        $"SELECT {MessageColumns} FROM inbox WHERE kind IN ('person', 'source') AND state = 'parked' AND auto_attempts = 0 AND received_at >= $since ORDER BY received_at",
+        ReadMessage, ("$since", Timestamps.Format(since)));
+
+    /// <summary>Gives back the attempt a held push counted, when its session closed before it went in.</summary>
+    public void UncountAttempt(string id) =>
+        Execute($"UPDATE inbox SET auto_attempts = MAX(auto_attempts - 1, 0) WHERE id = $id AND {MessageKinds}", ("$id", id));
+
     /// <summary>Auto-answer runs started since <paramref name="since"/>, for one person or for everyone (spec §7.4).</summary>
     public int CountAutoAnswers(string? fromPerson, DateTimeOffset since) => (int)(fromPerson is null
         ? Scalar<long>("SELECT COUNT(*) FROM inbox WHERE kind = 'person' AND auto_attempts > 0 AND received_at > $since", ("$since", Timestamps.Format(since)))

@@ -110,7 +110,7 @@ public sealed class TestNode : IAsyncDisposable
         Assert.True(result.Status == SendStatus.Delivered, $"Send: {result.Status}{(result.Reason is null ? "" : ": " + result.Reason)}");
 
     /// <summary>Pushes go in at once and held ones only when a test flushes them, unless a test says otherwise.</summary>
-    public static readonly SessionPushSettings ImmediatePushes = new(Timeout.InfiniteTimeSpan, TimeSpan.Zero);
+    public static readonly SessionPushSettings ImmediatePushes = new(Timeout.InfiniteTimeSpan, TimeSpan.Zero, TimeSpan.Zero);
 
     /// <summary>Tests want the pump to run often and entries to live long unless a test says otherwise.</summary>
     public static readonly OutboxSettings DefaultOutbox = new(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(500), TimeSpan.FromDays(30));

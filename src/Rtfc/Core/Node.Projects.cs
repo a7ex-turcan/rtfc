@@ -36,6 +36,7 @@ public sealed partial class Node
         if (!string.IsNullOrEmpty(session))
         {
             _openSessions[session] = (project.Id, _clock.GetUtcNow());
+            OfferWaiting(session, project);
         }
 
         return project;

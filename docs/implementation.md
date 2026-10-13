@@ -30,6 +30,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
 | §3.1 one daemon per home | `Daemon/DaemonLock.cs` (`rtfcd.lock`, `rtfcd.pid`); `DaemonHost.RunAsync` (lock, `SocketPathProblem`, `Refuse`, `WriteLog`) and the socket watchdog in its loop; `DaemonLauncher.StopAsync(client, pid, …)` and `Diagnose` |
 | §3.1 always on | `Daemon/LoginItems.cs` (the Windows Run value, the LaunchAgent, the systemd unit); `Commands.AlwaysOnAsync`; `DaemonHost.IdleExit`; the `run` guard in `Commands.DaemonAsync`; `DaemonLauncher.IsOlder` and `StopAsync` in `EnsureAsync` |
+| §7.3, §10.4 offered when a session opens | `Node.OfferWaiting` (from `RegisterProject(directory, session)`), `Database.ListNeverPushed` and `UncountAttempt`, `SessionPushSettings.OpenGrace` |
 | §7.3, §10.4 only into an idle session | `Core/SessionActivity.cs` (the busy marks); the hook's `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `SessionEnd` and `Notification` cases; `Node.SessionPushes.cs` (`PushOrHold`, `FlushHeldPushes`, the loop, `DropHeldPushes`) |
 | §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
 | §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
@@ -215,6 +216,17 @@ hints, and cost more to get right. See §17's progress line.
 `keys/` (`keys/accounts/<name>.token`, 0600 on Unix, the profile ACL on Windows) and not in
 the OS keychain the spec prefers; the keychain comes for both at once.
 
+**A session that opens is offered what waited for one (§7.3, §10.4, issue #2).** With the daemon
+always on, items arrive all night with no session to go to. `Node.OfferWaiting`, run when a
+session registers its project, offers the parked messages and items that no push ever counted
+(`Database.ListNeverPushed`: `auto_attempts = 0`, last seven days), through the same
+`PushSourceItem` and `PushToSession` as a live push, so every guard, cap, the idle hold and the
+gate apply unchanged. "Never reached a session" needed no new column: a push counts an attempt
+when it is sent or held, and a held push whose session closes gives it back
+(`UncountAttempt`). The first push waits `OpenGrace` (15 seconds) after the session registers,
+because the verified table records that Claude Code drops a channel event sent right after
+`initialize`; the grace applies to live pushes in that window too.
+
 **One daemon per home is a lock, not a check (§3.1).** Up to 0.10.0, `daemon run` asked the
 socket whether a daemon answered and then deleted any socket file it found while building the
 host, before it knew it could bind its port. A second daemon starting in the 20-40 ms before
@@ -375,9 +387,6 @@ block per version.
   with always-on (spec §3.1). The login items for macOS and Linux were written from the
   launchd and systemd documentation and are covered by tests of what they write, not run on
   a real Mac or Linux desktop yet.
-- **Items that park while no session is open stay parked.** An always-on daemon polls all day,
-  and a session-mode item with no session to go to waits in the inbox; nothing offers the
-  waiting items when the session opens.
 - **Windows detach.** `daemon run` does not leave its parent's process group or job on
   Windows. Claude Code 2.1.283 leaves it running when the session that started it ends, but
   a Win32-OpenSSH command session kills it the moment the session closes (both in the

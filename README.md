@@ -430,7 +430,10 @@ comes back if anything new happens to it.
 
 Items only go in while the session is idle. If Claude is in the middle of a turn, working
 or waiting on a question of its own, the item waits until that turn is over, and its note
-in the inbox says so. Several items that arrive together go in one turn after another.
+in the inbox says so. Several items that arrive together go in one turn after another. An
+item that arrives while no session is open in the project waits in the inbox, and the
+session that opens next is offered it, oldest first, from the last week, starting about 15
+seconds after it opens. The same goes for a contact's message for your designated session.
 After you interrupt a turn with Esc, anything waiting goes in once Claude Code reports the
 session idle; if it doesn't, the next turn you finish releases it.
 
@@ -505,7 +508,8 @@ Manager's startup apps, and runs without a window), a LaunchAgent on macOS, a sy
 service on Linux. From then on the daemon keeps listening, polls your sources and delivers
 queued replies while Claude Code is closed, and headless auto-answer works too. Contacts see
 you home whenever you're logged in, and their messages wait in your inbox for when you open
-Claude Code; items in session mode wait there as well. `rtfc away on` stops listening for a
+Claude Code; items in session mode wait there as well, and the session you open is offered them.
+`rtfc away on` stops listening for a
 while. It serves the default home, `~/.claude/rtfc`, only.
 
 When you upgrade rtfc, the first newer `rtfc` that runs, such as the next session's start,
@@ -567,8 +571,6 @@ project's `.claude/rtfc.local.json` (step 9).
 - The outbox is delivered only while your daemon runs: while you have a Claude Code session
   open, or all day with `rtfc daemon always-on on`. Both sides' daemons have to run at the
   same moment.
-- Items that arrive while no session is open wait in the inbox; opening the session later
-  does not push them in. `/rtfc:inbox` shows them.
 - Auto-answer's `Grep` can search any file in the scope, including ones `Read` is denied.
   Keep secrets out of scopes.
 - Reaching someone needs a network path to one of their hints: the office LAN, a VPN, or an

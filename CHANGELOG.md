@@ -20,6 +20,20 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+### Added
+
+- What arrived while no session was there is offered when one opens. A source item in
+  `session` mode that found no session open in its project, or a contact's message for your
+  designated session while it was closed, used to wait in the inbox until you looked. Now the
+  session that opens is offered them, oldest first and from the last week, one at a time
+  through the usual gate and caps. Items you already saw, kept or left for later are not
+  offered again.
+
+### Changed
+
+- The first push into a session that has just opened waits about 15 seconds, so Claude
+  Code's channel is live and the push is not dropped.
+
 ### Fixed
 
 - A single 401 or 403 from Jira, Confluence or Bitbucket no longer stops a subscription for

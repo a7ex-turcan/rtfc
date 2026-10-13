@@ -177,7 +177,8 @@ public class DaemonTests
         var sent = await sasha.Node.SendAsync("alex", "Could you review PR 42?", Ct);
         Assert.Equal(SendStatus.Delivered, sent.Status);
 
-        await WaitUntilAsync(() => Task.FromResult(output.Text.Contains("notifications/claude/channel", StringComparison.Ordinal)));
+        // The session opened a moment ago, so the push waits out the open grace: Claude Code drops a channel event sent too early.
+        await WaitUntilAsync(() => Task.FromResult(output.Text.Contains("notifications/claude/channel", StringComparison.Ordinal)), TimeSpan.FromSeconds(40));
         var notification = JsonNode.Parse(output.Text.Split('\n').Single(line => line.Contains("notifications/claude/channel", StringComparison.Ordinal)))!;
         Assert.Equal(sent.MessageId, notification["params"]!["meta"]!["rtfc_id"]!.GetValue<string>());
         Assert.Equal("sasha", notification["params"]!["meta"]!["from"]!.GetValue<string>());
