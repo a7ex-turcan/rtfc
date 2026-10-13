@@ -33,7 +33,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §7.3, §10.4 offered when a session opens | `Node.OfferWaiting` (from `RegisterProject(directory, session)`), `Database.ListNeverPushed` and `UncountAttempt`, `SessionPushSettings.OpenGrace` |
 | §7.3, §10.4 only into an idle session | `Core/SessionActivity.cs` (the busy marks); the hook's `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `SessionEnd` and `Notification` cases; `Node.SessionPushes.cs` (`PushOrHold`, `FlushHeldPushes`, the loop, `DropHeldPushes`) |
 | §10.4 session mode for items | `Node.PushSourceItem`, `SourceSessionPrompt`; the open-session registry filled by `Node.RegisterProject(directory, session)` from `POST /v1/projects` and emptied when the lease ends; `SessionEvent.Kind` → the `rtfc_kind` meta of the channel event; the hook's source gate in `Commands.HookAsync` (`Asked`; "Later", "Nothing to do", and "Dismiss"/"Keep" after an accepted action; the `Stop` outcome) → `GateOutcome` → `Node.RecordGateDecision(id, outcome)` |
-| §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs`, `Commands.HintsAsync`, `Node.SetHintHosts` and `LearnHints`, the `hello`'s `Hints` |
+| §8 transport and session | `Net/ITransport.cs`, `TcpTransport.cs` (hints raced in `ConnectAsync`), `PeerSession.cs`, `EndpointHint.cs`; hints: `HintHosts` in `Daemon/DaemonHost.cs` (and `DaemonHost.RefreshHints` every 30 s), `Commands.HintsAsync`, `Node.SetHintHosts`, `LearnHints` and `RecordTold`, `Node.Announce.cs`, the `hello`'s `Hints` |
 | §9 the Claude-facing surface | `plugin/` (manifest, `.mcp.json`, the hook, `skills/*/SKILL.md`); `Mcp/Tools.cs` |
 | §9.3 the boundary rule | management only in `Cli/Commands.cs` over IPC routes the MCP server never calls; `ci.yml` checks the tool list and the skills |
 | §11 status bar | `Core/StatusFile.cs`, `Node.Status`, `Commands.Statusline` |
@@ -176,6 +176,25 @@ advertised five of them. There is no Tailscale CLI probe: the tailnet's IPv4 add
 an ordinary adapter and is detected anyway, and the MagicDNS name is one `rtfc hints add`
 away. IPv6 is left to `rtfc hints add` too, since most IPv6 addresses a machine has are
 temporary.
+
+**Hints follow the machine, and contacts are told (§8.4, issue #11).** The owner's DHCP
+lease moved while `config.json` still advertised the old address: `rtfc hints add` for the
+VM's adapter had copied that day's detected addresses into `hintHosts`, which froze them.
+A new contact accepted, stored the stale address, and every message they sent found nobody
+home, while the owner's messages to them went through. Three changes. `hints add` and
+`remove` now write `extraHintHosts` and `skipHintHosts` beside detection instead of a frozen
+list; `hintHosts` stays the exact list, because `rtfc init --hint-host` and the tests pin
+loopback with it. The daemon resolves its hints every 30 seconds rather than once at start,
+since an always-on daemon outlives a lease. And a contact who cannot reach us is told: each
+device row records the hints that device last heard from us (`told_hints`, schema v7),
+written wherever a hello or an accept carried them, and the outbox pump opens a session with
+only `hello` and `bye` to any device whose record differs from what we advertise now. No new
+frame was needed: every version learns hints from a hello and takes a `bye`, so a contact on
+an older release is told too. The column starts empty after the migration, which makes the
+first daemon on 0.12 announce itself once to every contact, the repair for anyone already in
+the owner's position. The "who's home" probe stays a bare TCP connect, so it tells nobody
+anything. An unreachable device is tried every five minutes, not on every pump run, because
+each try can cost a connect timeout.
 
 **Every pipe is UTF-8.** Claude Code reads and writes UTF-8 on the MCP server's stdio, the
 status line and a skill's `!rtfc` output, but .NET on Windows encodes and decodes the
@@ -381,6 +400,7 @@ block per version.
 | 4 | 0.4.0 | `sent.project_id`: where an answer to something sent lands (project-addressed messages, spec §7.6); `projects` and `inbox.project_id`, in the schema since v1, come into use |
 | 5 | 0.6.0 | `contacts.auto_session`: the Claude Code session that answers a contact in `auto_session` mode (spec §7.3) |
 | 6 | 0.8.0 | `accounts.login`, `accounts.account_id` (spec §10.5); the source columns of `inbox`, `accounts`, `subscriptions` and `source_cursors`, in the schema since v1, come into use |
+| 7 | 0.12.0 | `devices.told_hints`: what each device last heard from us about our hints, so a changed address is announced (spec §8.4) |
 
 ## Known gaps
 

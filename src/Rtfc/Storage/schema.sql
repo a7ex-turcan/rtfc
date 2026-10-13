@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS devices (             -- contacts' devices AND my own
   name        TEXT NOT NULL,
   cert        BLOB NOT NULL,                      -- DER device cert, issued by the person CA
   status      TEXT NOT NULL,                      -- active | revoked
-  endpoints   TEXT NOT NULL DEFAULT '[]'          -- JSON EndpointHint[]
+  endpoints   TEXT NOT NULL DEFAULT '[]',         -- JSON EndpointHint[]
+  told_hints  TEXT                                -- JSON EndpointHint[]: what this device last heard from us about our own hints (spec §8.4, schema v7)
 );
 
 CREATE TABLE IF NOT EXISTS invites (

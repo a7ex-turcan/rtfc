@@ -126,11 +126,36 @@ public sealed partial class Node : IAsyncDisposable
         return [.. _hintHosts.Select(host => EndpointHint.ForTcp(host, port).ToString())];
     }
 
-    /// <summary>Changes what this device advertises from now on, without a restart: <c>rtfc hints</c> wrote config.json and asked.</summary>
-    public void SetHintHosts(IReadOnlyList<string> hosts)
+    /// <summary>
+    /// Changes what this device advertises from now on, without a restart: <c>rtfc hints</c> wrote config.json and asked, or the
+    /// daemon found this machine's addresses changed. False when the hosts are the same, in any order; otherwise the pump tells
+    /// contacts (spec §8.4).
+    /// </summary>
+    public bool SetHintHosts(IReadOnlyList<string> hosts)
     {
+        if (hosts.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(_hintHosts))
+        {
+            return false;
+        }
+
         _hintHosts = [.. hosts];
         _logger.LogInformation("Advertising {Hints}", string.Join(", ", AdvertisedHints()));
+        KickOutbox();
+        return true;
+    }
+
+    /// <summary>What a device heard from us in a hello or an accept: while it matches what we advertise, there is nothing to announce.</summary>
+    private void RecordTold(string deviceId, string[] hints)
+    {
+        try
+        {
+            _db.SetToldHints(deviceId, hints);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Like learning, a courtesy on the way into a session: the worst a failure costs is one more announcement.
+            _logger.LogWarning(ex, "Could not record the hints told to device {Device}", deviceId);
+        }
     }
 
     private const int MaxLearnedHints = 16;
@@ -310,6 +335,9 @@ public sealed partial class Node : IAsyncDisposable
         _db.UpsertDevice(new DeviceRow(
             Ids.Device(deviceCertificate), personId, InviteToken.SanitizeHandle(deviceName, Ids.Device(deviceCertificate)),
             deviceCertificate.RawData, DeviceStatus.Active, hints));
+
+        // Both sides of an accept carry our hints, in the frames and in the hello.
+        RecordTold(Ids.Device(deviceCertificate), AdvertisedHints());
         return contact;
     }
 
@@ -462,10 +490,12 @@ public sealed partial class Node : IAsyncDisposable
 
         try
         {
-            var session = await PeerSession.ConnectAsync(stream, Self, [ca], DeviceListVersion, AdvertisedHints(), cancellationToken).ConfigureAwait(false);
+            var told = AdvertisedHints();
+            var session = await PeerSession.ConnectAsync(stream, Self, [ca], DeviceListVersion, told, cancellationToken).ConfigureAwait(false);
             if (session.Trust is SessionTrust.Authenticated trust && trust.PersonId == contact.PersonId && trust.DeviceId == device.DeviceId)
             {
                 LearnHints(trust, session.RemoteHello.Hints);
+                RecordTold(device.DeviceId, told);
                 return session;
             }
 
@@ -523,9 +553,10 @@ public sealed partial class Node : IAsyncDisposable
     {
         var cancellationToken = _stopping.Token;
         PeerSession session;
+        var told = AdvertisedHints();
         try
         {
-            session = await PeerSession.AcceptAsync(stream, Self, Anchors(), DeviceListVersion, AdvertisedHints(), cancellationToken).ConfigureAwait(false);
+            session = await PeerSession.AcceptAsync(stream, Self, Anchors(), DeviceListVersion, told, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or System.Security.Authentication.AuthenticationException or ProtocolException or OperationCanceledException)
         {
@@ -538,6 +569,7 @@ public sealed partial class Node : IAsyncDisposable
             if (session.Trust is SessionTrust.Authenticated caller)
             {
                 LearnHints(caller, session.RemoteHello.Hints);
+                RecordTold(caller.DeviceId, told);
                 // Someone we know is home: whatever waits for them can go now (spec §13, "handshakes trigger it").
                 KickOutbox();
             }

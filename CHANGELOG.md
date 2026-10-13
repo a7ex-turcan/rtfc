@@ -20,7 +20,29 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Added
+
+- Your contacts are told when your address changes. Before, they only learned it the next
+  time one of you sent something, and if your old address no longer reached you they could
+  not send anything: they were told you were not home. Now the daemon tells each contact's
+  device itself, within half a minute if they are reachable, or as soon as they are. After
+  upgrading, it does this once for every contact.
+
+### Changed
+
+- `rtfc hints add` and `remove` adjust the detected addresses instead of freezing them. Adding
+  a host used to copy whatever was detected that day into `hintHosts` in `config.json`, so a
+  later DHCP lease left contacts dialling an address you no longer had. Added and removed
+  hosts now live in `extraHintHosts` and `skipHintHosts`, and the rest follows your machine.
+  If `rtfc hints` says your hints were set by hand and you did not mean that, `rtfc hints auto`
+  returns to detection. `rtfc init --hint-host` and a hand-written `hintHosts` still pin an
+  exact list.
+
+### Fixed
+
+- The daemon advertised the addresses it found when it started. An always-on daemon, or one a
+  long session kept running, went on advertising an old address after the network changed. It
+  now looks again every 30 seconds.
 
 ## [0.11.0] - 2026-10-13
 

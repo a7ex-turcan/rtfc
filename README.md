@@ -97,7 +97,7 @@ This creates `~/.claude/rtfc/` with:
 | `keys/person.p12` | Your **person CA**: who you are. Long-lived. |
 | `keys/device.p12` | This device's certificate, issued by your person CA. |
 | `rtfc.db` | Contacts, devices, the inbox (SQLite). |
-| `config.json` | The port and the hosts advertised in your invites. |
+| `config.json` | The port, and any hosts you added to or removed from what your invites advertise. |
 
 Both key files are readable only by you. **Back up `keys/`**: if you lose it you are a
 new person and every contact has to re-invite you.
@@ -105,8 +105,9 @@ new person and every contact has to re-invite you.
 - `--handle` is the name you suggest to contacts. They store it as a local nickname they
   can change; it is never your identity.
 - `--device` names this machine (`laptop`, `desktop`). Defaults to the hostname.
-- `--hint-host` sets the hostnames or IPs your invites tell people to connect to. By
-  default it is your hostname plus every IPv4 address that isn't loopback or link-local.
+- `--hint-host` sets the exact hostnames or IPs your invites tell people to connect to.
+  Leave it out unless you need that: by default it is your hostname plus every IPv4
+  address that isn't loopback or link-local, detected again as your addresses change.
   `rtfc hints` shows and changes them later (see *Beyond the office* under step 5).
 
 ### 3. Install the plugin in Claude Code
@@ -183,9 +184,12 @@ rtfc hints remove 192.168.121.1         # something contacts can never reach
 rtfc hints auto                         # back to auto-detection
 ```
 
-Changes apply to the running daemon at once, go into new invites, and reach existing
-contacts the next time you talk to them: both sides tell each other their addresses
-whenever they connect. The other side needs the same: their hints must include an address
+What you add and remove adjusts the detection rather than replacing it, so the detected
+addresses keep following your machine when DHCP or a network change gives it a new one.
+Changes apply to the running daemon at once and go into new invites. Your contacts are told
+too: both sides tell each other their addresses whenever they connect, and when yours change
+the daemon tells each contact's device itself, within half a minute if they are reachable,
+or as soon as they are. The other side needs the same: their hints must include an address
 you can reach. `rtfc contacts` shows the hints you have for each of their devices.
 
 ### 6. Talk
@@ -522,16 +526,19 @@ replaces the older daemon, so an always-on daemon doesn't keep running the old r
 ```json
 {
   "port": 47821,
-  "hintHosts": ["alex-laptop.local", "10.0.0.5"],
+  "extraHintHosts": ["alex.tailnet.ts.net"],
+  "skipHintHosts": ["192.168.121.1"],
   "claudePath": "/usr/local/bin/claude",
   "autoAnswer": { "perContactPerHour": 10, "globalPerHour": 30, "inboundPerDevicePerHour": 120, "timeoutSeconds": 180, "maxBudgetUsd": 0.5 },
   "outbox": { "expiryHours": 168, "pumpIntervalSeconds": 30, "retentionDays": 30 }
 }
 ```
 
-Only `port` is required. `hintHosts` is what your invites, accepts and every session
-advertise; `rtfc hints` edits it and applies it to the running daemon, and contacts learn
-your current hints whenever you talk to them. Other changes take effect when the daemon
+Only `port` is required. Your invites, accepts and every session advertise the detected
+hosts, without `skipHintHosts` and with `extraHintHosts`; `rtfc hints` edits both and applies
+them to the running daemon, which also notices when your addresses change and tells your
+contacts. A `hintHosts` list (what `rtfc init --hint-host` writes) replaces detection with
+exactly those hosts; `rtfc hints auto` removes it. Other changes take effect when the daemon
 restarts: `rtfc daemon stop`, then `rtfc daemon ensure` (or any command that talks to the
 daemon, such as `rtfc contacts`) starts it with the new settings, and open sessions take a
 lease on it.
@@ -546,7 +553,7 @@ project's `.claude/rtfc.local.json` (step 9).
 
 | Symptom | Look at |
 | --- | --- |
-| `nobody_home` but they say they're online | Do they have a Claude Code session open *with the plugin loaded*? `rtfc daemon status` on their side. `rtfc contacts` shows the hints you have for them; can you reach one of them: `nc -vz their-host 47821`? If not, they should `rtfc hints add` an address you can reach and send you a message, or a new invite. Firewall prompt dismissed? |
+| `nobody_home` but they say they're online | Do they have a Claude Code session open *with the plugin loaded*? `rtfc daemon status` on their side. `rtfc contacts` shows the hints you have for them; can you reach one of them: `nc -vz their-host 47821`? If not, `rtfc hints` on their side: does it list their current address? A `config.json` from before 0.12 may hold a frozen `hintHosts` list; `rtfc hints auto` there returns to detection, and their daemon then tells you within half a minute. Firewall prompt dismissed? |
 | `/rtfc:accept` says nobody's home | The inviter needs a session open. Check the hints in their token reach you: the invite output lists them. If hostnames don't resolve on your LAN, they should `rtfc init --hint-host <ip>` (or edit `config.json`) and invite again. |
 | `rtfc: no identity yet` | `rtfc init` on this machine. |
 | The plugin's tools say the daemon could not be started | `~/.claude/rtfc/rtfcd.log`. Common cause: `rtfc` isn't on the `PATH` Claude Code sees. |

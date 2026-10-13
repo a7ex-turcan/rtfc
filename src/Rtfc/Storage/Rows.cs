@@ -121,7 +121,8 @@ public sealed record DeviceRow(
     string Name,
     byte[] Cert,
     string Status,
-    IReadOnlyList<string> Endpoints);
+    IReadOnlyList<string> Endpoints,
+    IReadOnlyList<string>? ToldHints = null);
 
 public sealed record InviteRow(
     string Nonce,

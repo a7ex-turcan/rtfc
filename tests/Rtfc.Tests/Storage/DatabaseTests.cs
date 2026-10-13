@@ -44,6 +44,28 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void A_version_6_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.11.x left it: devices without a record of what they heard from us.
+            db.UpsertDevice(new DeviceRow("d_1", "p_sasha", "laptop", [1], DeviceStatus.Active, ["tcp:10.0.0.7:47821"]));
+            db.Execute("ALTER TABLE devices DROP COLUMN told_hints");
+            db.Execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.Null(migrated.GetDevice("d_1")!.ToldHints);
+
+        migrated.SetToldHints("d_1", ["tcp:desk:47821", "tcp:10.0.0.5:47821"]);
+        migrated.UpsertDevice(migrated.GetDevice("d_1")! with { Endpoints = ["tcp:10.0.0.8:47821"] });
+        Assert.Equal(["tcp:desk:47821", "tcp:10.0.0.5:47821"], migrated.GetDevice("d_1")!.ToldHints!);
+    }
+
+    [Fact]
     public void A_version_5_file_is_migrated_on_open()
     {
         using var temp = new TempHome();

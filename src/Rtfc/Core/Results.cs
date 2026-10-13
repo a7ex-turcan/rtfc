@@ -203,10 +203,13 @@ public sealed record OutboxSettings(TimeSpan Expiry, TimeSpan PumpInterval, Time
 
 /// <summary>
 /// Per-device settings in <c>config.json</c>. <c>ClaudePath</c> defaults to <c>claude</c> on PATH. <c>AlwaysOn</c> keeps the daemon
-/// running with no session open (spec §3.1); <c>rtfc daemon always-on</c> sets it together with the login item.
+/// running with no session open (spec §3.1); <c>rtfc daemon always-on</c> sets it together with the login item. <c>HintHosts</c> is an
+/// exact list that replaces auto-detection; <c>ExtraHintHosts</c> and <c>SkipHintHosts</c> are what <c>rtfc hints add</c> and
+/// <c>remove</c> change on top of it (spec §8.4).
 /// </summary>
 public sealed record RtfcConfig(
-    int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null, OutboxConfig? Outbox = null, bool? AlwaysOn = null)
+    int Port, string[]? HintHosts, string? ClaudePath = null, AutoAnswerConfig? AutoAnswer = null, OutboxConfig? Outbox = null, bool? AlwaysOn = null,
+    string[]? ExtraHintHosts = null, string[]? SkipHintHosts = null)
 {
     public static RtfcConfig Default => new(Net.TcpTransport.DefaultPort, null);
 }

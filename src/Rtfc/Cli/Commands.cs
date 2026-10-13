@@ -994,7 +994,9 @@ public static class Commands
     /// <summary>
     /// <c>rtfc hints [add &lt;host&gt;… | remove &lt;host&gt;… | auto]</c> (spec §8.4): the hosts this device advertises in invites and in every
     /// hello, which is how a contact beyond the office learns a VPN address or a Tailscale name. Writes config.json, the one
-    /// source of truth, and asks a running daemon to re-read it; it never starts one.
+    /// source of truth, and asks a running daemon to re-read it; it never starts one. Adding and removing change auto-detection
+    /// rather than replace it, so the detected addresses keep following the machine; an exact <c>hintHosts</c> list, from
+    /// <c>rtfc init --hint-host</c> or written by hand, is edited as it stands.
     /// </summary>
     public static async Task<int> HintsAsync(CommandContext ctx, IReadOnlyList<string> args)
     {
@@ -1005,15 +1007,15 @@ public static class Commands
         }
 
         var config = ConfigFile.Load(ctx.Home);
-        var current = config.HintHosts is { Length: > 0 } set ? set : HintHosts.Detect();
-        string[]? hosts;
+        var exact = config.HintHosts is { Length: > 0 } ? config.HintHosts : null;
+        static string[]? OrNull(IEnumerable<string> hosts) => hosts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } a ? a : null;
         switch (args.ToArray())
         {
             case []:
                 return await ShowHintsAsync(ctx, config, changed: false).ConfigureAwait(false);
 
             case ["auto"]:
-                hosts = null;
+                config = config with { HintHosts = null, ExtraHintHosts = null, SkipHintHosts = null };
                 break;
 
             case ["add", .. var added] when added.Length > 0:
@@ -1026,12 +1028,47 @@ public static class Commands
                     }
                 }
 
-                hosts = [.. current.Concat(added.Select(h => h.Trim())).Distinct(StringComparer.OrdinalIgnoreCase)];
+                var adding = added.Select(h => h.Trim()).ToArray();
+                if (exact is not null)
+                {
+                    config = config with { HintHosts = OrNull(exact.Concat(adding)) };
+                }
+                else
+                {
+                    // A skipped host is let back in; only what detection does not find is kept as an addition.
+                    var found = HintHosts.Detect();
+                    config = config with
+                    {
+                        ExtraHintHosts = OrNull((config.ExtraHintHosts ?? []).Concat(adding.Where(h => !found.Contains(h, StringComparer.OrdinalIgnoreCase)))),
+                        SkipHintHosts = OrNull((config.SkipHintHosts ?? []).Where(h => !adding.Contains(h, StringComparer.OrdinalIgnoreCase))),
+                    };
+                }
+
                 break;
 
             case ["remove", .. var removed] when removed.Length > 0:
-                hosts = [.. current.Where(h => !removed.Contains(h, StringComparer.OrdinalIgnoreCase))];
-                if (hosts.Length == 0)
+                bool Removed(string h) => removed.Contains(h, StringComparer.OrdinalIgnoreCase);
+                IReadOnlyList<string> left;
+                if (exact is not null)
+                {
+                    config = config with { HintHosts = [.. exact.Where(h => !Removed(h))] };
+                    left = config.HintHosts;
+                }
+                else
+                {
+                    // An added host is simply dropped; anything else is skipped, detected now or later (a VPN that comes and goes).
+                    var extra = config.ExtraHintHosts ?? [];
+                    var found = HintHosts.Detect();
+                    config = config with
+                    {
+                        ExtraHintHosts = OrNull(extra.Where(h => !Removed(h))),
+                        SkipHintHosts = OrNull((config.SkipHintHosts ?? []).Concat(removed.Where(h =>
+                            !extra.Contains(h, StringComparer.OrdinalIgnoreCase) || found.Contains(h, StringComparer.OrdinalIgnoreCase)))),
+                    };
+                    left = HintHosts.Combine(found, config.ExtraHintHosts, config.SkipHintHosts);
+                }
+
+                if (left.Count == 0)
                 {
                     ctx.Error.WriteLine("rtfc hints: that would leave nothing to advertise. Add a host first, or use `rtfc hints auto`.");
                     return 1;
@@ -1044,7 +1081,6 @@ public static class Commands
                 return 2;
         }
 
-        config = config with { HintHosts = hosts };
         ConfigFile.Save(ctx.Home, config);
         return await ShowHintsAsync(ctx, config, changed: true).ConfigureAwait(false);
     }
@@ -1073,9 +1109,13 @@ public static class Commands
             ctx.Out.WriteLine($"  {hint}");
         }
 
-        ctx.Out.WriteLine(config.HintHosts is { Length: > 0 }
-            ? "Set by hand in config.json; `rtfc hints auto` returns to auto-detection."
-            : "Auto-detected; `rtfc hints add <host>` adds a VPN address or a Tailscale name.");
+        ctx.Out.WriteLine(config switch
+        {
+            { HintHosts.Length: > 0 } => "Set by hand in config.json, so they stay as they are when this machine's addresses change; `rtfc hints auto` returns to auto-detection.",
+            { ExtraHintHosts: not null } or { SkipHintHosts: not null } =>
+                "Auto-detected, with what you added and without what you removed; `rtfc hints auto` drops your changes.",
+            _ => "Auto-detected; `rtfc hints add <host>` adds a VPN address or a Tailscale name.",
+        });
         if (status.Length > 0)
         {
             ctx.Out.WriteLine(status);
@@ -1083,7 +1123,7 @@ public static class Commands
 
         if (changed)
         {
-            ctx.Out.WriteLine("Contacts learn these the next time you talk to them; new invites carry them.");
+            ctx.Out.WriteLine("The daemon tells your contacts as soon as it can reach them; new invites carry them.");
         }
 
         return 0;

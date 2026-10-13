@@ -421,6 +421,32 @@ public class DaemonTests
     }
 
     [Fact]
+    public async Task The_daemon_notices_changed_hints_on_its_own()
+    {
+        using var temp = new TempHome();
+        IdentityStore.Create(temp.Home, "alex", "desktop", DateTimeOffset.UtcNow).Dispose();
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1"]));
+        var daemon = Task.Run(() => DaemonHost.RunAsync(
+            temp.Home, new DaemonOptions(IdleExit: false, LogToConsole: false, HintCheck: TimeSpan.FromMilliseconds(200)), Ct), Ct);
+        using var client = new DaemonClient(temp.Home);
+        var before = await WaitForStatusAsync(client, daemon);
+
+        // Nothing asks it to reload: the daemon looks again by itself, as it does for a machine whose DHCP lease moved.
+        ConfigFile.Save(temp.Home, new RtfcConfig(Port: 0, HintHosts: ["127.0.0.1", "10.0.0.99"]));
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+        string[] hints;
+        while ((hints = (await client.TryStatusAsync(Ct))!.Hints).Length < 2 && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(100, Ct);
+        }
+
+        Assert.Equal([$"tcp:127.0.0.1:{before.Port}", $"tcp:10.0.0.99:{before.Port}"], hints);
+
+        await client.ShutdownAsync(Ct);
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+    }
+
+    [Fact]
     public async Task Changing_hints_applies_to_the_running_daemon_at_once()
     {
         using var temp = new TempHome();

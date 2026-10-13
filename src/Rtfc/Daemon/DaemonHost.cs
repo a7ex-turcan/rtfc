@@ -13,7 +13,8 @@ using Rtfc.Storage;
 
 namespace Rtfc.Daemon;
 
-public sealed record DaemonOptions(bool IdleExit, bool LogToConsole);
+/// <summary><c>HintCheck</c> is how often the daemon looks at this machine's addresses again (spec §8.4); thirty seconds unless a test says otherwise.</summary>
+public sealed record DaemonOptions(bool IdleExit, bool LogToConsole, TimeSpan? HintCheck = null);
 
 /// <summary>
 /// rtfcd (spec §3.1): one per device, owning the node and exposing it on a Unix domain
@@ -117,11 +118,19 @@ public static class DaemonHost
         logger.LogInformation("IPC on {Socket} (pid {Pid}, idle exit {IdleExit})", home.SocketPath, Environment.ProcessId, IdleExit(options, home));
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.ApplicationStopping);
+        var hintCheck = options.HintCheck ?? TimeSpan.FromSeconds(30);
+        var nextHintCheck = DateTimeOffset.UtcNow + hintCheck;
         try
         {
             while (!stop.Token.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), stop.Token).ConfigureAwait(false);
+                await Task.Delay(hintCheck < TimeSpan.FromSeconds(5) ? hintCheck : TimeSpan.FromSeconds(5), stop.Token).ConfigureAwait(false);
+                if (DateTimeOffset.UtcNow >= nextHintCheck)
+                {
+                    nextHintCheck = DateTimeOffset.UtcNow + hintCheck;
+                    RefreshHints(node, home);
+                }
+
                 if (leases.IsIdle() && IdleExit(options, home))
                 {
                     logger.LogInformation("No session has held a lease for {Grace}; exiting", Leases.Grace);
@@ -405,6 +414,22 @@ public static class DaemonHost
     }
 
     /// <summary>
+    /// Advertises what config.json and this machine's addresses say now. Hints resolved once at start went stale under an always-on
+    /// daemon when DHCP moved the machine, and contacts kept dialling the old address (spec §8.4).
+    /// </summary>
+    private static void RefreshHints(Node node, RtfcHome home)
+    {
+        try
+        {
+            node.SetHintHosts(HintHosts.Resolve(ConfigFile.Load(home)));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            // Half written, or being replaced: the next check reads it whole.
+        }
+    }
+
+    /// <summary>
     /// Whether the daemon leaves once no session holds a lease: not when started with <c>--stay</c>, and not while
     /// <c>config.json</c> says always on (spec §3.1). Read each time, so <c>rtfc daemon always-on</c> takes effect at once.
     /// </summary>
@@ -487,10 +512,30 @@ public static class DaemonHost
     }
 }
 
-/// <summary>The hosts this device advertises in <c>tcp:</c> hints: configured ones, else the hostname plus every IPv4 address worth advertising.</summary>
+/// <summary>
+/// The hosts this device advertises in <c>tcp:</c> hints (spec §8.4): an exact <c>hintHosts</c> list when config.json has one, else the
+/// hostname plus every IPv4 address worth advertising, without the skipped ones and with the extra ones. Detection runs again whenever
+/// this is resolved, so the addresses follow the machine: a DHCP lease that changes must not leave contacts dialling the old one.
+/// </summary>
 public static class HintHosts
 {
-    public static IReadOnlyList<string> Resolve(RtfcConfig config) => config.HintHosts is { Length: > 0 } ? config.HintHosts : Detect();
+    public static IReadOnlyList<string> Resolve(RtfcConfig config)
+    {
+        if (config.HintHosts is { Length: > 0 })
+        {
+            return config.HintHosts;
+        }
+
+        var detected = Detect();
+        var hosts = Combine(detected, config.ExtraHintHosts, config.SkipHintHosts);
+        return hosts.Count > 0 ? hosts : detected;
+    }
+
+    /// <summary>The detected hosts minus the skipped ones, then the extra ones, without duplicates. Empty when everything was skipped.</summary>
+    public static IReadOnlyList<string> Combine(IReadOnlyList<string> detected, IReadOnlyList<string>? extra, IReadOnlyList<string>? skip) =>
+        [.. detected.Where(h => skip?.Contains(h, StringComparer.OrdinalIgnoreCase) != true)
+            .Concat(extra ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 
     /// <summary>What this machine would advertise on its own: its hostname and its usable IPv4 addresses, in adapter order.</summary>
     public static IReadOnlyList<string> Detect()

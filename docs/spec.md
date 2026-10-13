@@ -360,7 +360,9 @@ Devices carry a list of typed hints, and invite tokens include them:
 
 Adding a new way to reach someone means adding a hint type and a transport, and nothing else.
 
-A device advertises the hosts in `config.json`'s `hintHosts` or, when that is empty, its hostname and every IPv4 address worth advertising: not loopback, not link-local. `rtfc hints` shows them; `rtfc hints add <host>`, `remove <host>` and `auto` change them, write `config.json` and apply to the running daemon at once. Hints travel in three places: invite tokens, the `invite_accept` and `accept_ack` frames, and the `hello` of every session. From a hello on a session that authenticates as a contact's device, the receiver refreshes that device's stored hints, so a contact who moves to a VPN is reachable the next time either side talks, with no new invite. The hello's hints are a device's claim about itself: shape-checked, capped at sixteen, and never used for anything but connecting.
+A device advertises its hostname and every IPv4 address worth advertising (not loopback, not link-local), without the hosts in `config.json`'s `skipHintHosts` and with those in `extraHintHosts`. Detection runs again every thirty seconds while the daemon runs, so the addresses follow the machine when a DHCP lease or a network changes. `rtfc hints` shows them; `rtfc hints add <host>` adds a host detection does not find (or lets a skipped one back in), `remove <host>` drops an added host or skips a detected one, and `auto` clears both; each writes `config.json` and applies to the running daemon at once. A `hintHosts` list in `config.json`, from `rtfc init --hint-host` or written by hand, is exact: it replaces detection, and `add` and `remove` edit it as it stands. Hints travel in three places: invite tokens, the `invite_accept` and `accept_ack` frames, and the `hello` of every session. From a hello on a session that authenticates as a contact's device, the receiver refreshes that device's stored hints, so a contact who moves to a VPN is reachable the next time either side talks, with no new invite. The hello's hints are a device's claim about itself: shape-checked, capped at sixteen, and never used for anything but connecting.
+
+A contact who cannot reach us never opens a session, so they never hear our new hints that way: after an address change their sends go to the old one and find nobody home. Each device therefore records what every contact device last heard from it (`devices.told_hints`, set from the hello of every session, in either direction, and from an accept). When that differs from what it advertises now, the daemon opens a session to that device that carries only `hello` and `bye`, which any version accepts. A device that does not answer is tried again every five minutes, and hears the new hints anyway the moment it connects to us. Nothing is announced while away.
 
 ---
 
@@ -612,7 +614,8 @@ CREATE TABLE devices (                            -- contacts' devices AND my ow
   name        TEXT NOT NULL,
   cert        BLOB NOT NULL,                      -- DER device cert, issued by the person CA
   status      TEXT NOT NULL,                      -- active | revoked
-  endpoints   TEXT NOT NULL DEFAULT '[]'          -- JSON EndpointHint[]
+  endpoints   TEXT NOT NULL DEFAULT '[]',         -- JSON EndpointHint[]
+  told_hints  TEXT                                -- JSON EndpointHint[]: what this device last heard from us about our own hints (§8.4)
 );
 
 CREATE TABLE invites (

@@ -53,6 +53,7 @@ public sealed partial class Node
             {
                 await FlushOutboxAsync(cancellationToken).ConfigureAwait(false);
                 PruneIfDue();
+                await AnnounceHintsAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

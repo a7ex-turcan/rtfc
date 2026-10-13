@@ -197,6 +197,61 @@ public class NodeTests : IAsyncLifetime
         Assert.Empty(_alex.Node.ListInbox(null));
     }
 
+    private static async Task UntilAsync(Func<bool> condition)
+    {
+        for (var waited = TimeSpan.Zero; !condition(); waited += TimeSpan.FromMilliseconds(100))
+        {
+            Assert.True(waited < TimeSpan.FromSeconds(15), "The condition never held.");
+            await Task.Delay(100, Ct);
+        }
+    }
+
+    [Fact]
+    public async Task Both_sides_of_an_accept_record_that_the_other_heard_their_hints()
+    {
+        await BecomeContactsAsync();
+
+        Assert.Equal(_alex.Node.AdvertisedHints(), Assert.Single(_alex.Database.ListDevices(_sasha.Node.Self.PersonId)).ToldHints!);
+        Assert.Equal(_sasha.Node.AdvertisedHints(), Assert.Single(_sasha.Database.ListDevices(_alex.Node.Self.PersonId)).ToldHints!);
+    }
+
+    [Fact]
+    public async Task A_changed_address_reaches_a_contact_without_anyone_sending_anything()
+    {
+        await BecomeContactsAsync();
+        string[] AlexAsSashaSeesHim() => [.. Assert.Single(_sasha.Database.ListDevices(_alex.Node.Self.PersonId)).Endpoints];
+
+        // A new DHCP lease: Sasha cannot reach the old address, so only Alex can tell her.
+        Assert.True(_alex.Node.SetHintHosts(["127.0.0.1", "10.0.0.99"]));
+        string[] moved = [$"tcp:127.0.0.1:{_alex.Transport.Port}", $"tcp:10.0.0.99:{_alex.Transport.Port}"];
+        await UntilAsync(() => AlexAsSashaSeesHim().SequenceEqual(moved));
+
+        Assert.Equal(moved, Assert.Single(_alex.Database.ListDevices(_sasha.Node.Self.PersonId)).ToldHints!);
+        Assert.Empty(_sasha.Node.ListInbox(null));
+        Assert.False(_alex.Node.SetHintHosts(["10.0.0.99", "127.0.0.1"]));
+    }
+
+    [Fact]
+    public async Task A_contact_away_when_the_address_changed_hears_it_the_next_time_it_connects()
+    {
+        await BecomeContactsAsync();
+        await _sasha.Node.SetAwayAsync(true, Ct);
+        var tried = new TaskCompletionSource();
+        _alex.Node.OutboxFlushed += () => tried.TrySetResult();
+
+        _alex.Node.SetHintHosts(["127.0.0.1", "10.0.0.99"]);
+        await tried.Task.WaitAsync(TimeSpan.FromSeconds(15), Ct);
+        Assert.Equal([$"tcp:127.0.0.1:{_alex.Transport.Port}"], Assert.Single(_sasha.Database.ListDevices(_alex.Node.Self.PersonId)).Endpoints);
+
+        // Back, she sends something: Alex's hello on that session tells her, and Alex knows she heard.
+        await _sasha.Node.SetAwayAsync(false, Ct);
+        TestNode.AssertDelivered(await _sasha.Node.SendAsync("alex", "Back now.", Ct));
+
+        string[] moved = [$"tcp:127.0.0.1:{_alex.Transport.Port}", $"tcp:10.0.0.99:{_alex.Transport.Port}"];
+        Assert.Equal(moved, Assert.Single(_sasha.Database.ListDevices(_alex.Node.Self.PersonId)).Endpoints);
+        Assert.Equal(moved, Assert.Single(_alex.Database.ListDevices(_sasha.Node.Self.PersonId)).ToldHints!);
+    }
+
     [Fact]
     public async Task Contacts_learn_each_others_current_hints_whenever_they_talk()
     {

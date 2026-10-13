@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -129,6 +129,18 @@ public sealed class Database : IDisposable
                 }
 
                 Execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'");
+                version = 6;
+            }
+
+            if (version < 7)
+            {
+                // v7 (spec §8.4): what each device last heard from us about our hints, so a changed address is announced.
+                if (!HasColumn("devices", "told_hints"))
+                {
+                    Execute("ALTER TABLE devices ADD COLUMN told_hints TEXT");
+                }
+
+                Execute("UPDATE meta SET value = '7' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -208,15 +220,23 @@ public sealed class Database : IDisposable
         ("$device_id", device.DeviceId), ("$person_id", device.PersonId), ("$name", device.Name), ("$cert", device.Cert),
         ("$status", device.Status), ("$endpoints", JsonSerializer.Serialize([.. device.Endpoints], StorageJson.Default.StringArray)));
 
+    private const string DeviceColumns = "device_id, person_id, name, cert, status, endpoints, told_hints";
+
     private static DeviceRow ReadDevice(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), r.GetString(2), Blob(r, 3), r.GetString(4),
-        JsonSerializer.Deserialize(r.GetString(5), StorageJson.Default.StringArray) ?? []);
+        JsonSerializer.Deserialize(r.GetString(5), StorageJson.Default.StringArray) ?? [],
+        r.IsDBNull(6) ? null : JsonSerializer.Deserialize(r.GetString(6), StorageJson.Default.StringArray));
 
     public DeviceRow? GetDevice(string deviceId) =>
-        QuerySingle("SELECT device_id, person_id, name, cert, status, endpoints FROM devices WHERE device_id = $id", ReadDevice, ("$id", deviceId));
+        QuerySingle($"SELECT {DeviceColumns} FROM devices WHERE device_id = $id", ReadDevice, ("$id", deviceId));
 
     public IReadOnlyList<DeviceRow> ListDevices(string personId) =>
-        Query("SELECT device_id, person_id, name, cert, status, endpoints FROM devices WHERE person_id = $person ORDER BY name", ReadDevice, ("$person", personId));
+        Query($"SELECT {DeviceColumns} FROM devices WHERE person_id = $person ORDER BY name", ReadDevice, ("$person", personId));
+
+    /// <summary>Records the hints a device heard from us in a hello or an accept (spec §8.4). <see cref="UpsertDevice"/> leaves this alone.</summary>
+    public void SetToldHints(string deviceId, IReadOnlyList<string> hints) => Execute(
+        "UPDATE devices SET told_hints = $hints WHERE device_id = $id",
+        ("$id", deviceId), ("$hints", JsonSerializer.Serialize([.. hints], StorageJson.Default.StringArray)));
 
     // ---- invites ----
 

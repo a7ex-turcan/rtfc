@@ -5,4 +5,4 @@ allowed-tools: Bash(rtfc hints:*)
 disable-model-invocation: true
 ---
 !`rtfc hints $ARGUMENTS`
-Show the user the result above. If the hints changed, say that contacts learn the new ones the next time you talk to them and that new invites carry them. Do not run any other rtfc commands.
+Show the user the result above. If the hints changed, say that the daemon tells their contacts as soon as it can reach them and that new invites carry them. Do not run any other rtfc commands.
