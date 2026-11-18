@@ -226,7 +226,8 @@ public class NodeTests : IAsyncLifetime
         string[] moved = [$"tcp:127.0.0.1:{_alex.Transport.Port}", $"tcp:10.0.0.99:{_alex.Transport.Port}"];
         await UntilAsync(() => AlexAsSashaSeesHim().SequenceEqual(moved));
 
-        Assert.Equal(moved, Assert.Single(_alex.Database.ListDevices(_sasha.Node.Self.PersonId)).ToldHints!);
+        // Alex records that she heard only once her ack is back, which can trail her own write.
+        await UntilAsync(() => Assert.Single(_alex.Database.ListDevices(_sasha.Node.Self.PersonId)).ToldHints?.SequenceEqual(moved) == true);
         Assert.Empty(_sasha.Node.ListInbox(null));
         Assert.False(_alex.Node.SetHintHosts(["10.0.0.99", "127.0.0.1"]));
     }
