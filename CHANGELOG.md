@@ -20,7 +20,12 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- Bitbucket: replies to your comments, and comments naming you, now reach the inbox on
+  pull requests you reviewed without being added as a reviewer. Before, rtfc skipped every
+  pull request you neither wrote nor were a reviewer on, even after you approved, requested
+  changes or commented on it.
 
 ## [0.12.1] - 2026-10-13
 

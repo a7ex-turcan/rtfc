@@ -72,6 +72,54 @@ public class BitbucketCloudAdapterTests
     }
 
     [Fact]
+    public async Task On_a_request_I_only_took_part_in_replies_to_me_and_mentions_count_and_nothing_else_does()
+    {
+        static JsonObject Maxim() => User("712020:maxim", "{maxim}", "Maxim");
+        var handler = new ScriptedHttpHandler();
+        handler.Reply("/2.0/user", User(Me, MyUuid, "Me"));
+        handler.Reply("/pullrequests?state=", Page(
+            PullRequest(42, "Permission engine", "OPEN", Maxim(), "2026-09-20T08:00:00.000000+00:00", "2026-09-30T11:50:00.000000+00:00", participants: [User(Me, MyUuid, "Me")])));
+        handler.Reply("/pullrequests/42/activity", Page(
+            CommentEntry(1, Maxim(), "2026-09-30T11:37:00.000000+00:00", "Fixed, see the new commit", parent: 7),
+            CommentEntry(2, Maxim(), "2026-09-30T11:38:00.000000+00:00", "Rebased on main"),
+            CommentEntry(3, Maxim(), "2026-09-30T11:39:00.000000+00:00", $"@{{{Me}}} one more look?"),
+            CommentEntry(4, User("712020:eve", "{eve}", "Eve"), "2026-09-30T11:40:00.000000+00:00", "Me too", parent: 8),
+            new JsonObject { ["approval"] = new JsonObject { ["date"] = "2026-09-30T11:41:00.000000+00:00", ["user"] = User("712020:eve", "{eve}", "Eve") } },
+            new JsonObject { ["update"] = new JsonObject { ["state"] = "MERGED", ["date"] = "2026-09-30T11:50:00.000000+00:00", ["author"] = Maxim() } }));
+        handler.Reply("/pullrequests/42/comments/7", new JsonObject { ["id"] = 7, ["user"] = User(Me, MyUuid, "Me") });
+        handler.Reply("/pullrequests/42/comments/8", new JsonObject { ["id"] = 8, ["user"] = User("712020:eve", "{eve}", "Eve") });
+        var adapter = new BitbucketCloudAdapter(new HttpClient(handler));
+
+        var result = await adapter.PollAsync(Account, new JsonObject { ["repo"] = "acme/payments-api" }, new SourceCursor(Since, []), Now, Ct);
+
+        Assert.Equal(["reply_to_me", "mentioned"], result.Events.Select(e => e.EventType));
+        Assert.Equal("Maxim replied to your comment: Fixed, see the new commit", result.Events[0].Summary);
+        Assert.Equal("bitbucket:acme/payments-api#42:c:1", result.Events[0].ExternalId);
+        Assert.Equal("Maxim mentioned you: @{712020:me} one more look?", result.Events[1].Summary);
+        Assert.DoesNotContain(handler.Requests, r => r.Contains("/statuses", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Only_a_reviewer_is_asked_to_review_a_new_request()
+    {
+        static JsonObject Dan() => User("712020:dan", "{dan}", "Dan");
+        var handler = new ScriptedHttpHandler();
+        handler.Reply("/2.0/user", User(Me, MyUuid, "Me"));
+        handler.Reply("/pullrequests?state=", Page(
+            PullRequest(43, "Timeouts", "OPEN", Dan(), "2026-09-30T11:41:00.000000+00:00", "2026-09-30T11:41:00.000000+00:00", reviewers: [User(Me, MyUuid, "Me")]),
+            PullRequest(45, "Logging", "OPEN", Dan(), "2026-09-30T11:42:00.000000+00:00", "2026-09-30T11:43:00.000000+00:00", participants: [User(Me, MyUuid, "Me")])));
+        handler.Reply("/pullrequests/43/activity", Page());
+        handler.Reply("/pullrequests/45/activity", Page());
+        var adapter = new BitbucketCloudAdapter(new HttpClient(handler));
+
+        var result = await adapter.PollAsync(Account, new JsonObject { ["repo"] = "acme/payments-api" }, new SourceCursor(Since, []), Now, Ct);
+
+        Assert.Equal(["bitbucket:acme/payments-api#43:new"], result.Events.Select(e => e.ExternalId));
+        Assert.Equal("review_requested", result.Events[0].EventType);
+        Assert.Contains(handler.Requests, r => r.Contains("/pullrequests/45/activity", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Pages_follow_the_next_link_and_boundary_ids_stop_repeats()
     {
         var handler = new ScriptedHttpHandler();
@@ -131,7 +179,8 @@ public class BitbucketCloudAdapterTests
 
     private static JsonObject Page(params JsonObject[] values) => new() { ["values"] = new JsonArray(values.Select(v => (JsonNode)v).ToArray()), ["pagelen"] = 50, ["size"] = values.Length };
 
-    private static JsonObject PullRequest(int id, string title, string state, JsonObject author, string created, string updated, JsonObject[]? reviewers = null) => new()
+    /// <summary><paramref name="participants"/> took part without being added as reviewers: Bitbucket lists them with the role PARTICIPANT.</summary>
+    private static JsonObject PullRequest(int id, string title, string state, JsonObject author, string created, string updated, JsonObject[]? reviewers = null, JsonObject[]? participants = null) => new()
     {
         ["id"] = id,
         ["title"] = title,
@@ -139,7 +188,10 @@ public class BitbucketCloudAdapterTests
         ["author"] = author,
         ["created_on"] = created,
         ["updated_on"] = updated,
-        ["participants"] = new JsonArray((reviewers ?? []).Select(r => (JsonNode)new JsonObject { ["role"] = "REVIEWER", ["approved"] = false, ["user"] = r.DeepClone() }).ToArray()),
+        ["participants"] = new JsonArray(
+            (reviewers ?? []).Select(r => (JsonNode)new JsonObject { ["type"] = "participant", ["role"] = "REVIEWER", ["approved"] = false, ["state"] = null, ["user"] = r.DeepClone() })
+            .Concat((participants ?? []).Select(p => (JsonNode)new JsonObject { ["type"] = "participant", ["role"] = "PARTICIPANT", ["approved"] = false, ["state"] = "changes_requested", ["user"] = p.DeepClone() }))
+            .ToArray()),
         ["links"] = new JsonObject { ["html"] = new JsonObject { ["href"] = $"https://bitbucket.org/acme/payments-api/pull-requests/{id}" } },
     };
 

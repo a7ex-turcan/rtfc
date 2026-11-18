@@ -11,10 +11,13 @@ namespace Rtfc.Core.Sources;
 /// <summary>
 /// Bitbucket Cloud (spec §10.1), read-only, one repository per subscription: the user-wide pull-request endpoints were removed
 /// in 2025 and 2026. One poll lists the repository's pull requests updated since the cursor, keeps the ones the user authored
-/// or reviews, and reads their activity: a new request where the user is a reviewer is <c>review_requested</c>; on the user's
-/// own requests, other people's comments, approvals, requested changes, a merge, a decline and failed builds become
-/// <c>comment_on_mine</c>, <c>approved</c>, <c>changes_requested</c>, <c>merged</c>, <c>status_changed</c> and
-/// <c>build_failed_on_mine</c>; replies to the user's comments are <c>reply_to_me</c> and comments naming them <c>mentioned</c>.
+/// or is a participant in (a reviewer, or anyone who approved, requested changes or commented), and reads their activity: a
+/// new request where the user is a reviewer is <c>review_requested</c>; on the user's own requests, other people's comments,
+/// approvals, requested changes, a merge, a decline and failed builds become <c>comment_on_mine</c>, <c>approved</c>,
+/// <c>changes_requested</c>, <c>merged</c>, <c>status_changed</c> and <c>build_failed_on_mine</c>; on any request it keeps,
+/// replies to the user's comments are <c>reply_to_me</c> and comments naming them <c>mentioned</c>. A request the user has no
+/// part in is not read, so a comment naming them there is missed: reading every changed request's activity would cost a
+/// call per request per poll against the account's hourly limit.
 /// Checked against a real workspace on 2026-09-30: the repository list, <c>q=updated_on &gt;= …</c>, the activity shapes
 /// (<c>comment</c>, <c>approval</c>, <c>update</c>), comments with <c>q</c> and <c>sort</c>, and statuses. Needs a scoped
 /// API token; the mention markup inside a comment was not seen in the wild and is matched permissively.
@@ -93,11 +96,13 @@ public sealed class BitbucketCloudAdapter(HttpClient http) : ISourceAdapter
                     latest = u;
                 }
 
+                // Anyone who approves, requests changes or comments without being added as a reviewer is listed with the role
+                // PARTICIPANT; replies to them and mentions of them count too. Only a REVIEWER was asked to review.
                 var author = pr["author"] as JsonObject;
                 var authorMe = IsMe(author, me, uuid);
-                var reviewerMe = (pr["participants"] as JsonArray ?? []).OfType<JsonObject>()
-                    .Any(p => p["role"]?.GetValue<string>() == "REVIEWER" && IsMe(p["user"] as JsonObject, me, uuid));
-                if (!authorMe && !reviewerMe)
+                var mine = (pr["participants"] as JsonArray ?? []).OfType<JsonObject>().Where(p => IsMe(p["user"] as JsonObject, me, uuid)).ToList();
+                var reviewerMe = mine.Any(p => p["role"]?.GetValue<string>() == "REVIEWER");
+                if (!authorMe && mine.Count == 0)
                 {
                     continue;
                 }

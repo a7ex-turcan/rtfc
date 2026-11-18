@@ -452,7 +452,12 @@ block per version.
 - **Sources are the three Atlassian Cloud products.** Confluence brings comments and not
   page edits (a page that mentions you would re-notify on every edit), and reads at most
   two hundred watched pages per poll. Bitbucket is one repository per subscription and
-  reads each involved pull request's activity on every poll in which the request changed;
+  reads each involved pull request's activity on every poll in which the request changed.
+  Involved means you wrote it or Bitbucket lists you as a participant: a `REVIEWER`, or a
+  `PARTICIPANT` once you approve, request changes or comment. Until 2026-11-18 only
+  reviewers counted, so replies to a review you left uninvited never arrived. A comment that
+  names you on a pull request you have no part in is missed, because catching it would cost
+  one activity read per changed request per poll against the account's hourly limit;
   a mention in a pull-request comment was never seen live, so it is matched permissively
   by account id or uuid in the text. `rtfc.local.json` is re-read on every tick of the
   source loop instead of being watched; a new subscription starts from now, with a

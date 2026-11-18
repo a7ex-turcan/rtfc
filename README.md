@@ -396,8 +396,10 @@ you@acme.com`, then one subscription per repository:
 pull requests you are asked to review (`review_requested`) and, on your own pull requests,
 comments, approvals, requested changes, merges, declines and failed builds
 (`comment_on_mine`, `approved`, `changes_requested`, `merged`, `status_changed`,
-`build_failed_on_mine`), plus replies to your comments and comments naming you. One item
-per pull request, shown as `🔀 N` in the status line.
+`build_failed_on_mine`), plus replies to your comments and comments naming you on any pull
+request you wrote, review or have approved, requested changes on or commented on. A comment
+naming you on a pull request you have no part in is not seen. One item per pull request,
+shown as `🔀 N` in the status line.
 
 **The approval.** In a Claude session in that project, `/rtfc:sources-approve` (or `rtfc
 sources approve` in its directory). Until then the status line shows `⚠ rtfc: 1 pending`
