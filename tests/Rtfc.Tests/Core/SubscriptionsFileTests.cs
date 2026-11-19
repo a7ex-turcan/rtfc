@@ -28,7 +28,7 @@ public class SubscriptionsFileTests
         Assert.Equal("project = PAY AND assignee = currentUser()", jira.Selector["jql"]!.GetValue<string>());
         Assert.Null(jira.Selector["account"]);
         var bitbucket = document.Sources[1];
-        Assert.Equal(SourceEventType.All, bitbucket.Events);
+        Assert.Equal(SourceEventType.Default, bitbucket.Events);
         Assert.Equal(SourceMode.Session, bitbucket.Mode);
         Assert.Equal("acme/payments-api", bitbucket.Selector["repo"]!.GetValue<string>());
     }
@@ -46,6 +46,22 @@ public class SubscriptionsFileTests
         Assert.NotEqual(a.ConfigHash, otherMode.ConfigHash);
         Assert.Equal(SubscriptionsFile.PollKey("j", a.Selector), SubscriptionsFile.PollKey("j", otherMode.Selector));
         Assert.NotEqual(SubscriptionsFile.PollKey("j", a.Selector), SubscriptionsFile.PollKey("j", edited.Selector));
+    }
+
+    [Fact]
+    public void An_entry_without_events_keeps_its_hash_when_the_vocabulary_grows()
+    {
+        // The default list is stored and hashed with the entry, so a longer default would send every existing
+        // subscription without an events list back to pending approval on upgrade. Types beyond it are opt-in.
+        var entry = SubscriptionsFile.Parse("""{"sources":[{"account":"bb-work","type":"bitbucket","repo":"acme/payments-api"}]}""").Sources[0];
+
+        Assert.Equal("6b79b5f18214bd55c633b4ff42346eb876c2250e3bf1df082e63d0912ec6ec52", entry.ConfigHash);
+        Assert.Equal(SourceEventType.Default, entry.Events);
+        Assert.DoesNotContain(SourceEventType.Opened, entry.Events);
+
+        var named = SubscriptionsFile.Parse("""{"sources":[{"account":"bb-work","repo":"acme/payments-api","events":["review_requested","opened"]}]}""");
+        Assert.Null(named.Error);
+        Assert.Equal(["opened", "review_requested"], named.Sources[0].Events);
     }
 
     [Theory]

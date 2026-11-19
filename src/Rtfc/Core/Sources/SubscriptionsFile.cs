@@ -108,7 +108,7 @@ public static class SubscriptionsFile
             }
             else
             {
-                events = SourceEventType.All;
+                events = SourceEventType.Default;
             }
 
             var selector = new JsonObject();

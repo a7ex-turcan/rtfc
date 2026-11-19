@@ -20,7 +20,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Added
+
+- Bitbucket: an opt-in `opened` event for every pull request someone else opens in a
+  subscribed repository, reviewers or not. Add `opened` to the subscription's `events` to
+  get it; a subscription without `events` never does, so existing ones stay as quiet as they
+  were and need no new approval. Drafts arrive marked as drafts. If you are a reviewer on
+  the new pull request you get `review_requested` instead, not both.
 
 ## [0.12.2] - 2026-11-18
 

@@ -22,7 +22,7 @@ public class BitbucketCloudAdapterTests
         handler.Reply("/pullrequests?state=", Page(
             PullRequest(42, "Retry policy", "OPEN", User(Me, MyUuid, "Me"), "2026-09-20T08:00:00.000000+00:00", "2026-09-30T11:50:00.000000+00:00"),
             PullRequest(43, "Timeouts", "OPEN", User("712020:dan", "{dan}", "Dan"), "2026-09-30T11:41:00.000000+00:00", "2026-09-30T11:41:00.000000+00:00", reviewers: [User(Me, MyUuid, "Me")]),
-            PullRequest(44, "Not mine", "OPEN", User("712020:dan", "{dan}", "Dan"), "2026-09-30T11:42:00.000000+00:00", "2026-09-30T11:42:00.000000+00:00")));
+            PullRequest(44, "Not mine", "OPEN", User("712020:dan", "{dan}", "Dan"), "2026-09-29T08:00:00.000000+00:00", "2026-09-30T11:42:00.000000+00:00")));
         handler.Reply("/pullrequests/42/activity", Page(
             CommentEntry(1, User("712020:eve", "{eve}", "Eve"), "2026-09-30T11:45:00.000000+00:00", "Looks fine"),
             CommentEntry(2, User("712020:eve", "{eve}", "Eve"), "2026-09-30T11:46:00.000000+00:00", "Sure", parent: 9),
@@ -100,6 +100,38 @@ public class BitbucketCloudAdapterTests
     }
 
     [Fact]
+    public async Task A_request_someone_else_opens_is_opened_once_with_no_call_of_its_own()
+    {
+        static JsonObject Dan() => User("712020:dan", "{dan}", "Dan");
+        var handler = new ScriptedHttpHandler();
+        handler.Reply("/2.0/user", User(Me, MyUuid, "Me"));
+        handler.Reply("/pullrequests?state=", Page(
+            PullRequest(60, "Cache headers", "OPEN", Dan(), "2026-09-30T11:40:00.000000+00:00", "2026-09-30T11:40:00.000000+00:00", reviewers: [User("712020:eve", "{eve}", "Eve")]),
+            PullRequest(61, "Spike", "OPEN", Dan(), "2026-09-30T11:41:00.000000+00:00", "2026-09-30T11:41:00.000000+00:00", draft: true),
+            PullRequest(62, "Older", "OPEN", Dan(), "2026-09-29T08:00:00.000000+00:00", "2026-09-30T11:42:00.000000+00:00"),
+            PullRequest(63, "Wrong branch", "DECLINED", Dan(), "2026-09-30T11:43:00.000000+00:00", "2026-09-30T11:44:00.000000+00:00"),
+            PullRequest(64, "Mine", "OPEN", User(Me, MyUuid, "Me"), "2026-09-30T11:45:00.000000+00:00", "2026-09-30T11:45:00.000000+00:00")));
+        handler.Reply("/pullrequests/64/activity", Page());
+        handler.Reply("/pullrequests/64/statuses", Page());
+        var adapter = new BitbucketCloudAdapter(new HttpClient(handler));
+
+        var result = await adapter.PollAsync(Account, new JsonObject { ["repo"] = "acme/payments-api" }, new SourceCursor(Since, []), Now, Ct);
+
+        Assert.Equal(["bitbucket:acme/payments-api#60:opened", "bitbucket:acme/payments-api#61:opened"], result.Events.Select(e => e.ExternalId));
+        Assert.All(result.Events, e => Assert.Equal(SourceEventType.Opened, e.EventType));
+        Assert.Equal("bitbucket:acme/payments-api#60", result.Events[0].EntityKey);
+        Assert.Equal("payments-api#60 Cache headers", result.Events[0].Title);
+        Assert.Equal("Dan", result.Events[0].Actor);
+        Assert.Equal("Dan opened it", result.Events[0].Summary);
+        Assert.Equal("Dan opened it as a draft", result.Events[1].Summary);
+        Assert.DoesNotContain(handler.Requests, r => new[] { "/pullrequests/60/", "/pullrequests/61/", "/pullrequests/62/", "/pullrequests/63/" }.Any(p => r.Contains(p, StringComparison.Ordinal)));
+        Assert.Contains("values.draft", handler.Requests.Single(r => r.Contains("/pullrequests?state=", StringComparison.Ordinal)));
+
+        var again = await adapter.PollAsync(Account, new JsonObject { ["repo"] = "acme/payments-api" }, result.Next, Now, Ct);
+        Assert.Empty(again.Events);
+    }
+
+    [Fact]
     public async Task Only_a_reviewer_is_asked_to_review_a_new_request()
     {
         static JsonObject Dan() => User("712020:dan", "{dan}", "Dan");
@@ -114,8 +146,10 @@ public class BitbucketCloudAdapterTests
 
         var result = await adapter.PollAsync(Account, new JsonObject { ["repo"] = "acme/payments-api" }, new SourceCursor(Since, []), Now, Ct);
 
-        Assert.Equal(["bitbucket:acme/payments-api#43:new"], result.Events.Select(e => e.ExternalId));
-        Assert.Equal("review_requested", result.Events[0].EventType);
+        // A reviewer hears only that they were asked; anyone else, a participant included, hears that it was opened.
+        Assert.Equal(
+            new[] { ("bitbucket:acme/payments-api#43:new", "review_requested"), ("bitbucket:acme/payments-api#45:opened", "opened") },
+            result.Events.Select(e => (e.ExternalId, e.EventType)));
         Assert.Contains(handler.Requests, r => r.Contains("/pullrequests/45/activity", StringComparison.Ordinal));
     }
 
@@ -180,11 +214,12 @@ public class BitbucketCloudAdapterTests
     private static JsonObject Page(params JsonObject[] values) => new() { ["values"] = new JsonArray(values.Select(v => (JsonNode)v).ToArray()), ["pagelen"] = 50, ["size"] = values.Length };
 
     /// <summary><paramref name="participants"/> took part without being added as reviewers: Bitbucket lists them with the role PARTICIPANT.</summary>
-    private static JsonObject PullRequest(int id, string title, string state, JsonObject author, string created, string updated, JsonObject[]? reviewers = null, JsonObject[]? participants = null) => new()
+    private static JsonObject PullRequest(int id, string title, string state, JsonObject author, string created, string updated, JsonObject[]? reviewers = null, JsonObject[]? participants = null, bool draft = false) => new()
     {
         ["id"] = id,
         ["title"] = title,
         ["state"] = state,
+        ["draft"] = draft,
         ["author"] = author,
         ["created_on"] = created,
         ["updated_on"] = updated,

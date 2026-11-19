@@ -17,10 +17,20 @@ public static class SourceEventType
     public const string Merged = "merged";
     public const string BuildFailedOnMine = "build_failed_on_mine";
 
-    public static readonly string[] All =
+    /// <summary>Someone else opened a pull request in the repository: broader than involvement, so opt-in.</summary>
+    public const string Opened = "opened";
+
+    /// <summary>
+    /// What a subscription without an <c>events</c> list gets: the events that involve you (spec §10.3). The list is stored
+    /// and hashed with the entry, so a type added here sends every such subscription back to pending approval on upgrade.
+    /// </summary>
+    public static readonly string[] Default =
     [
         Assigned, Mentioned, ReviewRequested, CommentOnMine, ReplyToMe, StatusChanged, Approved, ChangesRequested, Merged, BuildFailedOnMine,
     ];
+
+    /// <summary>Every type a subscription may name: the default ones and the opt-in ones.</summary>
+    public static readonly string[] All = [.. Default, Opened];
 
     public static bool IsKnown(string type) => All.Contains(type, StringComparer.Ordinal);
 }

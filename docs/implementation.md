@@ -419,6 +419,7 @@ they were checked; versions are what they were checked against.
 | The idle hold and the 0.9.1 endings in a real session: 27 pushes held for a busy session and released when it was idle (2026-10-01 to 10-12); source items ended "Handled … and dismissed" from the Dismiss answer (3), dismissed because Claude found nothing to do (7) or the user chose nothing to do (1), declined (1), and accepted (1) | the owner's `isos-admin-2.0` session with 12 subscriptions in `session` mode, read from `rtfcd.log` and the inbox notes | 2026-10-13 |
 | A session resumed without the channels flag drops every push silently: the owner's `isos-admin-2.0` session, matched push by push against its transcript, lost all 25 pushes between its 2026-10-06 resume and its 2026-10-09 resume, idle or not, and received 17 of 17 after; every Claude Code process running with the flag on 10-13 received its pushes | `rtfcd.log`, the session transcript, `Win32_Process` command lines | 2026-10-13 |
 | Stale hints against a real contact, and both repairs: the owner's DHCP address had moved from .212 to .217 under a frozen `hintHosts`, so a contact on macOS could not reach them while the owner's sends to the contact worked. After `rtfc hints auto`, the owner's next send carried the new hints in its hello and the contact's queued reply arrived within minutes; one second after the 0.12.0 daemon started, it logged `Told maxim/maxims-macbook-pro where to reach us` against that contact's older release | `rtfcd.log`, the inbox, the `seq_in` table | 2026-10-13 |
+| Bitbucket Cloud pull requests carry a `draft` boolean, returned through `fields=values.draft`; a draft's `state` is `OPEN`, so the poll's `state=OPEN&…` list includes drafts; `q=draft = true` is accepted. Three drafts found, all `OPEN` | `GET .../pullrequests` with the scoped token against `isos-permission-engine-sdk` and the 30 most recently updated repositories of the owner's workspace; the live adapter test with `values.draft` added | 2026-11-19 |
 
 ## Schema history
 
@@ -457,7 +458,13 @@ block per version.
   `PARTICIPANT` once you approve, request changes or comment. Until 2026-11-18 only
   reviewers counted, so replies to a review you left uninvited never arrived. A comment that
   names you on a pull request you have no part in is missed, because catching it would cost
-  one activity read per changed request per poll against the account's hourly limit;
+  one activity read per changed request per poll against the account's hourly limit. The
+  opt-in `opened` (issue #12) comes from the pull-request list alone: someone else's request
+  created since the cursor and still `OPEN`, unless you are a reviewer on it, which makes it
+  `review_requested` instead. Drafts are reported and marked as drafts rather than held
+  back until they are ready, because the list says only whether a request is a draft now,
+  not when it stopped being one, so holding them back would lose every draft that is later
+  marked ready. A first poll looks back ten minutes for it, as for every other event;
   a mention in a pull-request comment was never seen live, so it is matched permissively
   by account id or uuid in the text. `rtfc.local.json` is re-read on every tick of the
   source loop instead of being watched; a new subscription starts from now, with a

@@ -164,6 +164,28 @@ public class SourcesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Opened_lands_only_where_a_subscription_names_it_and_not_by_default()
+    {
+        WriteSubscriptions("""{"sources":[{"account":"jira-work","jql":"project = PAY"}]}""");
+        var other = Directory.CreateDirectory(Path.Combine(_alex.Home.Root, "billing")).FullName;
+        Directory.CreateDirectory(Path.Combine(other, ".git"));
+        Directory.CreateDirectory(Path.Combine(other, ".claude"));
+        File.WriteAllText(Path.Combine(other, ".claude", "rtfc.local.json"), """{"sources":[{"account":"jira-work","jql":"project = PAY","events":["opened","mentioned"]}]}""");
+        _alex.Node.ApproveSources(_project);
+        _alex.Node.ApproveSources(other);
+
+        _jira.Queue(
+            Event("o", "jira:PAY-1", SourceEventType.Opened, "Dan", "PAY-1", "Dan opened it", T0),
+            Event("m", "jira:PAY-1", SourceEventType.Mentioned, "Dan", "PAY-1", "mentioned", T0.AddMinutes(1)));
+        await _alex.Node.PollDueAsync(Ct);
+
+        var paymentsItem = Assert.Single(_alex.Node.ListInbox(InboxState.Parked), i => i.Project == "payments-api");
+        Assert.Equal(["mentioned"], _alex.Node.Open(paymentsItem.Id)!.Events!.Select(e => e.Type));
+        var billingItem = Assert.Single(_alex.Node.ListInbox(InboxState.Parked), i => i.Project == "billing");
+        Assert.Equal(["opened", "mentioned"], _alex.Node.Open(billingItem.Id)!.Events!.Select(e => e.Type));
+    }
+
+    [Fact]
     public async Task An_edited_entry_goes_back_to_pending_and_a_removed_one_goes_away()
     {
         WriteSubscriptions("""{"sources":[{"account":"jira-work","jql":"project = PAY"}]}""");

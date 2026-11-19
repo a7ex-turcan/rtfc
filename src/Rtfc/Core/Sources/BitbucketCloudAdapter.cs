@@ -15,9 +15,11 @@ namespace Rtfc.Core.Sources;
 /// new request where the user is a reviewer is <c>review_requested</c>; on the user's own requests, other people's comments,
 /// approvals, requested changes, a merge, a decline and failed builds become <c>comment_on_mine</c>, <c>approved</c>,
 /// <c>changes_requested</c>, <c>merged</c>, <c>status_changed</c> and <c>build_failed_on_mine</c>; on any request it keeps,
-/// replies to the user's comments are <c>reply_to_me</c> and comments naming them <c>mentioned</c>. A request the user has no
-/// part in is not read, so a comment naming them there is missed: reading every changed request's activity would cost a
-/// call per request per poll against the account's hourly limit.
+/// replies to the user's comments are <c>reply_to_me</c> and comments naming them <c>mentioned</c>. A request someone else
+/// opened, still open and not naming the user as a reviewer, is <c>opened</c>, drafts included and said to be one; it comes
+/// from the list alone and only subscriptions that name it get it. A request the user has no part in is not read, so a
+/// comment naming them there is missed: reading every changed request's activity would cost a call per request per poll
+/// against the account's hourly limit.
 /// Checked against a real workspace on 2026-09-30: the repository list, <c>q=updated_on &gt;= …</c>, the activity shapes
 /// (<c>comment</c>, <c>approval</c>, <c>update</c>), comments with <c>q</c> and <c>sort</c>, and statuses. Needs a scoped
 /// API token; the mention markup inside a comment was not seen in the wild and is matched permissively.
@@ -78,7 +80,7 @@ public sealed class BitbucketCloudAdapter(HttpClient http) : ISourceAdapter
         var repo = $"/2.0/repositories/{Uri.EscapeDataString(workspace)}/{Uri.EscapeDataString(slug)}";
         var next = $"{repo}/pullrequests?state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=updated_on&pagelen={PageSize.ToString(CultureInfo.InvariantCulture)}"
             + "&q=" + Uri.EscapeDataString($"updated_on >= {window}")
-            + "&fields=" + Uri.EscapeDataString("values.id,values.title,values.state,values.author,values.participants,values.created_on,values.updated_on,values.links.html.href,next");
+            + "&fields=" + Uri.EscapeDataString("values.id,values.title,values.state,values.draft,values.author,values.participants,values.created_on,values.updated_on,values.links.html.href,next");
         var parents = new Dictionary<string, string?>(StringComparer.Ordinal);
         for (var page = 0; page < MaxPages && next is not null; page++)
         {
@@ -102,24 +104,29 @@ public sealed class BitbucketCloudAdapter(HttpClient http) : ISourceAdapter
                 var authorMe = IsMe(author, me, uuid);
                 var mine = (pr["participants"] as JsonArray ?? []).OfType<JsonObject>().Where(p => IsMe(p["user"] as JsonObject, me, uuid)).ToList();
                 var reviewerMe = mine.Any(p => p["role"]?.GetValue<string>() == "REVIEWER");
-                if (!authorMe && mine.Count == 0)
-                {
-                    continue;
-                }
-
                 var key = $"bitbucket:{workspace}/{slug}#{id.ToString(CultureInfo.InvariantCulture)}";
                 var title = $"{slug}#{id.ToString(CultureInfo.InvariantCulture)} {pr["title"]?.GetValue<string>() ?? ""}".Trim();
                 var link = ((pr["links"] as JsonObject)?["html"] as JsonObject)?["href"]?.GetValue<string>() ?? $"https://bitbucket.org/{workspace}/{slug}/pull-requests/{id}";
                 var created = ParseTime(pr["created_on"]?.GetValue<string>());
-                if (reviewerMe && !authorMe && created is { } c && c > since)
+
+                // Someone else's new request: a review request when it names the user as a reviewer, else, while it is still
+                // open, opened. That one needs no call of its own and lands only where a subscription asks for it (§10.3).
+                if (!authorMe && created is { } c && c > since && (reviewerMe || pr["state"]?.GetValue<string>() == "OPEN"))
                 {
-                    var externalId = $"{key}:new";
+                    var who = author?["display_name"]?.GetValue<string>() ?? "Someone";
+                    var (externalId, type, summary) = reviewerMe
+                        ? ($"{key}:new", SourceEventType.ReviewRequested, $"{who} asked you to review it")
+                        : ($"{key}:opened", SourceEventType.Opened, pr["draft"]?.GetValue<bool>() == true ? $"{who} opened it as a draft" : $"{who} opened it");
                     candidates.Add((externalId, c));
                     if (seen.Add(externalId))
                     {
-                        var who = author?["display_name"]?.GetValue<string>() ?? "Someone";
-                        events.Add(new SourceEvent(externalId, key, SourceEventType.ReviewRequested, who, title, $"{who} asked you to review it", link, c));
+                        events.Add(new SourceEvent(externalId, key, type, who, title, summary, link, c));
                     }
+                }
+
+                if (!authorMe && mine.Count == 0)
+                {
+                    continue;
                 }
 
                 var prPath = $"{repo}/pullrequests/{id.ToString(CultureInfo.InvariantCulture)}";

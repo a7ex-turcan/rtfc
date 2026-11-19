@@ -401,6 +401,13 @@ request you wrote, review or have approved, requested changes on or commented on
 naming you on a pull request you have no part in is not seen. One item per pull request,
 shown as `🔀 N` in the status line.
 
+To also hear about every pull request a teammate opens in the repository, reviewers or not,
+add `opened` to the subscription's `events`, for example
+`"events": ["review_requested", "comment_on_mine", "reply_to_me", "mentioned", "opened"]`.
+It is opt-in: a subscription without `events` never gets it. A draft arrives as "opened it
+as a draft". If you are a reviewer on the new pull request you get `review_requested` instead,
+not both, and anything that happens on it later lands on the same item.
+
 **The approval.** In a Claude session in that project, `/rtfc:sources-approve` (or `rtfc
 sources approve` in its directory). Until then the status line shows `⚠ rtfc: 1 pending`
 and nothing is polled. Anything that can write to the repo can edit that file, Claude
