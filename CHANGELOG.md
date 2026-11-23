@@ -20,6 +20,10 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+Nothing yet. Next is Phase 5, one person on several devices.
+
+## [0.14.0] - 2026-11-23
+
 ### Added
 
 - Feed sources: a command of yours that prints JSON becomes a source, for anything rtfc has
@@ -556,7 +560,8 @@ LAN, and third-party sources.
   loopback and the real daemon on a real socket, and `scripts/e2e.sh` for the whole story
   with two daemons on one machine.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfc/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/a7ex-turcan/rtfc/compare/v0.12.0...v0.12.1
