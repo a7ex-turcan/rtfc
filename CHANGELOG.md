@@ -20,7 +20,15 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Added
+
+- Feed sources: a command of yours that prints JSON becomes a source, for anything rtfc has
+  no adapter for, such as a chat app that only runs in a browser on another machine.
+  `rtfc account add <name> --type feed` asks for the command in a terminal and checks it;
+  a subscription then names the account like any other. Each feed item is one inbox item,
+  `💬 N` in the status line, with only what is new since the last poll. The command is
+  kept in the account's private file and never in `rtfc.local.json`. The README has the
+  JSON shape.
 
 ## [0.13.0] - 2026-11-19
 

@@ -142,10 +142,13 @@ public sealed partial class Node
                 continue;
             }
 
+            // A feed's command is kept where a token is: the account's private file (spec §10.5).
             var token = AccountStore.LoadToken(_home, account.Name);
             if (token is null)
             {
-                Fail(group, cursorRow, $"No token for the account \"{account.Name}\"; `rtfc account add {account.Name}` stores one.", permanent: true, now);
+                Fail(group, cursorRow, account.Type == FeedAdapter.TypeName
+                    ? $"No command for the feed account \"{account.Name}\"; `rtfc account add {account.Name} --type feed` stores one."
+                    : $"No token for the account \"{account.Name}\"; `rtfc account add {account.Name}` stores one.", permanent: true, now);
                 continue;
             }
 
@@ -159,7 +162,7 @@ public sealed partial class Node
                 var delivered = 0;
                 foreach (var subscription in group)
                 {
-                    delivered += Deliver(subscription, result.Events, now);
+                    delivered += Deliver(subscription, result.Events, now, filtered: account.Type != FeedAdapter.TypeName);
                     if (subscription.Status == SubscriptionStatus.Error)
                     {
                         _db.SetSubscriptionStatus(subscription.Id, SubscriptionStatus.Active);
@@ -206,12 +209,15 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>Stores the events a subscription asked for, one item per entity, appending to what the item already knows (spec §10.3).</summary>
-    private int Deliver(SubscriptionRow subscription, IReadOnlyList<SourceEvent> events, DateTimeOffset now)
+    /// <summary>
+    /// Stores the events a subscription asked for, one item per entity, appending to what the item already knows (spec §10.3).
+    /// A feed's events are not <paramref name="filtered"/>: the feed decides what is news, and the user chose the feed.
+    /// </summary>
+    private int Deliver(SubscriptionRow subscription, IReadOnlyList<SourceEvent> events, DateTimeOffset now, bool filtered = true)
     {
         var wanted = (JsonSerializer.Deserialize(subscription.Events, SourceJson.Default.StringArray) ?? []).ToHashSet(StringComparer.Ordinal);
         var delivered = 0;
-        foreach (var entity in events.Where(e => wanted.Contains(e.EventType) && IsValidEntityKey(e.EntityKey)).GroupBy(e => e.EntityKey, StringComparer.Ordinal))
+        foreach (var entity in events.Where(e => (!filtered || wanted.Contains(e.EventType)) && IsValidEntityKey(e.EntityKey)).GroupBy(e => e.EntityKey, StringComparer.Ordinal))
         {
             var incoming = entity.OrderBy(e => e.OccurredAt).ToList();
             var (item, _, added) = _db.UpsertSourceItem(subscription.ProjectId, subscription.Id, entity.Key, Self.DeviceId, now, stored =>
@@ -463,9 +469,13 @@ public sealed partial class Node
         {
             var cursor = _db.GetCursor(PollKeyOf(subscription));
             var account = accounts.GetValueOrDefault(subscription.Account);
+            // A feed's events are not filtered (Deliver), so its view lists what a feed can bring, not the stored default.
+            string[] events = account?.Type == FeedAdapter.TypeName
+                ? FeedAdapter.EventTypes
+                : JsonSerializer.Deserialize(subscription.Events, SourceJson.Default.StringArray) ?? [];
             views.Add(new SourceView(
                 projects.GetValueOrDefault(subscription.ProjectId)?.Name ?? "?", subscription.Account, account?.Type ?? "?",
-                subscription.Selector, JsonSerializer.Deserialize(subscription.Events, SourceJson.Default.StringArray) ?? [], subscription.Mode, subscription.Status,
+                subscription.Selector, events, subscription.Mode, subscription.Status,
                 _db.ListMessages(null).Count(m => m.Kind == InboxKind.Source && m.SubscriptionId == subscription.Id && NeedsAttention(m)),
                 Timestamps.ParseOrNull(cursor?.Cursor is { Length: > 0 } c ? c : null), cursor?.NextPollAt, cursor?.LastError,
                 here is not null && _subscriptionFileErrors.TryGetValue(here, out var fileError) ? fileError : null));
@@ -491,6 +501,15 @@ public sealed partial class Node
         if (!_adapters.ContainsKey(type))
         {
             return new ManagementResult(ManagementStatus.Invalid, Reason: $"Unknown account type \"{type}\"; supported: {string.Join(", ", _adapters.Keys.Order(StringComparer.Ordinal))}.");
+        }
+
+        if (type == FeedAdapter.TypeName)
+        {
+            // A feed has no site and no login: its command, in the account's private file, is all of it.
+            _db.UpsertAccount(new AccountRow(name, type, "", "", accountId, _clock.GetUtcNow()));
+            _logger.LogInformation("Account {Name} (feed) added", name);
+            KickSources();
+            return new ManagementResult(ManagementStatus.Ok, name);
         }
 
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
@@ -550,9 +569,28 @@ public sealed partial class Node
         && key.IndexOf(':') is > 0 and var colon && colon < key.Length - 1
         && key.All(c => char.IsAsciiLetterOrDigit(c) || c is ':' or '-' or '_' or '.' or '/' or '#' or '@');
 
-    /// <summary>The source type of an item, from its entity key: <c>jira:PAY-1</c> is <c>jira</c>.</summary>
-    internal static string SourceTypeOf(string? entityKey) => entityKey is { } key && key.IndexOf(':') is > 0 and var i ? key[..i] : "source";
+    /// <summary>
+    /// The source an item came from, by its entity key: <c>jira:PAY-1</c> is <c>jira</c>. A feed's item is named by its account,
+    /// which the user chose in a terminal: <c>feed:teams/19:abc@thread.v2</c> is <c>teams</c>.
+    /// </summary>
+    internal static string SourceTypeOf(string? entityKey) =>
+        FeedParts(entityKey) is { } feed ? feed.Account
+        : entityKey is { } key && key.IndexOf(':') is > 0 and var i ? key[..i] : "source";
 
-    /// <summary>The part of an entity key people recognize: <c>PAY-1</c> of <c>jira:PAY-1</c>.</summary>
-    internal static string EntityIdOf(string? entityKey) => entityKey is { } key && key.IndexOf(':') is > 0 and var i ? key[(i + 1)..] : entityKey ?? "";
+    /// <summary>The part of an entity key people recognize: <c>PAY-1</c> of <c>jira:PAY-1</c>, <c>19:abc@thread.v2</c> of a feed's.</summary>
+    internal static string EntityIdOf(string? entityKey) =>
+        FeedParts(entityKey) is { } feed ? feed.Id
+        : entityKey is { } key && key.IndexOf(':') is > 0 and var i ? key[(i + 1)..] : entityKey ?? "";
+
+    private static (string Account, string Id)? FeedParts(string? entityKey)
+    {
+        const string prefix = FeedAdapter.TypeName + ":";
+        if (entityKey is not { } key || !key.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var slash = key.IndexOf('/', prefix.Length);
+        return slash > prefix.Length && slash < key.Length - 1 ? (key[prefix.Length..slash], key[(slash + 1)..]) : null;
+    }
 }

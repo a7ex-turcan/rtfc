@@ -133,6 +133,8 @@ public static class EntryPoint
                                       what your invites tell people to connect to; add a VPN address or a Tailscale name
           account add <name> --type jira|confluence|bitbucket --url <https://site.atlassian.net> --login <email>
                                       store a source account; the token is typed hidden, in a real terminal
+          account add <name> --type feed
+                                      store a feed: a command, typed in a real terminal, that prints JSON
           account list | account remove <name>
           sources approve [--project <dir>]
                                       let the subscriptions in <project>/.claude/rtfc.local.json start polling

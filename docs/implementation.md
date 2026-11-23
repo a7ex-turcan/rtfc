@@ -24,7 +24,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §7.5 untrusted content | `Mcp/Tools.Wrap`; `Node.AutoAnswer.UntrustedPrompt` |
 | §7.6 project-addressed messages | `Node.Projects.cs` (`RegisterProject`, `Route`); `ProjectName` in `Protocol/Frames.cs`; `Core/ProjectPaths.cs`; `Node.ListInbox(state, directory, allProjects)`; the reply project in `Node.Outgoing` and `sent.project_id` |
 | §10.2 session registration | `McpServer` (`CLAUDE_PROJECT_DIR`, registered once it holds a lease) → `POST /v1/projects` → `Node.RegisterProject` |
-| §10.1 polling, cursors, adapters | `Node.Sources.cs` (`PollDueAsync`, `Deliver`); `Core/Sources/SourceEvent.cs` (`ISourceAdapter`, `SourceEvent`, `SourceCursor`); `Core/Sources/JiraCloudAdapter.cs`, `ConfluenceCloudAdapter.cs`, `BitbucketCloudAdapter.cs`; `source_cursors` via `Database.GetCursor`/`UpsertCursor` |
+| §10.1 polling, cursors, adapters | `Node.Sources.cs` (`PollDueAsync`, `Deliver`); `Core/Sources/SourceEvent.cs` (`ISourceAdapter`, `SourceEvent`, `SourceCursor`); `Core/Sources/JiraCloudAdapter.cs`, `ConfluenceCloudAdapter.cs`, `BitbucketCloudAdapter.cs`, `FeedAdapter.cs` (with `ProcessFeedRunner`); `source_cursors` via `Database.GetCursor`/`UpsertCursor` |
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
@@ -420,6 +420,7 @@ they were checked; versions are what they were checked against.
 | A session resumed without the channels flag drops every push silently: the owner's `isos-admin-2.0` session, matched push by push against its transcript, lost all 25 pushes between its 2026-10-06 resume and its 2026-10-09 resume, idle or not, and received 17 of 17 after; every Claude Code process running with the flag on 10-13 received its pushes | `rtfcd.log`, the session transcript, `Win32_Process` command lines | 2026-10-13 |
 | Stale hints against a real contact, and both repairs: the owner's DHCP address had moved from .212 to .217 under a frozen `hintHosts`, so a contact on macOS could not reach them while the owner's sends to the contact worked. After `rtfc hints auto`, the owner's next send carried the new hints in its hello and the contact's queued reply arrived within minutes; one second after the 0.12.0 daemon started, it logged `Told maxim/maxims-macbook-pro where to reach us` against that contact's older release | `rtfcd.log`, the inbox, the `seq_in` table | 2026-10-13 |
 | Bitbucket Cloud pull requests carry a `draft` boolean, returned through `fields=values.draft`; a draft's `state` is `OPEN`, so the poll's `state=OPEN&…` list includes drafts; `q=draft = true` is accepted. Three drafts found, all `OPEN` | `GET .../pullrequests` with the scoped token against `isos-permission-engine-sdk` and the 30 most recently updated repositories of the owner's workspace; the live adapter test with `values.draft` added | 2026-11-19 |
+| A feed command over SSH from this Windows machine, `ssh isos-dell pwsh -NoProfile -File …eed.ps1`, runs through `cmd /d /s /c` from the detached runner with stdin closed, exits 0 and prints a version 1 feed (`"items": []` while nothing is unread) that the adapter reads | `FeedLiveTests` with `RTFC_LIVE_FEED` set, and the same command by hand, counting only | 2026-11-23 |
 
 ## Schema history
 
@@ -474,6 +475,19 @@ block per version.
   which the user gives as `--url`; an account keeps one URL, so item links are then built on
   the gateway and do not open in a browser. The per-hour cap on session pushes is counted
   in memory, so it resets with the daemon.
+- **A feed's command is the account, not the subscription (issue #13).** The issue put the
+  command in `rtfc.local.json`; it lives in the account's private file instead, typed into
+  `rtfc account add <name> --type feed` in a real terminal, because the daemon runs it as the
+  user on every poll and that file is editable by anything that can write to the project.
+  Departures from the issue, all on purpose: no per-subscription `interval` (a feed polls
+  on the cadence every source has, 90 s plus jitter); no `url` alternative to `command`;
+  `events` does not apply to a feed; a failing command is a transient error retried in two
+  minutes, shown in the `sources` view, rather than the `error` status, which is kept for
+  what needs the user (a missing account or command). The first line of the command's error
+  output reaches that view, cut to 160 characters without control characters, as a
+  service's error text already does. The seen set is every event id in the last output,
+  so an event that leaves the feed and comes back counts as new unless its item still has it.
+  The command runs with Claude Code's session variables removed, as the headless runner does.
 - **Some session endings have not been seen live yet:** "Later", "Keep", and the idle
   notification after an interrupted turn. They are covered by `SourceSessionTests`,
   `SessionIdleTests` and `HookTests` only. The rest ran live (the verified table).

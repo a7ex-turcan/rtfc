@@ -123,7 +123,7 @@ public static class Tools
             }),
 
         Tool("sources",
-            "This project's source subscriptions: Jira, Confluence or Bitbucket notifications rtfc polls into the inbox. For each: account, "
+            "This project's source subscriptions: Jira, Confluence or Bitbucket notifications, or a feed, that rtfc polls into the inbox. For each: account, "
             + "type, selector (the JQL, repository or space), events, mode, status (pending_approval until the user approves it), how far it "
             + "has read, the next poll and any error. Read-only and never shows credentials. Subscriptions are edited in the project's "
             + ".claude/rtfc.local.json and approved by the user with /rtfc:sources-approve; accounts are added by the user with "

@@ -20,6 +20,9 @@ public static class SourceEventType
     /// <summary>Someone else opened a pull request in the repository: broader than involvement, so opt-in.</summary>
     public const string Opened = "opened";
 
+    /// <summary>Something new in a feed item that is neither a mention nor a reply. Only feeds produce it, and a feed's events are never filtered.</summary>
+    public const string Message = "message";
+
     /// <summary>
     /// What a subscription without an <c>events</c> list gets: the events that involve you (spec §10.3). The list is stored
     /// and hashed with the entry, so a type added here sends every such subscription back to pending approval on upgrade.
@@ -30,7 +33,7 @@ public static class SourceEventType
     ];
 
     /// <summary>Every type a subscription may name: the default ones and the opt-in ones.</summary>
-    public static readonly string[] All = [.. Default, Opened];
+    public static readonly string[] All = [.. Default, Opened, Message];
 
     public static bool IsKnown(string type) => All.Contains(type, StringComparer.Ordinal);
 }

@@ -164,8 +164,8 @@ takes rtfc's out again. Start a new session to see it.
 
 You'll see `📨 1 · sasha` when something is waiting, `📨 1 · sasha → payments-api` when it
 waits in another of your projects, `📤 2` when replies wait in your outbox, `💤 away` when
-you are away, `🎫 3` when tickets, `📄 2` when pages and `🔀 1` when pull requests from a
-source wait in the project you are in, `⚠ rtfc: 1 pending` when a subscription there waits
+you are away, `🎫 3` when tickets, `📄 2` when pages, `🔀 1` when pull requests and `💬 1`
+when feed items from a source wait in the project you are in, `⚠ rtfc: 1 pending` when a subscription there waits
 for your approval, and nothing otherwise. `refreshInterval` (seconds) keeps the counter
 current while you're idle.
 
@@ -407,6 +407,34 @@ add `opened` to the subscription's `events`, for example
 It is opt-in: a subscription without `events` never gets it. A draft arrives as "opened it
 as a draft". If you are a reviewer on the new pull request you get `review_requested` instead,
 not both, and anything that happens on it later lands on the same item.
+
+**A feed** is for anything rtfc has no adapter for, such as a chat app that only runs in a
+signed-in browser: a command of yours prints what is new as JSON, and rtfc runs it on every
+poll. `rtfc account add teams --type feed` asks for the command in the terminal, for example
+`ssh -o BatchMode=yes work-laptop type D:\Tools\teamsfeed\feed.json`, runs it once to check
+it, and keeps it in the account's private file. It never goes in `rtfc.local.json`, because
+anything that can edit that file, Claude included, could otherwise have the daemon run a
+command of its choosing as you. The subscription only names the account:
+`{ "account": "teams", "mode": "session" }`. The command runs through `cmd /c` on Windows
+and `/bin/sh -c` elsewhere, from your home directory, with no input, for at most 30 seconds
+and 1 MiB of output; give `ssh` `-o BatchMode=yes` so it fails instead of waiting for a
+prompt nobody sees. It prints:
+
+```json
+{ "v": 1,
+  "items": [ { "id": "teams:chat:19:abc@thread.v2", "entity": "Chat | Jane Doe", "url": "https://…",
+               "events": [ { "id": "teams:msg:19:abc@thread.v2:1732358520000", "at": "2026-11-23T10:42:00Z",
+                             "kind": "message", "actor": "Jane Doe", "text": "the newest message" } ] } ] }
+```
+
+Each item `id` is one inbox item, shown as `💬 N` and with the account's name as its source.
+An event is new when its `id` was not in the previous output, so the reader can print the
+same unread events every time; what the feed holds when the subscription starts is taken as
+seen. `kind` `mention` and `reply` become `mentioned` and `reply_to_me`, anything else
+`message`, and a feed ignores `events`: it decides what is news. A non-zero exit (its
+first line of error output shows in `/rtfc:sources`), a timeout or output outside this shape
+fails the poll, which is retried in two minutes; `"items": []` is healthy. Everything the
+feed says is untrusted, like any source.
 
 **The approval.** In a Claude session in that project, `/rtfc:sources-approve` (or `rtfc
 sources approve` in its directory). Until then the status line shows `⚠ rtfc: 1 pending`

@@ -53,7 +53,7 @@ public sealed partial class Node : IAsyncDisposable
         _sessions = sessions;
         _sourceSettings = options.Sources ?? SourceSettings.Default;
         _pushSettings = options.SessionPushes ?? SessionPushSettings.Default;
-        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp), new Sources.ConfluenceCloudAdapter(SourceHttp), new Sources.BitbucketCloudAdapter(SourceHttp)])
+        _adapters = (adapters ?? [new Sources.JiraCloudAdapter(SourceHttp), new Sources.ConfluenceCloudAdapter(SourceHttp), new Sources.BitbucketCloudAdapter(SourceHttp), new Sources.FeedAdapter(new Sources.ProcessFeedRunner())])
             .ToDictionary(a => a.Type, StringComparer.Ordinal);
         _hintHosts = options.HintHosts;
 
@@ -1005,12 +1005,13 @@ public sealed partial class Node : IAsyncDisposable
             var tickets = _db.CountSourceItems(project.Id, "jira:");
             var reviews = _db.CountSourceItems(project.Id, "bitbucket:") + _db.CountSourceItems(project.Id, "github:");
             var pages = _db.CountSourceItems(project.Id, "confluence:");
+            var feeds = _db.CountSourceItems(project.Id, Sources.FeedAdapter.TypeName + ":");
             var waiting = pending.GetValueOrDefault(project.Id);
             var deaf = notShowing.Contains(project.Id);
-            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || waiting > 0 || deaf)
+            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || feeds > 0 || waiting > 0 || deaf)
             {
                 perProject[project.RootPath] = new ProjectStatus(
-                    project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages, deaf ? true : null);
+                    project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages, deaf ? true : null, feeds);
             }
         }
 

@@ -676,6 +676,11 @@ public static class Commands
                 segments.Add($"📄 {projects[here].Pages.ToString(CultureInfo.InvariantCulture)}");
             }
 
+            if (projects[here].Feeds > 0)
+            {
+                segments.Add($"💬 {projects[here].Feeds.ToString(CultureInfo.InvariantCulture)}");
+            }
+
             if (projects[here].PendingSubscriptions > 0)
             {
                 segments.Add($"⚠ rtfc: {projects[here].PendingSubscriptions.ToString(CultureInfo.InvariantCulture)} pending");
@@ -1259,14 +1264,14 @@ public static class Commands
 
                     foreach (var a in accounts)
                     {
-                        ctx.Out.WriteLine($"{a.Name,-16} {a.Type,-10} {a.BaseUrl}  {a.Login}  {(a.HasToken ? "token stored" : "NO TOKEN")}  {a.Subscriptions} subscription(s)");
+                        ctx.Out.WriteLine($"{a.Name,-16} {a.Type,-10} {a.BaseUrl}  {a.Login}  {(a.Type == Core.Sources.FeedAdapter.TypeName ? (a.HasToken ? "command stored" : "NO COMMAND") : a.HasToken ? "token stored" : "NO TOKEN")}  {a.Subscriptions} subscription(s)");
                     }
 
                     return 0;
                 }
 
             default:
-                ctx.Error.WriteLine("usage: rtfc account add <name> --type jira --url <https://site.atlassian.net> --login <email> | list | remove <name>");
+                ctx.Error.WriteLine("usage: rtfc account add <name> --type jira --url <https://site.atlassian.net> --login <email> | add <name> --type feed | list | remove <name>");
                 return 2;
         }
     }
@@ -1280,6 +1285,11 @@ public static class Commands
         {
             ctx.Error.WriteLine("rtfc account: the name is letters, digits, '.', '-' or '_', up to 64 characters.");
             return 2;
+        }
+
+        if (type == Core.Sources.FeedAdapter.TypeName)
+        {
+            return await AddFeedAccountAsync(ctx, name, stdin).ConfigureAwait(false);
         }
 
         if (string.IsNullOrWhiteSpace(type) || string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(login))
@@ -1298,7 +1308,7 @@ public static class Commands
         };
         if (adapter is null)
         {
-            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported; jira, confluence and bitbucket are.");
+            ctx.Error.WriteLine($"rtfc account: type \"{type}\" is not supported; jira, confluence, bitbucket and feed are.");
             return 2;
         }
 
@@ -1354,6 +1364,63 @@ public static class Commands
         ctx.Out.WriteLine($"Account {name} ({type}) added: {identity.DisplayName} at {uri.Host}.");
         ctx.Out.WriteLine($"The token is in {Core.Sources.AccountStore.TokenPath(ctx.Home, name)}, readable only by you; rtfc uses it to read, never to write.");
         ctx.Out.WriteLine($"Next: list a subscription under \"sources\" in <project>/.claude/rtfc.local.json with \"account\": \"{name}\", then run /rtfc:sources-approve there.");
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>rtfc account add &lt;name&gt; --type feed</c> (spec §10.5). The daemon will run the command as the user on every poll, so it
+    /// is typed in a real terminal and kept in the account's private file: never a flag, a pipe, a slash command or an entry in a
+    /// project's subscriptions file, which anything that can write to the project can edit. It runs once here, so a broken
+    /// command or a feed in the wrong shape shows up now rather than as a subscription error later.
+    /// </summary>
+    private static async Task<int> AddFeedAccountAsync(CommandContext ctx, string name, TextReader? stdin)
+    {
+        if (stdin is not null || Console.IsInputRedirected)
+        {
+            ctx.Error.WriteLine("rtfc account: run this in a real terminal. A feed's command is typed there: the daemon runs it as you on every poll, so it never comes from a command line, a slash command or Claude.");
+            return 1;
+        }
+
+        ctx.Out.WriteLine("The command prints the feed as JSON (see the README). rtfc runs it as you, from your home directory, on every poll.");
+        ctx.Out.Write("Command: ");
+        // The terminal itself, as for the hidden token: input is not redirected here, so there is no reader to take it from.
+        var command = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(command))
+        {
+            ctx.Error.WriteLine("rtfc account: no command entered.");
+            return 1;
+        }
+
+        Core.Sources.SourceIdentity identity;
+        try
+        {
+            identity = await new Core.Sources.FeedAdapter(new Core.Sources.ProcessFeedRunner())
+                .IdentifyAsync(new Core.Sources.SourceAccount(name, Core.Sources.FeedAdapter.TypeName, "", "", null, command), ctx.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Core.Sources.SourceException ex)
+        {
+            ctx.Error.WriteLine($"rtfc account: the command did not give a feed: {ex.Message}");
+            return 1;
+        }
+
+        using var client = await ConnectAsync(ctx).ConfigureAwait(false);
+        if (client is null)
+        {
+            return 1;
+        }
+
+        Core.Sources.AccountStore.SaveToken(ctx.Home, name, command);
+        var result = await client.AddAccountAsync(new AccountRequest(name, Core.Sources.FeedAdapter.TypeName, "", "", identity.AccountId), ctx.CancellationToken).ConfigureAwait(false);
+        if (result.Status != ManagementStatus.Ok)
+        {
+            Core.Sources.AccountStore.DeleteToken(ctx.Home, name);
+            ctx.Error.WriteLine($"rtfc account: {result.Reason}");
+            return 1;
+        }
+
+        ctx.Out.WriteLine($"Account {name} (feed) added: the command answered with {identity.DisplayName}.");
+        ctx.Out.WriteLine($"The command is in {Core.Sources.AccountStore.TokenPath(ctx.Home, name)}, readable only by you.");
+        ctx.Out.WriteLine($"Next: list a subscription under \"sources\" in <project>/.claude/rtfc.local.json with \"account\": \"{name}\", then run /rtfc:sources-approve there. What the feed already holds is taken as seen; only what comes after lands.");
         return 0;
     }
 
