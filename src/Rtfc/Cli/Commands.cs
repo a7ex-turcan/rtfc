@@ -1319,7 +1319,7 @@ public static class Commands
         }
 
         // The token is typed, never given on the command line or piped from a slash command (spec §10.5).
-        if (stdin is not null || Console.IsInputRedirected)
+        if (!IsTerminal(stdin, Console.In, Console.IsInputRedirected))
         {
             ctx.Error.WriteLine("rtfc account: run this in a real terminal. The token is typed with hidden input; it never goes on a command line, through a slash command or through Claude.");
             return 1;
@@ -1375,7 +1375,7 @@ public static class Commands
     /// </summary>
     private static async Task<int> AddFeedAccountAsync(CommandContext ctx, string name, TextReader? stdin)
     {
-        if (stdin is not null || Console.IsInputRedirected)
+        if (!IsTerminal(stdin, Console.In, Console.IsInputRedirected))
         {
             ctx.Error.WriteLine("rtfc account: run this in a real terminal. A feed's command is typed there: the daemon runs it as you on every poll, so it never comes from a command line, a slash command or Claude.");
             return 1;
@@ -1423,6 +1423,15 @@ public static class Commands
         ctx.Out.WriteLine($"Next: list a subscription under \"sources\" in <project>/.claude/rtfc.local.json with \"account\": \"{name}\", then run /rtfc:sources-approve there. What the feed already holds is taken as seen; only what comes after lands.");
         return 0;
     }
+
+    /// <summary>
+    /// Whether a person is typing at a terminal, which is where a token or a feed's command must come from (spec §10.5): input is
+    /// not redirected, and the reader handed in, if any, is the console's own. <c>Program</c> hands in <see cref="Console.In"/>
+    /// whenever input is not redirected, so a reader alone proves nothing; until 0.14.1 this treated any reader as a pipe and
+    /// refused every real terminal. A reader of any other kind is a pipe or a test's input.
+    /// </summary>
+    internal static bool IsTerminal(TextReader? given, TextReader console, bool inputRedirected) =>
+        !inputRedirected && (given is null || ReferenceEquals(given, console));
 
     /// <summary>Reads a line without echoing it. Backspace works; nothing else is interpreted.</summary>
     private static string ReadHidden()

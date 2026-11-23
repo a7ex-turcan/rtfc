@@ -20,7 +20,12 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- `rtfc account add` refused to run in a real terminal ("run this in a real terminal"), for
+  every account type since sources arrived in 0.8.0, so the only way to add an account was
+  around the command. It now takes the token, or a feed's command, from the terminal you
+  type it in, and still refuses one that is piped in.
 
 ## [0.14.0] - 2026-11-23
 
