@@ -427,10 +427,15 @@ public static class Commands
 
         if (line.Positionals is ["dismiss", var dismissId])
         {
-            if (!await client.DismissAsync(dismissId, ctx.CancellationToken).ConfigureAwait(false))
+            var dismissed = await client.DismissAsync(dismissId, ctx.CancellationToken).ConfigureAwait(false);
+            switch (dismissed.Status)
             {
-                ctx.Error.WriteLine($"rtfc inbox: no message '{dismissId}'.");
-                return 1;
+                case DismissStatus.NotFound:
+                    ctx.Error.WriteLine($"rtfc inbox: no message '{dismissId}'.");
+                    return 1;
+                case DismissStatus.Unseen:
+                    ctx.Error.WriteLine($"rtfc inbox: not dismissed: {dismissed.Unseen.ToString(CultureInfo.InvariantCulture)} new event(s) came in after it was last shown. `rtfc inbox open {dismissId}` shows them; dismiss it after that.");
+                    return 1;
             }
 
             ctx.Out.WriteLine("Dismissed.");

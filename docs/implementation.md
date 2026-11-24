@@ -439,6 +439,7 @@ block per version.
 | 6 | 0.8.0 | `accounts.login`, `accounts.account_id` (spec §10.5); the source columns of `inbox`, `accounts`, `subscriptions` and `source_cursors`, in the schema since v1, come into use |
 | 7 | 0.12.0 | `devices.told_hints`: what each device last heard from us about our hints, so a changed address is announced (spec §8.4) |
 | 8 | 0.15.0 | `accounts.stream`: a feed whose command keeps running and prints a document per change instead of being polled (spec §10.1) |
+| 9 | 0.15.1 | `inbox.seen_event`: the newest event a source item was shown with, so a dismissal never swallows a later one (spec §10.3) |
 
 ## Known gaps
 

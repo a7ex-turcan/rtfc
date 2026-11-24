@@ -541,6 +541,7 @@ A document `{ "v": 1, "error": "…" }` is the feed reporting its own trouble: t
 - **Involvement by default.** Only events that involve you are kept. Anything broader has to be listed explicitly: `opened`, someone else's new pull request whether or not it involves you, reaches only a subscription whose `events` names it. A subscription without `events` gets the ten involvement types, and that list never grows, because it is stored and hashed with the entry and a longer one would send every such subscription back to `pending_approval` on upgrade.
 - **Your own actions are suppressed.** Your own comments and transitions never notify you.
 - **Coalescing per entity.** There is one inbox item per ticket, PR, or page, identified by `entity_key`, which reuses the `thread` concept. New events append to that item's history, and an item that was already read goes back to `parked`. The status line counts entities, not events: five updates to PAY-123 are one line, "PAY-123 · 5 updates".
+- **A dismissal covers what was shown.** An item records the newest event it was shown with, when it is pushed into a session or opened (`inbox.seen_event`). Dismissing it, through `inbox_dismiss`, `rtfc inbox dismiss` or a session's "Nothing to do" or "Dismiss", leaves it `parked` while it has newer events, and says how many: a session dismissing the item it just handled must not swallow the event that came in during its turn and is waiting to go in when the turn ends. An item never shown dismisses as it always has.
 
 ### 10.4 Inbound modes for sources
 
@@ -661,6 +662,7 @@ CREATE TABLE inbox (
   entity_key  TEXT,                               -- "jira:PAY-123"
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
+  seen_event  TEXT,                               -- the newest event shown, by a push or by opening it (§10.3)
   draft       TEXT,                               -- output of a `prepare` run, or the auto-answer that was sent
   note        TEXT,                               -- a line for the human: why not auto-answered, what became of the reply
   auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message

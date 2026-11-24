@@ -104,9 +104,9 @@ public class OutboxTests : IAsyncLifetime
         Assert.Contains("not delivered", _alex.Node.Open(question.MessageId!)!.Note);
         Assert.Empty(_alex.Node.ListOutbox());
 
-        Assert.True(_alex.Node.Dismiss(notice.Id));
+        Assert.Equal(DismissStatus.Dismissed, _alex.Node.Dismiss(notice.Id).Status);
         Assert.Empty(_alex.Node.ListInbox(InboxState.Parked));
-        Assert.False(_alex.Node.Dismiss("01J8ZQ4Y7K3M9V2T6H0XWBNC5R"));
+        Assert.Equal(DismissStatus.NotFound, _alex.Node.Dismiss("01J8ZQ4Y7K3M9V2T6H0XWBNC5R").Status);
     }
 
     [Fact]

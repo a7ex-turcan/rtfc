@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -153,6 +153,18 @@ public sealed class Database : IDisposable
                 }
 
                 Execute("UPDATE meta SET value = '8' WHERE key = 'schema_version'");
+                version = 8;
+            }
+
+            if (version < 9)
+            {
+                // v9 (spec §10.3): the newest event of a source item that was shown, so a dismissal never swallows a later one.
+                if (!HasColumn("inbox", "seen_event"))
+                {
+                    Execute("ALTER TABLE inbox ADD COLUMN seen_event TEXT");
+                }
+
+                Execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -408,6 +420,12 @@ public sealed class Database : IDisposable
     public void SetMessageNote(string id, string? note, DateTimeOffset now) => Execute(
         $"UPDATE inbox SET note = $note, updated_at = $now WHERE id = $id AND {MessageKinds}",
         ("$note", note), ("$now", Timestamps.Format(now)), ("$id", id));
+
+    /// <summary>The newest event of a source item that was shown, by a push into a session or by opening it; null if it never was (spec §10.3).</summary>
+    public string? GetSeenEvent(string id) => Scalar<string>("SELECT seen_event FROM inbox WHERE id = $id AND kind = 'source'", ("$id", id));
+
+    public void SetSeenEvent(string id, string eventId) => Execute(
+        "UPDATE inbox SET seen_event = $seen WHERE id = $id AND kind = 'source'", ("$seen", eventId), ("$id", id));
 
     /// <summary>Moves a message through the auto-answer states, optionally recording a note, a draft and one more attempt.</summary>
     public void SetAutoState(string id, string state, string? note, string? draft, bool countAttempt, DateTimeOffset now) => Execute(

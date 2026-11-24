@@ -20,7 +20,14 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Fixed
+
+- A source item dismissed in your session could swallow an event that came in while the
+  session was busy with it: the new event waited for the turn to end, the session dismissed
+  the item for what it had handled, and the new event was never shown. Dismissing, from the
+  session, a gate answer or `rtfc inbox dismiss`, now leaves an item parked while it has
+  events newer than the ones it was shown, and says how many; it goes into the session when
+  the turn ends, or opening it again shows them. The database moves to schema 9.
 
 ## [0.15.0] - 2026-11-24
 

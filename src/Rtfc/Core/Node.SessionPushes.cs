@@ -31,7 +31,8 @@ public sealed partial class Node
 {
     private enum PushOutcome { Sent, Held, NotOpen, NotShown }
 
-    private sealed record HeldPush(string MessageId, SessionEvent Event, Func<DateTimeOffset, string> SentNote);
+    /// <summary>A push waiting for its session to go idle. <c>ShownEvent</c> is a source item's newest event as of the push, recorded once it goes in.</summary>
+    private sealed record HeldPush(string MessageId, SessionEvent Event, Func<DateTimeOffset, string> SentNote, string? ShownEvent);
 
     /// <summary>A push sent into a session and not yet seen there. <c>Since</c> moves on while the session is busy.</summary>
     private sealed record UnseenPush(SessionEvent Event, DateTimeOffset SentAt, DateTimeOffset Since);
@@ -56,8 +57,10 @@ public sealed partial class Node
     /// <summary>
     /// Sends the push now if the session is idle and nothing of its waits ahead, else holds it. <paramref name="record"/> writes the
     /// item's note for the outcome and runs under the lock, so a held item's note is written before a flush can send it.
+    /// <paramref name="shownEvent"/> is a source item's newest event as of this push: once the push goes in, the item counts as
+    /// shown up to it, and a dismissal covers no further (spec §10.3).
     /// </summary>
-    private PushOutcome PushOrHold(string session, SessionEvent sessionEvent, Func<DateTimeOffset, string> sentNote, Action<PushOutcome> record)
+    private PushOutcome PushOrHold(string session, SessionEvent sessionEvent, Func<DateTimeOffset, string> sentNote, Action<PushOutcome> record, string? shownEvent = null)
     {
         if (_sessions is null)
         {
@@ -80,6 +83,11 @@ public sealed partial class Node
             else if (!(_held.TryGetValue(session, out var waiting) && waiting.Count > 0) && IsIdle(session, now) && _sessions.TryPush(session, sessionEvent))
             {
                 Sent(session, sessionEvent, now);
+                if (shownEvent is not null)
+                {
+                    _db.SetSeenEvent(sessionEvent.Id, shownEvent);
+                }
+
                 outcome = PushOutcome.Sent;
             }
             else
@@ -89,7 +97,7 @@ public sealed partial class Node
                     _held[session] = list = [];
                 }
 
-                list.Add(new HeldPush(sessionEvent.Id, sessionEvent, sentNote));
+                list.Add(new HeldPush(sessionEvent.Id, sessionEvent, sentNote, shownEvent));
                 outcome = PushOutcome.Held;
             }
 
@@ -380,6 +388,11 @@ public sealed partial class Node
 
         foreach (var push in sent)
         {
+            if (push.ShownEvent is not null)
+            {
+                _db.SetSeenEvent(push.MessageId, push.ShownEvent);
+            }
+
             _db.SetMessageNote(push.MessageId, push.SentNote(now), now);
             _logger.LogInformation("Held push {Id} sent now that its session is idle", push.MessageId);
         }

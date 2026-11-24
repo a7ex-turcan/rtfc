@@ -272,8 +272,8 @@ public static class DaemonHost
         });
 
         app.MapPost(IpcRoutes.Inbox + "/{id}/dismiss", IResult (string id) =>
-            node.Dismiss(id)
-                ? Results.StatusCode(204)
+            node.Dismiss(id) is { Status: not DismissStatus.NotFound } result
+                ? Results.Json(result, IpcJson.Default.DismissResult)
                 : Results.Json(new IpcError($"No message with id '{id}'."), IpcJson.Default.IpcError, statusCode: 404));
 
         app.MapPost(IpcRoutes.Inbox + "/{id}/gate", async Task<IResult> (string id, HttpContext context) =>

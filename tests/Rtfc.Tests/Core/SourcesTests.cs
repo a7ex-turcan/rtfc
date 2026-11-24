@@ -123,7 +123,7 @@ public class SourcesTests : IAsyncLifetime
         Assert.Equal(1, StatusFile.Read(_alex.Home.StatusPath)!.Projects.Single().Value.Tickets);
 
         // A dismissed ticket that moves again is news: it comes back with its history intact.
-        Assert.True(_alex.Node.Dismiss(items[0].Id));
+        Assert.Equal(DismissStatus.Dismissed, _alex.Node.Dismiss(items[0].Id).Status);
         _jira.Queue(Event("jira:PAY-1:cl:4", "jira:PAY-1", SourceEventType.StatusChanged, "Dan", "PAY-1 Retry policy", "Dan moved it from \"In Progress\" to \"Done\"", T0.AddMinutes(9)));
         await _alex.Node.PollDueAsync(Ct);
         var back = Assert.Single(_alex.Node.ListInbox(InboxState.Parked), i => i.Entity == "PAY-1");

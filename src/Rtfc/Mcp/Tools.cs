@@ -113,7 +113,8 @@ public static class Tools
 
         Tool("inbox_dismiss",
             "Mark a message, notice or source item dismissed without answering it. It leaves the parked list and the status line; a source "
-            + "item comes back as parked if something new happens to its ticket, pull request or page.",
+            + "item comes back as parked if something new happens to its ticket, pull request or page. A source item that got new events "
+            + "after it was last shown to you is not dismissed: open it again first.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -204,7 +205,15 @@ public static class Tools
             case "inbox_dismiss":
                 {
                     var id = Required(arguments, "id");
-                    return await client.DismissAsync(id, cancellationToken).ConfigureAwait(false) ? $"Dismissed {id}." : $"No message with id {id}.";
+                    var dismissed = await client.DismissAsync(id, cancellationToken).ConfigureAwait(false);
+                    return dismissed.Status switch
+                    {
+                        DismissStatus.Dismissed => $"Dismissed {id}.",
+                        DismissStatus.Unseen => $"Not dismissed: {dismissed.Unseen.ToString(System.Globalization.CultureInfo.InvariantCulture)} new event(s) "
+                            + $"came in after {id} was last shown to you, and dismissing would hide them. It stays in the inbox. Open it with inbox_open "
+                            + "to see what is new before dismissing it; if it is pushed into this session, it comes in again when this turn ends.",
+                        _ => $"No message with id {id}.",
+                    };
                 }
 
             case "sources":

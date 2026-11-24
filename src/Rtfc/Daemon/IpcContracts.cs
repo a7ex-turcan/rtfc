@@ -101,6 +101,7 @@ public sealed record IpcError(string Error);
 [JsonSerializable(typeof(ToggleRequest))]
 [JsonSerializable(typeof(RenameRequest))]
 [JsonSerializable(typeof(ManagementResult))]
+[JsonSerializable(typeof(DismissResult))]
 [JsonSerializable(typeof(OutboxView[]))]
 [JsonSerializable(typeof(IpcError))]
 [JsonSerializable(typeof(SendResult))]

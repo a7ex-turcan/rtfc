@@ -142,6 +142,19 @@ public sealed record SourceView(
     bool Stream = false);
 
 /// <summary>
+/// What dismissing a message did (spec §9.2). A source item with <c>Unseen</c> events, ones that came in after the newest it
+/// was shown with, is not dismissed: a dismissal covers what was seen, never what came after it (spec §10.3).
+/// </summary>
+public sealed record DismissResult(string Status, int Unseen = 0);
+
+public static class DismissStatus
+{
+    public const string Dismissed = "dismissed";
+    public const string NotFound = "not_found";
+    public const string Unseen = "unseen";
+}
+
+/// <summary>
 /// A third-party account as <c>rtfc account list</c> shows it: whose token, where, and whether the token file is there.
 /// <c>Stream</c> marks a feed whose command keeps running.
 /// </summary>

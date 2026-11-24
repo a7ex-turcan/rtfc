@@ -322,7 +322,7 @@ public sealed partial class Node
                 }
 
                 _db.SetAutoState(item.Id, InboxState.Parked, note, draft: null, countAttempt: counted, now);
-            });
+            }, EventHistory(item) is [.., var newest] ? newest.ExternalId : null);
         }
 
         _logger.LogInformation("Source item {Entity} in {Project}: {Note}", item.EntityKey, project.Name, note);

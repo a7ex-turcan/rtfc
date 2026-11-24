@@ -92,17 +92,17 @@ public sealed class DaemonClient : IDisposable
     public Task<ProjectView> RegisterProjectAsync(string directory, string? session, CancellationToken cancellationToken) =>
         PostAsync(IpcRoutes.Projects, new ProjectRequest(directory, session), IpcJson.Default.ProjectRequest, IpcJson.Default.ProjectView, cancellationToken);
 
-    /// <summary>False when there is no such message.</summary>
-    public async Task<bool> DismissAsync(string id, CancellationToken cancellationToken)
+    /// <summary>Dismissed, not found, or kept because events came in after the item was last shown.</summary>
+    public async Task<DismissResult> DismissAsync(string id, CancellationToken cancellationToken)
     {
         using var response = await _http.PostAsync(IpcRoutes.InboxDismiss(id), content: null, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            return false;
+            return new DismissResult(DismissStatus.NotFound);
         }
 
         await ThrowIfErrorAsync(response, cancellationToken).ConfigureAwait(false);
-        return true;
+        return (await response.Content.ReadFromJsonAsync(IpcJson.Default.DismissResult, cancellationToken).ConfigureAwait(false))!;
     }
 
     public Task<OutboxView[]> OutboxAsync(CancellationToken cancellationToken) =>

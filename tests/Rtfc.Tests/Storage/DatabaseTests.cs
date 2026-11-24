@@ -44,6 +44,23 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void A_version_8_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.15.0 left it: source items without a record of what was shown.
+            db.Execute("ALTER TABLE inbox DROP COLUMN seen_event");
+            db.Execute("UPDATE meta SET value = '8' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.Null(migrated.GetSeenEvent("01J8ZQ4Y7K3M9V2T6H0XWBNC5R"));
+    }
+
+    [Fact]
     public void A_version_7_file_is_migrated_on_open()
     {
         using var temp = new TempHome();

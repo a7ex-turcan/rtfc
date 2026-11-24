@@ -89,7 +89,7 @@ public class SessionIdleTests : IAsyncLifetime
         _jira.Queue(Event("a", "jira:PAY-1", T0), Event("b", "jira:PAY-2", T0.AddMinutes(1)), Event("c", "jira:PAY-3", T0.AddMinutes(2)));
         await _alex.Node.PollDueAsync(Ct);
         var ids = _alex.Node.ListInbox(InboxState.Parked).ToDictionary(i => i.Entity!, i => i.Id);
-        Assert.True(_alex.Node.Dismiss(ids["PAY-2"]));
+        Assert.Equal(DismissStatus.Dismissed, _alex.Node.Dismiss(ids["PAY-2"]).Status);
 
         SessionActivity.MarkIdle(_alex.Home, Session);
         _alex.Node.FlushHeldPushes();
@@ -103,6 +103,56 @@ public class SessionIdleTests : IAsyncLifetime
         _alex.Node.FlushHeldPushes();
 
         Assert.Equal([ids["PAY-1"], ids["PAY-3"]], _alex.Sessions.Pushed.Select(p => p.Event.Id));
+    }
+
+    [Fact]
+    public async Task Dismissing_an_item_in_its_turn_does_not_swallow_an_event_that_came_in_meanwhile()
+    {
+        // The item goes in, and its turn begins.
+        _jira.Queue(Event("a", "jira:PAY-1", T0));
+        await _alex.Node.PollDueAsync(Ct);
+        var id = Assert.Single(_alex.Sessions.Pushed).Event.Id;
+        SessionActivity.MarkBusy(_alex.Home, Session);
+
+        // Mid-turn, a new event on the same item waits for the turn to end.
+        _jira.Queue(Event("b", "jira:PAY-1", T0.AddMinutes(5)));
+        await _alex.Node.PollDueAsync(Ct);
+        Assert.Single(_alex.Sessions.Pushed);
+
+        // Done with what it was shown, the session dismisses the item, and the hook reports "Dismiss": neither swallows the new event.
+        var dismissed = _alex.Node.Dismiss(id);
+        Assert.Equal((DismissStatus.Unseen, 1), (dismissed.Status, dismissed.Unseen));
+        Assert.True(_alex.Node.RecordGateDecision(id, GateOutcome.Dismissed));
+        Assert.True(_alex.Node.RecordGateDecision(id, GateOutcome.NothingToDo));
+        var kept = _alex.Database.GetMessage(id)!;
+        Assert.Equal(InboxState.Parked, kept.State);
+        Assert.Contains("1 new event(s) came in after it was shown in your Claude Code session in payments-api", kept.Note);
+
+        // The turn ends: the item goes in again with the new event, and is shown up to it, so now it can be dismissed.
+        SessionActivity.MarkIdle(_alex.Home, Session);
+        _alex.Node.FlushHeldPushes();
+        Assert.Equal([id, id], _alex.Sessions.Pushed.Select(p => p.Event.Id));
+        Assert.Equal(2, _alex.Sessions.Pushed[1].Event.Content.Split("Dan assigned it to you").Length - 1);
+        Assert.Equal(DismissStatus.Dismissed, _alex.Node.Dismiss(id).Status);
+        Assert.Equal(InboxState.Dismissed, _alex.Database.GetMessage(id)!.State);
+    }
+
+    [Fact]
+    public async Task An_item_opened_before_a_new_event_is_opened_again_before_it_can_be_dismissed_and_one_never_shown_dismisses_as_before()
+    {
+        SessionActivity.MarkBusy(_alex.Home, Session);
+        _jira.Queue(Event("a", "jira:PAY-1", T0), Event("x", "jira:PAY-9", T0));
+        await _alex.Node.PollDueAsync(Ct);
+        var ids = _alex.Node.ListInbox(InboxState.Parked).ToDictionary(i => i.Entity!, i => i.Id);
+        Assert.Equal(DismissStatus.Dismissed, _alex.Node.Dismiss(ids["PAY-9"]).Status);
+
+        _alex.Node.Open(ids["PAY-1"]);
+        _jira.Queue(Event("b", "jira:PAY-1", T0.AddMinutes(1)));
+        await _alex.Node.PollDueAsync(Ct);
+        Assert.Equal(DismissStatus.Unseen, _alex.Node.Dismiss(ids["PAY-1"]).Status);
+
+        _alex.Node.Open(ids["PAY-1"]);
+        Assert.Equal(DismissStatus.Dismissed, _alex.Node.Dismiss(ids["PAY-1"]).Status);
     }
 
     [Fact]

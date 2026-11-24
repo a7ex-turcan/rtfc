@@ -55,7 +55,7 @@ public class DaemonTests
         Assert.StartsWith("rtfc1_", invite.Token);
         Assert.Equal(AcceptStatus.Invalid, (await client.AcceptAsync("nonsense", Ct)).Status);
         Assert.Equal(SendStatus.Rejected, (await client.SendAsync("nobody", "hi", leave: false, Ct)).Status);
-        Assert.False(await client.DismissAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", Ct));
+        Assert.Equal(DismissStatus.NotFound, (await client.DismissAsync("01J8ZQ4Y7K3M9V2T6H0XWBNC5R", Ct)).Status);
         Assert.Empty(await client.OutboxAsync(Ct));
         Assert.Equal(ManagementStatus.Ok, (await client.AwayAsync(true, Ct)).Status);
         Assert.True((await client.TryStatusAsync(Ct))!.Away);

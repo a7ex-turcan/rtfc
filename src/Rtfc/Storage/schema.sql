@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS inbox (
   entity_key  TEXT,                               -- "jira:PAY-123"
   url         TEXT,
   events      TEXT,                               -- JSON history of SourceEvent, newest last
+  seen_event  TEXT,                               -- the newest event shown, by a push or by opening it; a dismissal covers no further (v9)
   draft       TEXT,                               -- output of a `prepare` run, or an auto-answer that could not be delivered
   note        TEXT,                               -- a line for the human: why it was not auto-answered, what happened to the reply (v2, renamed v3)
   auto_attempts INTEGER NOT NULL DEFAULT 0,       -- auto-answer runs started for this message (v2)

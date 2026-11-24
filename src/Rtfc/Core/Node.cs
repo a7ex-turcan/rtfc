@@ -738,18 +738,53 @@ public sealed partial class Node : IAsyncDisposable
     private static Sources.SourceEvent[] EventHistory(InboxMessage m) =>
         m.Kind == InboxKind.Source && m.Events is { } json ? System.Text.Json.JsonSerializer.Deserialize(json, Sources.SourceJson.Default.SourceEventArray) ?? [] : [];
 
-    /// <summary>Marks a message dismissed without answering it (spec §9.2). False when there is no such message.</summary>
-    public bool Dismiss(string id)
+    /// <summary>
+    /// Marks a message dismissed without answering it (spec §9.2). A source item with events newer than the newest it was shown
+    /// with stays parked instead, and the result says how many: a session that dismisses an item it handled must not swallow the
+    /// event that came in while it was busy, which is waiting to go into it (spec §10.3).
+    /// </summary>
+    public DismissResult Dismiss(string id)
     {
-        if (_db.GetMessage(id) is null)
+        var message = _db.GetMessage(id);
+        if (message is null)
         {
-            return false;
+            return new DismissResult(DismissStatus.NotFound);
+        }
+
+        if (UnseenEvents(message) is > 0 and var unseen)
+        {
+            return new DismissResult(DismissStatus.Unseen, unseen);
         }
 
         _db.SetMessageState(id, InboxState.Dismissed, Self.DeviceId, _clock.GetUtcNow());
         WriteStatus();
         InboxChanged?.Invoke();
-        return true;
+        return new DismissResult(DismissStatus.Dismissed);
+    }
+
+    /// <summary>
+    /// How many of a source item's events came in after the newest one it was shown with, by a push into a session or by being
+    /// opened. Zero for an item never shown, which dismisses as it always has; all of them if the shown one has aged out of the history.
+    /// </summary>
+    private int UnseenEvents(InboxMessage message)
+    {
+        if (message.Kind != InboxKind.Source || _db.GetSeenEvent(message.Id) is not { } seen)
+        {
+            return 0;
+        }
+
+        var history = EventHistory(message);
+        var at = Array.FindLastIndex(history, e => e.ExternalId == seen);
+        return at < 0 ? history.Length : history.Length - 1 - at;
+    }
+
+    /// <summary>Records that a source item was shown up to its newest event now.</summary>
+    private void MarkShown(InboxMessage message)
+    {
+        if (message.Kind == InboxKind.Source && EventHistory(message) is [.., var newest])
+        {
+            _db.SetSeenEvent(message.Id, newest.ExternalId);
+        }
     }
 
     /// <summary>Marks a parked message read and, if the contact gets receipts from us, queues one (spec §7.3).</summary>
@@ -762,6 +797,7 @@ public sealed partial class Node : IAsyncDisposable
         }
 
         var contact = _db.GetContact(message.FromPerson);
+        MarkShown(message);
         if (message.State == InboxState.Parked)
         {
             _db.SetMessageState(id, InboxState.Read, handledBy: null, _clock.GetUtcNow());

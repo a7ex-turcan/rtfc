@@ -187,6 +187,18 @@ public sealed partial class Node
         var now = _clock.GetUtcNow();
         ShownSomewhere(id);
         var where = message.Kind == InboxKind.Source && message.ProjectId is { } p && _db.GetProject(p) is { } project ? $" in {project.Name}" : "";
+
+        // A decision that would dismiss covers what the session was shown; an event that came in since stays news (spec §10.3).
+        if (outcome is GateOutcome.NothingToDo or GateOutcome.NoAction or GateOutcome.Dismissed && message.Kind == InboxKind.Source
+            && UnseenEvents(message) is > 0 and var unseen)
+        {
+            _db.SetMessageNote(id,
+                $"Not dismissed at {Timestamps.Format(now)}: {unseen.ToString(System.Globalization.CultureInfo.InvariantCulture)} new event(s) came in after it was shown in your Claude Code session{where}. It waits here.", now);
+            WriteStatus();
+            InboxChanged?.Invoke();
+            return true;
+        }
+
         switch (outcome)
         {
             case GateOutcome.Accepted:
