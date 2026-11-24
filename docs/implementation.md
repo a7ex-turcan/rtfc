@@ -421,6 +421,7 @@ they were checked; versions are what they were checked against.
 | Stale hints against a real contact, and both repairs: the owner's DHCP address had moved from .212 to .217 under a frozen `hintHosts`, so a contact on macOS could not reach them while the owner's sends to the contact worked. After `rtfc hints auto`, the owner's next send carried the new hints in its hello and the contact's queued reply arrived within minutes; one second after the 0.12.0 daemon started, it logged `Told maxim/maxims-macbook-pro where to reach us` against that contact's older release | `rtfcd.log`, the inbox, the `seq_in` table | 2026-10-13 |
 | Bitbucket Cloud pull requests carry a `draft` boolean, returned through `fields=values.draft`; a draft's `state` is `OPEN`, so the poll's `state=OPEN&…` list includes drafts; `q=draft = true` is accepted. Three drafts found, all `OPEN` | `GET .../pullrequests` with the scoped token against `isos-permission-engine-sdk` and the 30 most recently updated repositories of the owner's workspace; the live adapter test with `values.draft` added | 2026-11-19 |
 | A feed command over SSH from this Windows machine, `ssh isos-dell pwsh -NoProfile -File …eed.ps1`, runs through `cmd /d /s /c` from the detached runner with stdin closed, exits 0 and prints a version 1 feed (`"items": []` while nothing is unread) that the adapter reads | `FeedLiveTests` with `RTFC_LIVE_FEED` set, and the same command by hand, counting only | 2026-11-23 |
+| A streaming feed over SSH from a detached daemon on this machine: `ssh -o BatchMode=yes -o ServerAliveInterval=30 isos-dell node D:/Tools/teamsfeed/stream.js` gave its first document about 3 s after the stream started and a heartbeat 30 s later, both read (`seen up to` moved by 30 s); the daemon's idle exit and `rtfc daemon stop` both left no `ssh` process behind | `FeedLiveTests` with `RTFC_LIVE_FEED_STREAM`, and a scratch daemon in a temporary `RTFC_HOME` with `alwaysOn` in its own config | 2026-11-23 |
 | `rtfc account add <name> --type feed` in a real pwsh terminal on Windows: with `IsTerminal` accepting the console's own reader, it prompts, runs the SSH feed command once (0 items) and stores it under `keys/accounts/`; the 0.14.0 binary refused the same terminal, as every `account add` had since 0.8.0 | the owner, running the fixed Debug build against their real home and the running 0.14.0 daemon | 2026-11-23 |
 
 ## Schema history
@@ -437,6 +438,7 @@ block per version.
 | 5 | 0.6.0 | `contacts.auto_session`: the Claude Code session that answers a contact in `auto_session` mode (spec §7.3) |
 | 6 | 0.8.0 | `accounts.login`, `accounts.account_id` (spec §10.5); the source columns of `inbox`, `accounts`, `subscriptions` and `source_cursors`, in the schema since v1, come into use |
 | 7 | 0.12.0 | `devices.told_hints`: what each device last heard from us about our hints, so a changed address is announced (spec §8.4) |
+| 8 | 0.15.0 | `accounts.stream`: a feed whose command keeps running and prints a document per change instead of being polled (spec §10.1) |
 
 ## Known gaps
 
@@ -489,6 +491,16 @@ block per version.
   service's error text already does. The seen set is every event id in the last output,
   so an event that leaves the feed and comes back counts as new unless its item still has it.
   The command runs with Claude Code's session variables removed, as the headless runner does.
+- **Streaming feeds (issue #14) run one process per account and selector, not per
+  subscription** as the issue put it, so two projects on one account share a stream as they
+  share a poll. Its lines go through `FeedAdapter.Read` like a poll's output, under the same
+  delivery lock as the poller. Its trouble is a transient error on the cursor, as a failed
+  poll's is, not the `error` status. Its cursor has no next poll. There is no Windows job
+  object tying the child to the daemon: a daemon that dies without stopping its streams
+  leaves the pipe closed, and a producer that keeps its once-a-minute promise fails its next
+  write and exits (the Teams producer was seen gone within 30 s). A stream lives only as
+  long as the daemon, so with no session open and `alwaysOn` off, chat stops arriving when
+  the daemon idles out, like every source.
 - **Some session endings have not been seen live yet:** "Later", "Keep", and the idle
   notification after an interrupted turn. They are covered by `SourceSessionTests`,
   `SessionIdleTests` and `HookTests` only. The rest ran live (the verified table).

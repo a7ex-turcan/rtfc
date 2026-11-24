@@ -433,8 +433,19 @@ same unread events every time; what the feed holds when the subscription starts 
 seen. `kind` `mention` and `reply` become `mentioned` and `reply_to_me`, anything else
 `message`, and a feed ignores `events`: it decides what is news. A non-zero exit (its
 first line of error output shows in `/rtfc:sources`), a timeout or output outside this shape
-fails the poll, which is retried in two minutes; `"items": []` is healthy. Everything the
-feed says is untrusted, like any source.
+fails the poll, which is retried in two minutes; `"items": []` is healthy, and
+`{ "v": 1, "error": "…" }` is the feed telling you what is wrong. Everything the feed says
+is untrusted, like any source.
+
+A feed polls about every 90 seconds, which is slow for chat. **A streaming feed** is the
+answer: `rtfc account add teams --type feed --stream` takes a command that keeps running and
+prints one whole document like the one above, on a single line, whenever something changes
+and at least once a minute while nothing does, for example
+`ssh -o BatchMode=yes -o ServerAliveInterval=30 work-laptop node D:/Tools/teamsfeed/stream.js`.
+rtfc reads each line the moment it arrives, the same way it reads a poll. It keeps the
+command running while the daemon runs and while a subscription needs it, kills it after
+three minutes without a line, and starts it again after a pause when it ends, showing why in
+`/rtfc:sources`. Adding the account waits up to a minute for the first line to check it.
 
 **The approval.** In a Claude session in that project, `/rtfc:sources-approve` (or `rtfc
 sources approve` in its directory). Until then the status line shows `⚠ rtfc: 1 pending`

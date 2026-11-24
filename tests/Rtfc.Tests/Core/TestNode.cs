@@ -117,7 +117,8 @@ public sealed class TestNode : IAsyncDisposable
 
     public static async Task<TestNode> StartAsync(
         string handle, string device, AutoAnswerConfig? autoAnswer = null, OutboxSettings? outbox = null,
-        IReadOnlyList<Rtfc.Core.Sources.ISourceAdapter>? adapters = null, SourceSettings? sources = null, SessionPushSettings? pushes = null)
+        IReadOnlyList<Rtfc.Core.Sources.ISourceAdapter>? adapters = null, SourceSettings? sources = null, SessionPushSettings? pushes = null,
+        Rtfc.Core.Sources.IFeedStreamer? streamer = null)
     {
         var temp = new TempHome();
         var self = IdentityStore.Create(temp.Home, handle, device, DateTimeOffset.UtcNow);
@@ -128,7 +129,7 @@ public sealed class TestNode : IAsyncDisposable
         var node = new Node(
             temp.Home, self, db, transport,
             new NodeOptions(["127.0.0.1"], autoAnswer ?? new AutoAnswerConfig(), outbox ?? DefaultOutbox, sources, pushes ?? ImmediatePushes), claude,
-            TimeProvider.System, NullLogger.Instance, sessions, adapters);
+            TimeProvider.System, NullLogger.Instance, sessions, adapters, streamer);
         await node.StartAsync(TestContext.Current.CancellationToken);
         return new TestNode(temp, node, db, transport, claude, sessions);
     }

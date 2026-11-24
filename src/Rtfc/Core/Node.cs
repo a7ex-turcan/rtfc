@@ -32,6 +32,7 @@ public sealed partial class Node : IAsyncDisposable
     private readonly SourceSettings _sourceSettings;
     private readonly SessionPushSettings _pushSettings;
     private readonly Dictionary<string, Sources.ISourceAdapter> _adapters;
+    private readonly Sources.IFeedStreamer _streamer;
     private IReadOnlyList<string> _hintHosts;
     private readonly CancellationTokenSource _stopping = new();
 
@@ -40,8 +41,9 @@ public sealed partial class Node : IAsyncDisposable
 
     public Node(
         RtfcHome home, SelfIdentity self, Database db, ITransport transport, NodeOptions options, IClaudeRunner claude, TimeProvider clock, ILogger logger,
-        ISessionChannel? sessions = null, IReadOnlyList<Sources.ISourceAdapter>? adapters = null)
+        ISessionChannel? sessions = null, IReadOnlyList<Sources.ISourceAdapter>? adapters = null, Sources.IFeedStreamer? streamer = null)
     {
+        _streamer = streamer ?? new Sources.ProcessFeedStreamer();
         _home = home;
         Self = self;
         _db = db;

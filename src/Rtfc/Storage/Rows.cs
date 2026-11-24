@@ -175,8 +175,11 @@ public sealed record InboxMessage(
 /// <summary>What a source item becomes after new events are merged into it: the caller computes it from the stored history, under the lock.</summary>
 public sealed record SourceMerge(string Title, string? Url, string Body, string Events, int Added);
 
-/// <summary>A third-party account (spec §10.5). The token is a file under <c>keys/accounts/</c>, never a column.</summary>
-public sealed record AccountRow(string Name, string Type, string? BaseUrl, string? Login, string? AccountId, DateTimeOffset CreatedAt);
+/// <summary>
+/// A third-party account (spec §10.5). The token, or a feed's command, is a file under <c>keys/accounts/</c>, never a column.
+/// <c>Stream</c> marks a feed whose command keeps running and prints a document per change (spec §10.1).
+/// </summary>
+public sealed record AccountRow(string Name, string Type, string? BaseUrl, string? Login, string? AccountId, DateTimeOffset CreatedAt, bool Stream = false);
 
 /// <summary>One entry of a project's <c>.claude/rtfc.local.json</c>, as approved or waiting (spec §10.2). <c>Selector</c> and <c>Events</c> are JSON.</summary>
 public sealed record SubscriptionRow(string Id, string ProjectId, string Account, string Selector, string Events, string Mode, string Status, string ConfigHash);

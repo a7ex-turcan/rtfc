@@ -414,7 +414,7 @@ public static class DaemonHost
                 return Results.Json(new IpcError("A JSON body with 'name', 'type', 'baseUrl' and 'login' is required."), IpcJson.Default.IpcError, statusCode: 400);
             }
 
-            return Results.Json(node.AddAccount(request.Name, request.Type, request.BaseUrl, request.Login, request.AccountId), IpcJson.Default.ManagementResult);
+            return Results.Json(node.AddAccount(request.Name, request.Type, request.BaseUrl, request.Login, request.AccountId, request.Stream), IpcJson.Default.ManagementResult);
         });
 
         app.MapPost(IpcRoutes.Accounts + "/{name}/remove", IResult (string name) =>

@@ -78,7 +78,7 @@ public sealed record GateRequest(bool Accepted, string? Outcome = null);
 public sealed record ShownRequest(string Session);
 
 /// <summary>A third-party account's public half (spec §10.5). The token never travels here: the CLI wrote it to a file.</summary>
-public sealed record AccountRequest(string Name, string Type, string BaseUrl, string Login, string? AccountId);
+public sealed record AccountRequest(string Name, string Type, string BaseUrl, string Login, string? AccountId, bool Stream = false);
 
 public sealed record IpcError(string Error);
 

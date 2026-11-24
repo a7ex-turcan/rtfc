@@ -20,6 +20,14 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
+### Added
+
+- Streaming feeds: `rtfc account add <name> --type feed --stream` takes a command that keeps
+  running and prints a feed document per line whenever something changes, and rtfc reads each
+  line as it arrives instead of polling every 90 seconds. A stream that stalls for three
+  minutes or ends is shown in `/rtfc:sources` and started again. A feed can also report its
+  own trouble with `{ "v": 1, "error": "…" }`. The database moves to schema 8.
+
 ### Fixed
 
 - `rtfc account add` refused to run in a real terminal ("run this in a real terminal"), for

@@ -85,11 +85,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS inbox_entity ON inbox (project_id, entity_key)
 
 CREATE TABLE IF NOT EXISTS accounts (            -- secrets live in the keychain / keys dir
   name        TEXT PRIMARY KEY,
-  type        TEXT NOT NULL,                      -- jira | confluence | bitbucket | github
+  type        TEXT NOT NULL,                      -- jira | confluence | bitbucket | github | feed
   base_url    TEXT,
   created_at  TEXT NOT NULL,
   login       TEXT,                               -- the e-mail the token belongs to (Basic auth), schema v6
-  account_id  TEXT                                -- the service's id for the user, to recognize their own actions and mentions (v6)
+  account_id  TEXT,                               -- the service's id for the user, to recognize their own actions and mentions (v6)
+  stream      INTEGER NOT NULL DEFAULT 0          -- a feed whose command keeps running and prints a document per change (v8)
 );
 
 CREATE TABLE IF NOT EXISTS projects (

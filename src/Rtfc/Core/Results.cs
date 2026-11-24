@@ -138,10 +138,14 @@ public sealed record SourceView(
     DateTimeOffset? SeenUpTo,
     DateTimeOffset? NextPollAt,
     string? LastError,
-    string? FileError);
+    string? FileError,
+    bool Stream = false);
 
-/// <summary>A third-party account as <c>rtfc account list</c> shows it: whose token, where, and whether the token file is there.</summary>
-public sealed record AccountView(string Name, string Type, string BaseUrl, string Login, string? AccountId, DateTimeOffset CreatedAt, int Subscriptions, bool HasToken);
+/// <summary>
+/// A third-party account as <c>rtfc account list</c> shows it: whose token, where, and whether the token file is there.
+/// <c>Stream</c> marks a feed whose command keeps running.
+/// </summary>
+public sealed record AccountView(string Name, string Type, string BaseUrl, string Login, string? AccountId, DateTimeOffset CreatedAt, int Subscriptions, bool HasToken, bool Stream = false);
 
 public sealed record InviteResult(string Token, DateTimeOffset ExpiresAt, string[] Hints);
 

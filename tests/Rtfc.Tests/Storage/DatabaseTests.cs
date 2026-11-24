@@ -44,6 +44,27 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void A_version_7_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.14.x left it: accounts without the stream flag.
+            db.UpsertAccount(new AccountRow("teams", "feed", "", "", "feed", DateTimeOffset.UtcNow));
+            db.Execute("ALTER TABLE accounts DROP COLUMN stream");
+            db.Execute("UPDATE meta SET value = '7' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.False(migrated.GetAccount("teams")!.Stream);
+
+        migrated.UpsertAccount(migrated.GetAccount("teams")! with { Stream = true });
+        Assert.True(migrated.GetAccount("teams")!.Stream);
+    }
+
+    [Fact]
     public void A_version_6_file_is_migrated_on_open()
     {
         using var temp = new TempHome();

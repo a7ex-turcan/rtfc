@@ -1221,7 +1221,7 @@ public static class Commands
     /// </summary>
     public static async Task<int> AccountAsync(CommandContext ctx, IReadOnlyList<string> args, TextReader? stdin)
     {
-        var line = new CommandLine(args);
+        var line = new CommandLine(args, "stream");
         switch (line.Positionals.ToArray())
         {
             case ["add", var name]:
@@ -1264,14 +1264,14 @@ public static class Commands
 
                     foreach (var a in accounts)
                     {
-                        ctx.Out.WriteLine($"{a.Name,-16} {a.Type,-10} {a.BaseUrl}  {a.Login}  {(a.Type == Core.Sources.FeedAdapter.TypeName ? (a.HasToken ? "command stored" : "NO COMMAND") : a.HasToken ? "token stored" : "NO TOKEN")}  {a.Subscriptions} subscription(s)");
+                        ctx.Out.WriteLine($"{a.Name,-16} {a.Type,-10} {a.BaseUrl}  {a.Login}  {(a.Type == Core.Sources.FeedAdapter.TypeName ? (a.HasToken ? "command stored" : "NO COMMAND") + (a.Stream ? " (stream)" : "") : a.HasToken ? "token stored" : "NO TOKEN")}  {a.Subscriptions} subscription(s)");
                     }
 
                     return 0;
                 }
 
             default:
-                ctx.Error.WriteLine("usage: rtfc account add <name> --type jira --url <https://site.atlassian.net> --login <email> | add <name> --type feed | list | remove <name>");
+                ctx.Error.WriteLine("usage: rtfc account add <name> --type jira --url <https://site.atlassian.net> --login <email> | add <name> --type feed [--stream] | list | remove <name>");
                 return 2;
         }
     }
@@ -1289,7 +1289,7 @@ public static class Commands
 
         if (type == Core.Sources.FeedAdapter.TypeName)
         {
-            return await AddFeedAccountAsync(ctx, name, stdin).ConfigureAwait(false);
+            return await AddFeedAccountAsync(ctx, name, stdin, line.Flag("stream")).ConfigureAwait(false);
         }
 
         if (string.IsNullOrWhiteSpace(type) || string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(login))
@@ -1373,15 +1373,17 @@ public static class Commands
     /// project's subscriptions file, which anything that can write to the project can edit. It runs once here, so a broken
     /// command or a feed in the wrong shape shows up now rather than as a subscription error later.
     /// </summary>
-    private static async Task<int> AddFeedAccountAsync(CommandContext ctx, string name, TextReader? stdin)
+    private static async Task<int> AddFeedAccountAsync(CommandContext ctx, string name, TextReader? stdin, bool stream)
     {
         if (!IsTerminal(stdin, Console.In, Console.IsInputRedirected))
         {
-            ctx.Error.WriteLine("rtfc account: run this in a real terminal. A feed's command is typed there: the daemon runs it as you on every poll, so it never comes from a command line, a slash command or Claude.");
+            ctx.Error.WriteLine("rtfc account: run this in a real terminal. A feed's command is typed there: the daemon runs it as you, so it never comes from a command line, a slash command or Claude.");
             return 1;
         }
 
-        ctx.Out.WriteLine("The command prints the feed as JSON (see the README). rtfc runs it as you, from your home directory, on every poll.");
+        ctx.Out.WriteLine(stream
+            ? "The command keeps running and prints one feed document per line, as JSON, whenever something changes (see the README). rtfc keeps it running as you, from your home directory, while the daemon runs."
+            : "The command prints the feed as JSON (see the README). rtfc runs it as you, from your home directory, on every poll.");
         ctx.Out.Write("Command: ");
         // The terminal itself, as for the hidden token: input is not redirected here, so there is no reader to take it from.
         var command = Console.ReadLine()?.Trim();
@@ -1391,11 +1393,13 @@ public static class Commands
             return 1;
         }
 
-        Core.Sources.SourceIdentity identity;
+        string described;
         try
         {
-            identity = await new Core.Sources.FeedAdapter(new Core.Sources.ProcessFeedRunner())
-                .IdentifyAsync(new Core.Sources.SourceAccount(name, Core.Sources.FeedAdapter.TypeName, "", "", null, command), ctx.CancellationToken).ConfigureAwait(false);
+            described = stream
+                ? await FirstStreamDocumentAsync(command, ctx.CancellationToken).ConfigureAwait(false)
+                : (await new Core.Sources.FeedAdapter(new Core.Sources.ProcessFeedRunner())
+                    .IdentifyAsync(new Core.Sources.SourceAccount(name, Core.Sources.FeedAdapter.TypeName, "", "", null, command), ctx.CancellationToken).ConfigureAwait(false)).DisplayName;
         }
         catch (Core.Sources.SourceException ex)
         {
@@ -1410,7 +1414,7 @@ public static class Commands
         }
 
         Core.Sources.AccountStore.SaveToken(ctx.Home, name, command);
-        var result = await client.AddAccountAsync(new AccountRequest(name, Core.Sources.FeedAdapter.TypeName, "", "", identity.AccountId), ctx.CancellationToken).ConfigureAwait(false);
+        var result = await client.AddAccountAsync(new AccountRequest(name, Core.Sources.FeedAdapter.TypeName, "", "", Core.Sources.FeedAdapter.TypeName, stream), ctx.CancellationToken).ConfigureAwait(false);
         if (result.Status != ManagementStatus.Ok)
         {
             Core.Sources.AccountStore.DeleteToken(ctx.Home, name);
@@ -1418,10 +1422,36 @@ public static class Commands
             return 1;
         }
 
-        ctx.Out.WriteLine($"Account {name} (feed) added: the command answered with {identity.DisplayName}.");
+        ctx.Out.WriteLine($"Account {name} ({(stream ? "streaming feed" : "feed")}) added: the command answered with {described}.");
         ctx.Out.WriteLine($"The command is in {Core.Sources.AccountStore.TokenPath(ctx.Home, name)}, readable only by you.");
         ctx.Out.WriteLine($"Next: list a subscription under \"sources\" in <project>/.claude/rtfc.local.json with \"account\": \"{name}\", then run /rtfc:sources-approve there. What the feed already holds is taken as seen; only what comes after lands.");
         return 0;
+    }
+
+    /// <summary>
+    /// Starts a streaming feed's command, waits up to a minute for its first line, checks it as a feed document and stops the
+    /// command again: the daemon starts its own once a subscription needs it.
+    /// </summary>
+    private static async Task<string> FirstStreamDocumentAsync(string command, CancellationToken cancellationToken)
+    {
+        using var first = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        string? document = null;
+        Core.Sources.FeedStreamEnd end;
+        try
+        {
+            end = await new Core.Sources.ProcessFeedStreamer().RunAsync(command, line =>
+            {
+                document = line;
+                first.Cancel();
+                return Task.CompletedTask;
+            }, TimeSpan.FromMinutes(1), first.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (document is not null)
+        {
+            return Core.Sources.FeedAdapter.Describe(document);
+        }
+
+        throw new Core.Sources.SourceException(end.Reason);
     }
 
     /// <summary>
@@ -1507,7 +1537,7 @@ public static class Commands
             }
 
             var health = v.LastError is not null ? $"  error: {v.LastError}" : v.SeenUpTo is { } seen ? $"  seen up to {Timestamps.Format(seen)}" : "";
-            ctx.Out.WriteLine($"{v.Project}  {v.Account} ({v.Type})  {v.Mode}  {v.Status}  {v.Selector}  events: {string.Join(",", v.Events)}  parked: {v.Parked}{health}");
+            ctx.Out.WriteLine($"{v.Project}  {v.Account} ({v.Type}{(v.Stream ? ", stream" : "")})  {v.Mode}  {v.Status}  {v.Selector}  events: {string.Join(",", v.Events)}  parked: {v.Parked}{health}");
             if (v.FileError is not null)
             {
                 ctx.Out.WriteLine($"  {v.FileError}");

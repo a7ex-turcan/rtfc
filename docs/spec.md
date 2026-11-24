@@ -508,6 +508,10 @@ The feed contract, version 1. Unknown fields are ignored; an item or event witho
                              "kind": "message", "actor": "Jane Doe", "text": "preview of the newest message" } ] } ] }
 ```
 
+A document `{ "v": 1, "error": "…" }` is the feed reporting its own trouble: the read fails with that reason, cut short like an error output line.
+
+**Streaming feeds.** An account added with `rtfc account add <name> --type feed --stream` (`accounts.stream`) is never polled. Its command keeps running and prints one whole document per line, whenever something changes and at least every minute while nothing does. The daemon reads each line the moment it arrives exactly as it reads a poll's output: the same diff against the cursor, the same first-document rule, the same error document. One process runs per account and selector, shared by every subscription on it as a poll is, started by the source loop's tick when an approved subscription needs it and stopped when none does, when the command changes, or when the daemon stops. Three minutes without a line means the stream is stuck: it is killed. A stream that ends, stalls or prints a line over 1 MiB is an error on its subscriptions, with the last line of its error output, and is started again after 5 s, 15 s, 1 min, then every 2 min while it keeps failing; a run that lasted over two minutes resets that count. A stream lives as long as the daemon, so the daemon's idle exit (§3.1) stops it too. If the daemon dies without stopping it, the pipe closes, and a producer that keeps its once-a-minute promise fails its next write and ends. Adding the account starts the command, waits up to a minute for its first line, checks it, and stops it again.
+
 ### 10.2 Project scoping
 
 - **Session registration.** On start, `rtfc mcp` sends the session's directory to the daemon: `CLAUDE_PROJECT_DIR`, which Claude Code sets to the directory the session started in, else its own working directory. The daemon resolves the project root (the git root, else that directory) and records it in `projects`, keyed by its normalized path and named after its folder. This part shipped early, with project-addressed messages (§7.6).
@@ -676,11 +680,12 @@ CREATE UNIQUE INDEX inbox_entity ON inbox (project_id, entity_key) WHERE kind = 
 
 CREATE TABLE accounts (                           -- secrets live in the keychain / keys dir
   name        TEXT PRIMARY KEY,
-  type        TEXT NOT NULL,                      -- jira | confluence | bitbucket | github
+  type        TEXT NOT NULL,                      -- jira | confluence | bitbucket | github | feed
   base_url    TEXT,
   created_at  TEXT NOT NULL,
   login       TEXT,                               -- the e-mail the token belongs to (Basic auth)
-  account_id  TEXT                                -- the service's id for the user: their own actions and mentions
+  account_id  TEXT,                               -- the service's id for the user: their own actions and mentions
+  stream      INTEGER NOT NULL DEFAULT 0          -- a feed whose command keeps running and prints a document per change
 );
 
 CREATE TABLE projects (

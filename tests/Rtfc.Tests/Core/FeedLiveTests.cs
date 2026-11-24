@@ -5,8 +5,8 @@ using Rtfc.Core.Sources;
 namespace Rtfc.Tests.Core;
 
 /// <summary>
-/// Opt-in: the feed adapter against a real feed command, through the real shell. Skipped unless <c>RTFC_LIVE_FEED</c> holds the
-/// command. Only counts are printed, never what the feed says.
+/// Opt-in: feeds against a real command, through the real shell. Skipped unless <c>RTFC_LIVE_FEED</c> (a polled feed) or
+/// <c>RTFC_LIVE_FEED_STREAM</c> (a streaming one) holds the command. Only counts are printed, never what the feed says.
 /// </summary>
 public class FeedLiveTests
 {
@@ -41,5 +41,41 @@ public class FeedLiveTests
         TestContext.Current.TestOutputHelper?.WriteLine(
             $"identify: {identity.DisplayName}; poll: {result.Events.Count} event(s) across {result.Events.Select(e => e.EntityKey).Distinct().Count()} item(s); "
             + $"types: {string.Join(", ", result.Events.GroupBy(e => e.EventType).Select(g => $"{g.Key}={g.Count()}"))}");
+    }
+
+    [Fact]
+    public async Task The_real_stream_prints_feed_documents_line_by_line()
+    {
+        var command = Environment.GetEnvironmentVariable("RTFC_LIVE_FEED_STREAM");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(command), "Set RTFC_LIVE_FEED_STREAM to a streaming feed command to run this against a real stream.");
+
+        // Two lines: the first document, then the next change or heartbeat, which the producer owes within a minute.
+        var lines = new List<string>();
+        using var enough = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        try
+        {
+            var end = await new ProcessFeedStreamer().RunAsync(command!, async line =>
+            {
+                lines.Add(line);
+                if (lines.Count == 2)
+                {
+                    await enough.CancelAsync();
+                }
+            }, TimeSpan.FromSeconds(90), enough.Token);
+            Assert.Fail($"The stream ended before two lines: {end.Reason}");
+        }
+        catch (OperationCanceledException) when (lines.Count == 2)
+        {
+        }
+
+        var cursor = SourceCursor.Empty;
+        foreach (var line in lines)
+        {
+            var result = FeedAdapter.Read("live", line, cursor, DateTimeOffset.UtcNow);
+            Assert.All(result.Events, e => Assert.True(Node.IsValidEntityKey(e.EntityKey), e.EntityKey));
+            cursor = result.Next;
+        }
+
+        TestContext.Current.TestOutputHelper?.WriteLine($"two lines: {string.Join("; ", lines.Select(FeedAdapter.Describe))}");
     }
 }

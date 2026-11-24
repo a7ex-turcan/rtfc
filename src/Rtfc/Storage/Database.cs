@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -141,6 +141,18 @@ public sealed class Database : IDisposable
                 }
 
                 Execute("UPDATE meta SET value = '7' WHERE key = 'schema_version'");
+                version = 7;
+            }
+
+            if (version < 8)
+            {
+                // v8 (spec §10.1): a feed account whose command streams instead of being polled.
+                if (!HasColumn("accounts", "stream"))
+                {
+                    Execute("ALTER TABLE accounts ADD COLUMN stream INTEGER NOT NULL DEFAULT 0");
+                }
+
+                Execute("UPDATE meta SET value = '8' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -545,15 +557,17 @@ public sealed class Database : IDisposable
 
     public void UpsertAccount(AccountRow a) => Execute(
         """
-        INSERT INTO accounts (name, type, base_url, created_at, login, account_id) VALUES ($name, $type, $url, $created, $login, $account)
-        ON CONFLICT (name) DO UPDATE SET type = excluded.type, base_url = excluded.base_url, login = excluded.login, account_id = excluded.account_id
+        INSERT INTO accounts (name, type, base_url, created_at, login, account_id, stream) VALUES ($name, $type, $url, $created, $login, $account, $stream)
+        ON CONFLICT (name) DO UPDATE SET type = excluded.type, base_url = excluded.base_url, login = excluded.login, account_id = excluded.account_id,
+          stream = excluded.stream
         """,
-        ("$name", a.Name), ("$type", a.Type), ("$url", a.BaseUrl), ("$created", Timestamps.Format(a.CreatedAt)), ("$login", a.Login), ("$account", a.AccountId));
+        ("$name", a.Name), ("$type", a.Type), ("$url", a.BaseUrl), ("$created", Timestamps.Format(a.CreatedAt)), ("$login", a.Login), ("$account", a.AccountId),
+        ("$stream", a.Stream ? 1 : 0));
 
     private static AccountRow ReadAccount(SqliteDataReader r) =>
-        new(r.GetString(0), r.GetString(1), StringOrNull(r, 2), StringOrNull(r, 3), StringOrNull(r, 4), Timestamps.Parse(r.GetString(5)));
+        new(r.GetString(0), r.GetString(1), StringOrNull(r, 2), StringOrNull(r, 3), StringOrNull(r, 4), Timestamps.Parse(r.GetString(5)), r.GetInt64(6) != 0);
 
-    private const string AccountColumns = "name, type, base_url, login, account_id, created_at";
+    private const string AccountColumns = "name, type, base_url, login, account_id, created_at, stream";
 
     public AccountRow? GetAccount(string name) =>
         QuerySingle($"SELECT {AccountColumns} FROM accounts WHERE name = $name", ReadAccount, ("$name", name));

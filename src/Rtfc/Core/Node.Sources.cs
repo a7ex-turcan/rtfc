@@ -9,10 +9,18 @@ using Rtfc.Storage;
 
 namespace Rtfc.Core;
 
-/// <summary>How often the source loop wakes, and how long a subscription waits between polls (spec §10.1). Tests shorten both.</summary>
-public sealed record SourceSettings(TimeSpan Tick, TimeSpan Interval)
+/// <summary>
+/// How often the source loop wakes, and how long a subscription waits between polls (spec §10.1). For a streaming feed, how
+/// long without a line counts as stalled, and how long to wait before each restart in a row. Tests shorten them.
+/// </summary>
+public sealed record SourceSettings(TimeSpan Tick, TimeSpan Interval, TimeSpan? StreamStall = null, TimeSpan[]? StreamBackoff = null)
 {
     public static readonly SourceSettings Default = new(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90));
+
+    /// <summary>The producer repeats its document at least every minute, so three without a line means it is stuck.</summary>
+    public TimeSpan Stall => StreamStall ?? TimeSpan.FromMinutes(3);
+
+    public TimeSpan[] Backoff => StreamBackoff ?? [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2)];
 }
 
 /// <summary>
@@ -71,6 +79,9 @@ public sealed partial class Node
             {
             }
         }
+
+        // After the loop, so no last tick starts a stream again.
+        await StopStreamsAsync().ConfigureAwait(false);
     }
 
     private async Task SourcesLoopAsync(CancellationToken cancellationToken)
@@ -121,8 +132,15 @@ public sealed partial class Node
         var now = _clock.GetUtcNow();
         var active = _db.ListSubscriptions().Where(s => s.Status is SubscriptionStatus.Active or SubscriptionStatus.Error).ToList();
         var accounts = _db.ListAccounts().ToDictionary(a => a.Name, StringComparer.Ordinal);
-        foreach (var group in active.GroupBy(PollKeyOf, StringComparer.Ordinal))
+        var groups = active.GroupBy(PollKeyOf, StringComparer.Ordinal).ToList();
+        ReconcileStreams(groups, accounts, now);
+        foreach (var group in groups)
         {
+            if (accounts.TryGetValue(group.First().Account, out var streaming) && IsStream(streaming))
+            {
+                continue;
+            }
+
             var cursorRow = _db.GetCursor(group.Key);
             if (cursorRow?.NextPollAt is { } next && next > now)
             {
@@ -160,16 +178,20 @@ public sealed partial class Node
                     new SourceAccount(account.Name, account.Type, account.BaseUrl ?? "", account.Login ?? "", account.AccountId, token), selector, cursor, now, cancellationToken)
                     .ConfigureAwait(false);
                 var delivered = 0;
-                foreach (var subscription in group)
+                lock (_deliverLock)
                 {
-                    delivered += Deliver(subscription, result.Events, now, filtered: account.Type != FeedAdapter.TypeName);
-                    if (subscription.Status == SubscriptionStatus.Error)
+                    foreach (var subscription in group)
                     {
-                        _db.SetSubscriptionStatus(subscription.Id, SubscriptionStatus.Active);
+                        delivered += Deliver(subscription, result.Events, now, filtered: account.Type != FeedAdapter.TypeName);
+                        if (subscription.Status == SubscriptionStatus.Error)
+                        {
+                            _db.SetSubscriptionStatus(subscription.Id, SubscriptionStatus.Active);
+                        }
                     }
+
+                    _db.UpsertCursor(new SourceCursorRow(group.Key, FormatCursor(result.Next), BoundaryJson(result.Next), now + NextInterval(result.RetryAfter), LastError: null));
                 }
 
-                _db.UpsertCursor(new SourceCursorRow(group.Key, FormatCursor(result.Next), BoundaryJson(result.Next), now + NextInterval(result.RetryAfter), LastError: null));
                 _refusals.TryRemove(group.Key, out _);
                 if (delivered > 0)
                 {
@@ -478,7 +500,7 @@ public sealed partial class Node
                 subscription.Selector, events, subscription.Mode, subscription.Status,
                 _db.ListMessages(null).Count(m => m.Kind == InboxKind.Source && m.SubscriptionId == subscription.Id && NeedsAttention(m)),
                 Timestamps.ParseOrNull(cursor?.Cursor is { Length: > 0 } c ? c : null), cursor?.NextPollAt, cursor?.LastError,
-                here is not null && _subscriptionFileErrors.TryGetValue(here, out var fileError) ? fileError : null));
+                here is not null && _subscriptionFileErrors.TryGetValue(here, out var fileError) ? fileError : null, account is { } a && IsStream(a)));
         }
 
         if (here is not null && views.Count == 0 && _subscriptionFileErrors.TryGetValue(here, out var onlyError))
@@ -491,11 +513,16 @@ public sealed partial class Node
 
     // ---- accounts (spec §10.5): the row here, the token in a file the CLI wrote ----
 
-    public ManagementResult AddAccount(string name, string type, string baseUrl, string login, string? accountId)
+    public ManagementResult AddAccount(string name, string type, string baseUrl, string login, string? accountId, bool stream = false)
     {
         if (!AccountStore.IsValidName(name))
         {
             return new ManagementResult(ManagementStatus.Invalid, Reason: "An account name is letters, digits, '.', '-' or '_', up to 64 characters.");
+        }
+
+        if (stream && type != FeedAdapter.TypeName)
+        {
+            return new ManagementResult(ManagementStatus.Invalid, Reason: "Only a feed account can stream.");
         }
 
         if (!_adapters.ContainsKey(type))
@@ -506,8 +533,8 @@ public sealed partial class Node
         if (type == FeedAdapter.TypeName)
         {
             // A feed has no site and no login: its command, in the account's private file, is all of it.
-            _db.UpsertAccount(new AccountRow(name, type, "", "", accountId, _clock.GetUtcNow()));
-            _logger.LogInformation("Account {Name} (feed) added", name);
+            _db.UpsertAccount(new AccountRow(name, type, "", "", accountId, _clock.GetUtcNow(), stream));
+            _logger.LogInformation("Account {Name} ({Kind}) added", name, stream ? "streaming feed" : "feed");
             KickSources();
             return new ManagementResult(ManagementStatus.Ok, name);
         }
@@ -540,7 +567,7 @@ public sealed partial class Node
         var subscriptions = _db.ListSubscriptions();
         return [.. _db.ListAccounts().Select(a => new AccountView(
             a.Name, a.Type, a.BaseUrl ?? "", a.Login ?? "", a.AccountId, a.CreatedAt, subscriptions.Count(s => s.Account == a.Name),
-            AccountStore.LoadToken(_home, a.Name) is not null))];
+            AccountStore.LoadToken(_home, a.Name) is not null, a.Stream))];
     }
 
     // ---- helpers ----

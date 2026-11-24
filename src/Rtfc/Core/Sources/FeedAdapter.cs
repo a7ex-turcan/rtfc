@@ -47,29 +47,36 @@ public sealed class FeedAdapter(IFeedRunner runner) : ISourceAdapter
     public string Type => TypeName;
 
     /// <summary>Runs the command once and checks what it prints, so a broken command is caught when the account is added.</summary>
-    public async Task<SourceIdentity> IdentifyAsync(SourceAccount account, CancellationToken cancellationToken)
+    public async Task<SourceIdentity> IdentifyAsync(SourceAccount account, CancellationToken cancellationToken) =>
+        new(TypeName, Describe(await RunAsync(account, cancellationToken).ConfigureAwait(false)), TimeZone: null);
+
+    /// <summary>What a feed document holds right now, for <c>rtfc account add</c> to show. Throws as <see cref="Read"/> does.</summary>
+    public static string Describe(string document)
     {
-        var items = await ReadAsync(account, cancellationToken).ConfigureAwait(false);
+        var items = Parse(document);
         var events = items.Sum(i => i.Events.Count);
-        return new SourceIdentity(TypeName,
-            $"{items.Count.ToString(CultureInfo.InvariantCulture)} item(s) with {events.ToString(CultureInfo.InvariantCulture)} event(s) right now", TimeZone: null);
+        return $"{items.Count.ToString(CultureInfo.InvariantCulture)} item(s) with {events.ToString(CultureInfo.InvariantCulture)} event(s) right now";
     }
 
+    public async Task<PollResult> PollAsync(SourceAccount account, JsonObject selector, SourceCursor cursor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Read(account.Name, await RunAsync(account, cancellationToken).ConfigureAwait(false), cursor, now);
+
     /// <summary>
-    /// The cursor's boundary ids are the fingerprints of every event the feed printed last time; an event is new when its
-    /// fingerprint is not among them. Its own time comes from the other machine's clock, so it orders events and is never
-    /// compared with ours (spec §15).
+    /// One feed document against the cursor: what is new in it, and the cursor to continue from. A poll's output and every
+    /// line of a stream go through here. The cursor's boundary ids are the fingerprints of every event in the previous
+    /// document; an event is new when its fingerprint is not among them, and the first document ever only takes note. An
+    /// event's own time comes from the other machine's clock, so it orders events and is never compared with ours (spec §15).
     /// </summary>
-    public async Task<PollResult> PollAsync(SourceAccount account, JsonObject selector, SourceCursor cursor, DateTimeOffset now, CancellationToken cancellationToken)
+    public static PollResult Read(string accountName, string document, SourceCursor cursor, DateTimeOffset now)
     {
-        var items = await ReadAsync(account, cancellationToken).ConfigureAwait(false);
+        var items = Parse(document);
         var first = cursor.Watermark is null;
         var seen = new HashSet<string>(cursor.BoundaryIds, StringComparer.Ordinal);
         var current = new HashSet<string>(StringComparer.Ordinal);
         var events = new List<SourceEvent>();
         foreach (var item in items)
         {
-            var key = $"{TypeName}:{account.Name}/{item.Id}";
+            var key = $"{TypeName}:{accountName}/{item.Id}";
             foreach (var e in item.Events)
             {
                 var fingerprint = Fingerprint(item.RawId, e.Id);
@@ -90,7 +97,7 @@ public sealed class FeedAdapter(IFeedRunner runner) : ISourceAdapter
 
     internal sealed record FeedEvent(string Id, string Type, string Actor, string Summary, DateTimeOffset? At);
 
-    private async Task<List<FeedItem>> ReadAsync(SourceAccount account, CancellationToken cancellationToken)
+    private async Task<string> RunAsync(SourceAccount account, CancellationToken cancellationToken)
     {
         var run = await runner.RunAsync(account.Token, cancellationToken).ConfigureAwait(false);
         if (run.ExitCode != 0)
@@ -99,10 +106,13 @@ public sealed class FeedAdapter(IFeedRunner runner) : ISourceAdapter
                 + (run.Error.Length > 0 ? $": {run.Error}" : "."), retryAfter: RetryAfterFailure);
         }
 
-        return Parse(run.Output);
+        return run.Output;
     }
 
-    /// <summary>The feed contract, version 1. A wrong shape fails the poll; a malformed item or event is skipped.</summary>
+    /// <summary>
+    /// The feed contract, version 1. A wrong shape fails the poll; a malformed item or event is skipped. A document that says
+    /// <c>{"v": 1, "error": "…"}</c> is the feed reporting its own trouble, which fails the poll with that reason.
+    /// </summary>
     internal static List<FeedItem> Parse(string output)
     {
         JsonNode? root;
@@ -123,6 +133,11 @@ public sealed class FeedAdapter(IFeedRunner runner) : ISourceAdapter
         if (feed["v"] is not JsonValue v || !v.TryGetValue<int>(out var version) || version != Version)
         {
             throw new SourceException($"The feed has no \"v\": {Version.ToString(CultureInfo.InvariantCulture)}; this rtfc reads feed version {Version.ToString(CultureInfo.InvariantCulture)} only.", retryAfter: RetryAfterFailure);
+        }
+
+        if (Text(feed, "error") is { } error)
+        {
+            throw new SourceException($"The feed reports: {Clean(error, MaxErrorLength)}", retryAfter: RetryAfterFailure);
         }
 
         if (feed["items"] is not JsonArray list)
@@ -191,26 +206,19 @@ public sealed class FeedAdapter(IFeedRunner runner) : ISourceAdapter
         var line = new string([.. text.ReplaceLineEndings(" ").Where(c => !char.IsControl(c))]).Trim();
         return line.Length <= length ? line : line[..(length - 3)] + "...";
     }
-}
 
-/// <summary>
-/// Runs a feed's command the way a terminal would, through <c>cmd /c</c> on Windows and <c>/bin/sh -c</c> elsewhere, from the
-/// user's home directory, with no input, a wall-clock limit and a cap on what it may print. Claude Code's session variables
-/// are left out, as for the headless runner.
-/// </summary>
-public sealed class ProcessFeedRunner(TimeSpan timeout, int maxOutputBytes) : IFeedRunner
-{
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
-    public const int DefaultMaxOutputBytes = 1024 * 1024;
-    private const int MaxErrorBytes = 16 * 1024;
-    private const int MaxErrorLength = 160;
+    /// <summary>How long a reason from the feed or its error output may be: it reaches the <c>sources</c> view, outside any wrapper.</summary>
+    internal const int MaxErrorLength = 160;
 
-    public ProcessFeedRunner()
-        : this(DefaultTimeout, DefaultMaxOutputBytes)
+    /// <summary>The first non-empty line of <paramref name="text"/>, without control characters and short.</summary>
+    internal static string Clean(string text, int length)
     {
+        var line = text.Split('\n').Select(l => new string([.. l.Where(c => !char.IsControl(c))]).Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+        return line.Length <= length ? line : line[..(length - 3)] + "...";
     }
 
-    public async Task<FeedRun> RunAsync(string command, CancellationToken cancellationToken)
+    /// <summary>How a feed's command is started, polled or streamed: through the platform's shell, from the home directory, without Claude Code's session variables.</summary>
+    internal static ProcessStartInfo StartInfo(string command)
     {
         var start = OperatingSystem.IsWindows()
             ? new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe")) { Arguments = $"/d /s /c \"{command}\"" }
@@ -226,10 +234,43 @@ public sealed class ProcessFeedRunner(TimeSpan timeout, int maxOutputBytes) : IF
             start.Environment.Remove(name);
         }
 
+        return start;
+    }
+
+    internal static void Kill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+}
+
+/// <summary>
+/// Runs a feed's command the way a terminal would, through <c>cmd /c</c> on Windows and <c>/bin/sh -c</c> elsewhere, from the
+/// user's home directory, with no input, a wall-clock limit and a cap on what it may print. Claude Code's session variables
+/// are left out, as for the headless runner.
+/// </summary>
+public sealed class ProcessFeedRunner(TimeSpan timeout, int maxOutputBytes) : IFeedRunner
+{
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    public const int DefaultMaxOutputBytes = 1024 * 1024;
+    private const int MaxErrorBytes = 16 * 1024;
+
+    public ProcessFeedRunner()
+        : this(DefaultTimeout, DefaultMaxOutputBytes)
+    {
+    }
+
+    public async Task<FeedRun> RunAsync(string command, CancellationToken cancellationToken)
+    {
         Process process;
         try
         {
-            process = Process.Start(start) ?? throw new InvalidOperationException("Process.Start returned null.");
+            process = Process.Start(FeedAdapter.StartInfo(command)) ?? throw new InvalidOperationException("Process.Start returned null.");
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -248,17 +289,17 @@ public sealed class ProcessFeedRunner(TimeSpan timeout, int maxOutputBytes) : IF
                 var (bytes, overflowed) = await output.ConfigureAwait(false);
                 if (overflowed)
                 {
-                    Kill(process);
+                    FeedAdapter.Kill(process);
                     throw new SourceException($"The feed command printed more than {(maxOutputBytes / 1024).ToString(CultureInfo.InvariantCulture)} KiB.", retryAfter: FeedAdapter.RetryAfterFailure);
                 }
 
                 var (errorBytes, _) = await error.ConfigureAwait(false);
                 await process.WaitForExitAsync(limit.Token).ConfigureAwait(false);
-                return new FeedRun(process.ExitCode, Encoding.UTF8.GetString(bytes), FirstLine(Encoding.UTF8.GetString(errorBytes)));
+                return new FeedRun(process.ExitCode, Encoding.UTF8.GetString(bytes), FeedAdapter.Clean(Encoding.UTF8.GetString(errorBytes), FeedAdapter.MaxErrorLength));
             }
             catch (OperationCanceledException)
             {
-                Kill(process);
+                FeedAdapter.Kill(process);
                 cancellationToken.ThrowIfCancellationRequested();
                 throw new SourceException($"The feed command did not finish within {timeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} seconds.", retryAfter: FeedAdapter.RetryAfterFailure);
             }
@@ -295,22 +336,153 @@ public sealed class ProcessFeedRunner(TimeSpan timeout, int maxOutputBytes) : IF
 
         return (kept.ToArray(), overflowed);
     }
+}
 
-    /// <summary>The first non-empty line of the error output, without control characters and short: it reaches the <c>sources</c> view.</summary>
-    private static string FirstLine(string text)
+/// <summary>How a stream ended, in words for the subscription's error.</summary>
+public sealed record FeedStreamEnd(string Reason);
+
+/// <summary>Runs a streaming feed's command. An interface so the node's tests can hand it lines without spawning anything.</summary>
+public interface IFeedStreamer
+{
+    /// <summary>
+    /// Runs <paramref name="command"/> until it exits, goes <paramref name="stallAfter"/> without a line, or is cancelled, and
+    /// hands every line it prints to <paramref name="onLine"/> as it arrives, one at a time. Returns why it ended; cancellation throws.
+    /// </summary>
+    Task<FeedStreamEnd> RunAsync(string command, Func<string, Task> onLine, TimeSpan stallAfter, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// A streaming feed (spec §10.1): the account's command keeps running and prints one complete feed document per line whenever
+/// something changes, and at least every minute while nothing does. Started like a polled feed's command, with no input; a line
+/// may be at most 1 MiB. When the daemon goes away without stopping it, the pipe closes and the producer's next write fails.
+/// </summary>
+public sealed class ProcessFeedStreamer(int maxLineBytes) : IFeedStreamer
+{
+    public const int DefaultMaxLineBytes = 1024 * 1024;
+    private const int MaxErrorLineBytes = 4 * 1024;
+
+    public ProcessFeedStreamer()
+        : this(DefaultMaxLineBytes)
     {
-        var line = text.Split('\n').Select(l => new string([.. l.Where(c => !char.IsControl(c))]).Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
-        return line.Length <= MaxErrorLength ? line : line[..(MaxErrorLength - 3)] + "...";
     }
 
-    private static void Kill(Process process)
+    public async Task<FeedStreamEnd> RunAsync(string command, Func<string, Task> onLine, TimeSpan stallAfter, CancellationToken cancellationToken)
     {
+        Process process;
         try
         {
-            process.Kill(entireProcessTree: true);
+            process = Process.Start(FeedAdapter.StartInfo(command)) ?? throw new InvalidOperationException("Process.Start returned null.");
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
+            return new FeedStreamEnd($"The feed stream could not start: {ex.Message}");
         }
+
+        using (process)
+        {
+            using var run = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            run.CancelAfter(stallAfter);
+            var lastError = "";
+            var tooLong = false;
+            var errors = ReadLinesAsync(process.StandardError.BaseStream, MaxErrorLineBytes, (line, _) =>
+            {
+                if (FeedAdapter.Clean(line, FeedAdapter.MaxErrorLength) is { Length: > 0 } clean)
+                {
+                    lastError = clean;
+                }
+
+                return Task.CompletedTask;
+            }, run.Token);
+            try
+            {
+                process.StandardInput.Close();
+                await ReadLinesAsync(process.StandardOutput.BaseStream, maxLineBytes, async (line, overlong) =>
+                {
+                    if (overlong)
+                    {
+                        tooLong = true;
+                        await run.CancelAsync().ConfigureAwait(false);
+                        return;
+                    }
+
+                    run.CancelAfter(stallAfter);
+                    if (line.Length > 0)
+                    {
+                        await onLine(line).ConfigureAwait(false);
+                    }
+                }, run.Token).ConfigureAwait(false);
+
+                // The output closed, so the command is ending: give it a moment to say why.
+                using var exit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                exit.CancelAfter(TimeSpan.FromSeconds(5));
+                await process.WaitForExitAsync(exit.Token).ConfigureAwait(false);
+                await errors.WaitAsync(exit.Token).ConfigureAwait(false);
+                return new FeedStreamEnd($"The feed stream ended with exit {process.ExitCode.ToString(CultureInfo.InvariantCulture)}" + (lastError.Length > 0 ? $": {lastError}" : "."));
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                FeedAdapter.Kill(process);
+                return new FeedStreamEnd(tooLong
+                    ? $"The feed stream printed a line longer than {(maxLineBytes / 1024).ToString(CultureInfo.InvariantCulture)} KiB, so it was stopped."
+                    : $"The feed stream printed nothing for {Span(stallAfter)}, so it was stopped.");
+            }
+            catch (OperationCanceledException)
+            {
+                FeedAdapter.Kill(process);
+                throw;
+            }
+        }
+    }
+
+    private static string Span(TimeSpan span) => span.TotalMinutes >= 1
+        ? $"{span.TotalMinutes.ToString("0.#", CultureInfo.InvariantCulture)} minute(s)"
+        : $"{span.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} second(s)";
+
+    /// <summary>
+    /// Splits a stream into lines (LF or CRLF, UTF-8) and hands each to <paramref name="onLine"/>. A line longer than
+    /// <paramref name="maxBytes"/> is handed over empty with <c>overlong</c> set, and the rest of it is skipped.
+    /// </summary>
+    internal static async Task ReadLinesAsync(Stream stream, int maxBytes, Func<string, bool, Task> onLine, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[16 * 1024];
+        using var line = new MemoryStream();
+        var overlong = false;
+        int read;
+        while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            var start = 0;
+            while (start < read)
+            {
+                var newline = Array.IndexOf(buffer, (byte)'\n', start, read - start);
+                var end = newline < 0 ? read : newline;
+                if (!overlong && line.Length + (end - start) > maxBytes)
+                {
+                    overlong = true;
+                    line.SetLength(0);
+                }
+
+                if (!overlong)
+                {
+                    line.Write(buffer, start, end - start);
+                }
+
+                if (newline < 0)
+                {
+                    break;
+                }
+
+                await onLine(overlong ? "" : Decode(line), overlong).ConfigureAwait(false);
+                line.SetLength(0);
+                overlong = false;
+                start = newline + 1;
+            }
+        }
+
+        if (line.Length > 0 || overlong)
+        {
+            await onLine(overlong ? "" : Decode(line), overlong).ConfigureAwait(false);
+        }
+
+        static string Decode(MemoryStream bytes) => Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length).TrimEnd('\r').TrimStart('﻿');
     }
 }
