@@ -20,7 +20,13 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Changed
+
+- `rtfc statusline install` recognises a status line command that runs `rtfc statusline` as
+  one of its parts, such as one that saves Claude Code's input for another tool first and
+  then hands it on (`…; rtfc statusline <<< "$j"`). It now says rtfc's segment is already there
+  instead of calling the line foreign, `--replace` leaves the line alone instead of dropping
+  the rest of it, and `uninstall` says it is left for you to edit.
 
 ## [0.16.0] - 2026-11-27
 

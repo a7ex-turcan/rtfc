@@ -159,8 +159,10 @@ rest of the file and a copy of it beside it as `settings.json.rtfc-backup`:
 
 Claude Code shows one status line, so if you already have one, `install` leaves it alone and
 says so: have your script call `rtfc statusline` and append its output, or run
-`rtfc statusline install --replace` to show rtfc's instead. `rtfc statusline uninstall`
-takes rtfc's out again. Start a new session to see it.
+`rtfc statusline install --replace` to show rtfc's instead. A status line command that
+already runs `rtfc statusline` as one of its parts counts as installed, and neither `--replace`
+nor `uninstall` rewrites it. `rtfc statusline uninstall` takes rtfc's out again. Start a new
+session to see it.
 
 You'll see `📨 1 · sasha` when something is waiting, `📨 1 · sasha → payments-api` when it
 waits in another of your projects, `📤 2` when replies wait in your outbox, `💤 away` when

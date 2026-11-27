@@ -8,7 +8,9 @@ namespace Rtfc.Cli;
 /// <summary>
 /// The <c>statusLine</c> entry in Claude Code's user settings (spec §11), written only by <c>rtfc statusline install</c>, which the
 /// user runs. Claude Code shows one status line, so a status line that is not rtfc's is left alone unless the user says to
-/// replace it, and <c>uninstall</c> removes only rtfc's own. The rest of the file is kept; the previous copy is saved beside it.
+/// replace it, and <c>uninstall</c> removes only rtfc's own. A longer command that runs <c>rtfc statusline</c> as one of its parts
+/// already shows rtfc's segment and is never rewritten, not even with <c>--replace</c>: that would drop the rest of it. The rest
+/// of the file is kept; the previous copy is saved beside it.
 /// </summary>
 public static partial class StatuslineSettings
 {
@@ -21,6 +23,9 @@ public static partial class StatuslineSettings
     {
         Installed,
         AlreadyInstalled,
+
+        /// <summary>The status line is a longer command that runs <c>rtfc statusline</c> among other things; it was left as it is.</summary>
+        PartOfOther,
         OtherStatusLine,
         Removed,
         NotInstalled,
@@ -44,6 +49,13 @@ public static partial class StatuslineSettings
     /// <summary>Whether a status line command runs rtfc's segment directly, by name, by path or as rtfc.exe. A script that calls it is the user's own.</summary>
     public static bool IsRtfc(string? command) => command is not null && RtfcCommand().IsMatch(command);
 
+    /// <summary>
+    /// Whether a status line command runs rtfc's segment as one of its parts, such as <c>…; rtfc statusline &lt;&lt;&lt; "$j"</c>: a call of
+    /// <c>rtfc statusline</c> with no further argument, ended by the command's end, a quote, a redirect, a pipe or a separator. A
+    /// script it calls is opaque, so a wrapper script still counts as the user's own.
+    /// </summary>
+    public static bool CallsRtfc(string? command) => command is not null && RtfcCall().IsMatch(command);
+
     public static Result Install(string path, bool replace)
     {
         if (!TryRead(path, out var root, out var original, out var reason))
@@ -52,6 +64,11 @@ public static partial class StatuslineSettings
         }
 
         var existing = Describe(root["statusLine"]);
+        if (existing is not null && !IsRtfc(existing) && CallsRtfc(existing))
+        {
+            return new Result(Outcome.PartOfOther, existing);
+        }
+
         if (existing is not null && !replace)
         {
             return new Result(IsRtfc(existing) ? Outcome.AlreadyInstalled : Outcome.OtherStatusLine, existing);
@@ -82,7 +99,7 @@ public static partial class StatuslineSettings
 
         if (!IsRtfc(existing))
         {
-            return new Result(Outcome.OtherStatusLine, existing);
+            return new Result(CallsRtfc(existing) ? Outcome.PartOfOther : Outcome.OtherStatusLine, existing);
         }
 
         root.Remove("statusLine");
@@ -146,4 +163,7 @@ public static partial class StatuslineSettings
 
     [GeneratedRegex(@"(^|[\s""'/\\])rtfc(\.exe)?[""']?\s+statusline\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex RtfcCommand();
+
+    [GeneratedRegex(@"(^|[\s""'/\\;&|(`])rtfc(\.exe)?[""']?\s+statusline(?=\s*($|[;&|)<>""'`])|\s+\d+[<>])", RegexOptions.IgnoreCase)]
+    private static partial Regex RtfcCall();
 }

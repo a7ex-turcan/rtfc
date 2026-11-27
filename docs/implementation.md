@@ -188,7 +188,16 @@ on the PATH Claude Code sees, so a status line that cannot is the least of that 
 problems, and a path written into JSON would need quoting that differs between the shells
 Claude Code may run it in. Claude Code shows one status line, so a command that is not rtfc's
 (`rtfc statusline` itself, by name or path) is never overwritten without `--replace`, and a
-wrapper script that calls rtfc counts as the user's own. The file goes through `JsonNode`, so
+wrapper script that calls rtfc counts as the user's own. A command line that runs
+`rtfc statusline` among other things (`CallsRtfc`: the call with no further argument, ended by
+the line's end, a quote, a redirect, a pipe or a separator) counts as installed and is never
+rewritten, even with `--replace`. Another tool on the owner's machine composed one in November
+2026, saving Claude Code's input for itself and then handing it on with a here-string
+(`IFS= read -r -d '' j; printf '%s' "$j" > …; rtfc statusline <<< "$j"`), and `--replace` would
+have dropped its half. Cutting the call out of a shell line on `uninstall` would mean parsing
+shell, so `uninstall` leaves such a line alone and says so. Checked on Windows with Git Bash
+5.2 the same day: the segment prints the same from a pipe, a file, a small here-string and a
+300 KB one (which bash hands over as a temp file), and the saved copy is byte-identical. The file goes through `JsonNode`, so
 other keys survive in order; comments do not, and characters outside the Basic Multilingual
 Plane come back escaped (System.Text.Json always escapes them), which is why the previous copy
 is kept as `settings.json.rtfc-backup`.

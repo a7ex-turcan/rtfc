@@ -749,6 +749,20 @@ public static class Commands
                 ctx.Out.WriteLine($"{path} already shows the rtfc status line ({result.Existing}). Nothing to do.");
                 return 0;
 
+            case StatuslineSettings.Outcome.PartOfOther when install && line.Flag("replace"):
+                ctx.Error.WriteLine($"The status line in {path} already runs `{StatuslineSettings.Command}` as part of a longer command: {result.Existing}");
+                ctx.Error.WriteLine($"It was left as it is: replacing it would drop the rest of that command. To show only rtfc's, set the command to `{StatuslineSettings.Command}` yourself.");
+                return 1;
+
+            case StatuslineSettings.Outcome.PartOfOther when install:
+                ctx.Out.WriteLine($"The status line in {path} already runs `{StatuslineSettings.Command}` as part of a longer command ({result.Existing}). Nothing to do.");
+                return 0;
+
+            case StatuslineSettings.Outcome.PartOfOther:
+                ctx.Error.WriteLine($"The status line in {path} runs `{StatuslineSettings.Command}` as part of a longer command ({result.Existing}); it was left as it is.");
+                ctx.Error.WriteLine($"To take rtfc's segment out, remove the `{StatuslineSettings.Command}` call from that command yourself.");
+                return 1;
+
             case StatuslineSettings.Outcome.OtherStatusLine when install:
                 ctx.Error.WriteLine($"{path} already has a status line: {result.Existing}");
                 ctx.Error.WriteLine("Claude Code shows only one. If that is a script of yours, have it run `rtfc statusline` and append its output;");

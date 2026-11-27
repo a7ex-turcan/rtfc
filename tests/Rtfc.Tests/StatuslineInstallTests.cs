@@ -91,6 +91,42 @@ public class StatuslineInstallTests
     }
 
     [Fact]
+    public void A_longer_command_that_runs_rtfcs_segment_counts_as_installed_and_is_never_cut_down()
+    {
+        using var temp = new TempHome();
+        var settings = Path.Combine(temp.Home.Root, "settings.json");
+
+        // The shape another tool on the owner's machine composed: save Claude Code's input, then hand it to rtfc.
+        const string original = """
+            {
+              "statusLine": {
+                "type": "command",
+                "command": "IFS= read -r -d '' j; printf '%s' \"$j\" > \"$APPDATA/deephack/claude-usage.json\"; rtfc statusline <<< \"$j\"",
+                "refreshInterval": 5
+              }
+            }
+            """;
+        File.WriteAllText(settings, original);
+
+        var (code, output, _) = Run("statusline", "install", "--settings", settings);
+        Assert.Equal(0, code);
+        Assert.Contains("already runs `rtfc statusline` as part of a longer command", output);
+        Assert.Contains("Nothing to do", output);
+
+        (code, _, var error) = Run("statusline", "install", "--replace", "--settings", settings);
+        Assert.Equal(1, code);
+        Assert.Contains("replacing it would drop the rest of that command", error);
+        Assert.Contains("claude-usage.json", error);
+
+        (code, _, error) = Run("statusline", "uninstall", "--settings", settings);
+        Assert.Equal(1, code);
+        Assert.Contains("remove the `rtfc statusline` call from that command yourself", error);
+
+        Assert.Equal(original, File.ReadAllText(settings));
+        Assert.False(File.Exists(StatuslineSettings.BackupPath(settings)));
+    }
+
+    [Fact]
     public void A_settings_file_that_is_not_json_is_left_alone()
     {
         using var temp = new TempHome();
@@ -115,4 +151,19 @@ public class StatuslineInstallTests
     [InlineData("myrtfc statusline", false)]
     public void Only_a_command_that_runs_rtfcs_segment_itself_counts_as_rtfcs(string command, bool rtfc) =>
         Assert.Equal(rtfc, StatuslineSettings.IsRtfc(command));
+
+    [Theory]
+    [InlineData("rtfc statusline", true)]
+    [InlineData("IFS= read -r -d '' j; printf '%s' \"$j\" > \"$APPDATA/deephack/claude-usage.json\"; rtfc statusline <<< \"$j\"", true)]
+    [InlineData("rtfc statusline | tr a-z A-Z", true)]
+    [InlineData("bash -c 'rtfc statusline'", true)]
+    [InlineData("\"C:/Users/alex/AppData/Local/Programs/rtfc/rtfc.exe\" statusline<<<\"$j\"", true)]
+    [InlineData("out=$(rtfc statusline 2>/dev/null); echo \"hud $out\"", true)]
+    [InlineData("hud; rtfc statusline && echo", true)]
+    [InlineData("bash \"$HOME/.claude/statusline-hud-rtfc.sh\"", false)]
+    [InlineData("rtfc statusline install", false)]
+    [InlineData("rtfc statuslines", false)]
+    [InlineData("myrtfc statusline; echo", false)]
+    public void A_command_that_runs_rtfcs_segment_among_other_things_calls_rtfc(string command, bool calls) =>
+        Assert.Equal(calls, StatuslineSettings.CallsRtfc(command));
 }
