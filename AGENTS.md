@@ -50,7 +50,8 @@ opt-in live tests. A generic feed (`Core/Sources/FeedAdapter.cs`, 💬) runs a c
 typed into `rtfc account add <name> --type feed` and reads its JSON; the command is the
 account's secret and never comes from `rtfc.local.json`, which anything that can write to the
 project can edit. With `--stream` the command keeps running and each line it prints is read
-on arrival (`Node.Streams.cs`, `ProcessFeedStreamer`). A subscription in `session` mode pushes each new item into the session
+on arrival (`Node.Streams.cs`, `ProcessFeedStreamer`). A poll or stream that has failed for ten minutes leaves one notice
+per project and a `⚠ rtfc: … failing` status line warning until it works again (`Node.Outages.cs`). A subscription in `session` mode pushes each new item into the session
 open in its project (`Node.PushSourceItem`), behind the hook's gate in its source shape: one
 question with the actions plus "Later" and "Nothing to do", then Accept/Decline for the
 chosen one, then "Dismiss" or "Keep" once the action is done. The hook turns each answer into

@@ -56,7 +56,7 @@ public sealed class Database : IDisposable
         return reader.ReadToEnd();
     });
 
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     public int SchemaVersion => int.Parse(
         Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!,
@@ -165,6 +165,23 @@ public sealed class Database : IDisposable
                 }
 
                 Execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
+                version = 9;
+            }
+
+            if (version < 10)
+            {
+                // v10 (spec §10.6): when a poll started failing, and when the user was told, so a dead source is not a quiet one.
+                if (!HasColumn("source_cursors", "failing_since"))
+                {
+                    Execute("ALTER TABLE source_cursors ADD COLUMN failing_since TEXT");
+                }
+
+                if (!HasColumn("source_cursors", "outage_noticed"))
+                {
+                    Execute("ALTER TABLE source_cursors ADD COLUMN outage_noticed TEXT");
+                }
+
+                Execute("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
             }
 
             transaction.Commit();
@@ -395,9 +412,13 @@ public sealed class Database : IDisposable
         }
     }
 
-    /// <summary>Removes a project's source items, when the project is forgotten (spec §10.2).</summary>
+    /// <summary>Notices about a source's outage (spec §10.6) that still wait for the user or were only read. Run on every tick, so it reads only those.</summary>
+    public IReadOnlyList<InboxMessage> ListOpenOutageNotices() => Query(
+        $"SELECT {MessageColumns} FROM inbox WHERE kind = 'notice' AND entity_key IS NOT NULL AND state IN ('parked', 'read') ORDER BY received_at", ReadMessage);
+
+    /// <summary>Removes a project's source items and the notices about its sources, when the project is forgotten (spec §10.2).</summary>
     public int DeleteSourceItems(string projectId) =>
-        Execute("DELETE FROM inbox WHERE kind = 'source' AND project_id = $project", ("$project", projectId));
+        Execute("DELETE FROM inbox WHERE (kind = 'source' OR (kind = 'notice' AND entity_key IS NOT NULL)) AND project_id = $project", ("$project", projectId));
 
     public InboxMessage? GetMessage(string id) =>
         QuerySingle($"SELECT {MessageColumns} FROM inbox WHERE id = $id AND {MessageKinds}", ReadMessage, ("$id", id));
@@ -643,15 +664,28 @@ public sealed class Database : IDisposable
     // ---- source cursors (spec §10.1) ----
 
     public SourceCursorRow? GetCursor(string pollKey) =>
-        QuerySingle("SELECT poll_key, cursor, boundary_ids, next_poll_at, last_error FROM source_cursors WHERE poll_key = $key",
-            r => new SourceCursorRow(r.GetString(0), r.GetString(1), r.GetString(2), Timestamps.ParseOrNull(StringOrNull(r, 3)), StringOrNull(r, 4)), ("$key", pollKey));
+        QuerySingle("SELECT poll_key, cursor, boundary_ids, next_poll_at, last_error, failing_since, outage_noticed FROM source_cursors WHERE poll_key = $key",
+            r => new SourceCursorRow(r.GetString(0), r.GetString(1), r.GetString(2), Timestamps.ParseOrNull(StringOrNull(r, 3)), StringOrNull(r, 4),
+                Timestamps.ParseOrNull(StringOrNull(r, 5)), Timestamps.ParseOrNull(StringOrNull(r, 6))), ("$key", pollKey));
 
-    public void UpsertCursor(SourceCursorRow c) => Execute(
+    /// <summary>
+    /// Saves where a poll left off. The outage columns are the database's to keep (spec §10.6): an error that finds none running
+    /// starts one at <paramref name="now"/>, a later error keeps it, and a write without an error ends it, whatever the row says.
+    /// </summary>
+    public void UpsertCursor(SourceCursorRow c, DateTimeOffset now) => Execute(
         """
-        INSERT INTO source_cursors (poll_key, cursor, boundary_ids, next_poll_at, last_error) VALUES ($key, $cursor, $boundary, $next, $error)
-        ON CONFLICT (poll_key) DO UPDATE SET cursor = excluded.cursor, boundary_ids = excluded.boundary_ids, next_poll_at = excluded.next_poll_at, last_error = excluded.last_error
+        INSERT INTO source_cursors (poll_key, cursor, boundary_ids, next_poll_at, last_error, failing_since)
+        VALUES ($key, $cursor, $boundary, $next, $error, CASE WHEN $error IS NULL THEN NULL ELSE $now END)
+        ON CONFLICT (poll_key) DO UPDATE SET cursor = excluded.cursor, boundary_ids = excluded.boundary_ids, next_poll_at = excluded.next_poll_at,
+          last_error = excluded.last_error,
+          failing_since = CASE WHEN excluded.last_error IS NULL THEN NULL ELSE COALESCE(source_cursors.failing_since, $now) END,
+          outage_noticed = CASE WHEN excluded.last_error IS NULL THEN NULL ELSE source_cursors.outage_noticed END
         """,
-        ("$key", c.PollKey), ("$cursor", c.Cursor), ("$boundary", c.BoundaryIds), ("$next", Time(c.NextPollAt)), ("$error", c.LastError));
+        ("$key", c.PollKey), ("$cursor", c.Cursor), ("$boundary", c.BoundaryIds), ("$next", Time(c.NextPollAt)), ("$error", c.LastError), ("$now", Timestamps.Format(now)));
+
+    /// <summary>Records that the user was told about a poll's outage, so it is told once (spec §10.6). Nothing if it is no longer failing.</summary>
+    public void SetOutageNoticed(string pollKey, DateTimeOffset at) => Execute(
+        "UPDATE source_cursors SET outage_noticed = $at WHERE poll_key = $key AND last_error IS NOT NULL", ("$at", Timestamps.Format(at)), ("$key", pollKey));
 
     public int DeleteCursor(string pollKey) => Execute("DELETE FROM source_cursors WHERE poll_key = $key", ("$key", pollKey));
 

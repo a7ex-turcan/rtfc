@@ -27,6 +27,7 @@ Companions: [`../AGENTS.md`](../AGENTS.md) holds the rules for working in this r
 | §10.1 polling, cursors, adapters | `Node.Sources.cs` (`PollDueAsync`, `Deliver`); `Core/Sources/SourceEvent.cs` (`ISourceAdapter`, `SourceEvent`, `SourceCursor`); `Core/Sources/JiraCloudAdapter.cs`, `ConfluenceCloudAdapter.cs`, `BitbucketCloudAdapter.cs`, `FeedAdapter.cs` (with `ProcessFeedRunner`); `source_cursors` via `Database.GetCursor`/`UpsertCursor` |
 | §10.2 subscriptions and approval | `Core/Sources/SubscriptionsFile.cs` (parse, hash, poll key); `Node.SyncSubscriptions`, `ApproveSources`, `ForgetProject`, `SourceViews`; `Commands.SourcesAsync`, `ProjectAsync` |
 | §10.3 coalescing | `Database.UpsertSourceItem` (merge under the lock, re-park on news); `Node.Deliver` |
+| §10.6 a failing source says so | `Node.Outages.cs` (`ReportOutages` at the end of `PollDueAsync`, `FailingSources` for `ProjectStatus.Failing`); the outage columns kept by `Database.UpsertCursor`, `SetOutageNoticed`; `Node.Notice(…, projectId, subscriptionId, about)`; the `⚠ rtfc: … failing` segment in `Commands.Statusline` |
 | §10.5 accounts | `Core/Sources/AccountStore.cs` (the token file); `Commands.AccountAsync` (hidden input, identity check); `Node.AddAccount`, `RemoveAccount`, `ListAccounts` |
 | §3.1 one daemon per home | `Daemon/DaemonLock.cs` (`rtfcd.lock`, `rtfcd.pid`); `DaemonHost.RunAsync` (lock, `SocketPathProblem`, `Refuse`, `WriteLog`) and the socket watchdog in its loop; `DaemonLauncher.StopAsync(client, pid, …)` and `Diagnose` |
 | §3.1 always on | `Daemon/LoginItems.cs` (the Windows Run value, the LaunchAgent, the systemd unit); `Commands.AlwaysOnAsync`; `DaemonHost.IdleExit`; the `run` guard in `Commands.DaemonAsync`; `DaemonLauncher.IsOlder` and `StopAsync` in `EnsureAsync` |
@@ -440,6 +441,7 @@ block per version.
 | 7 | 0.12.0 | `devices.told_hints`: what each device last heard from us about our hints, so a changed address is announced (spec §8.4) |
 | 8 | 0.15.0 | `accounts.stream`: a feed whose command keeps running and prints a document per change instead of being polled (spec §10.1) |
 | 9 | 0.15.1 | `inbox.seen_event`: the newest event a source item was shown with, so a dismissal never swallows a later one (spec §10.3) |
+| 10 | Unreleased | `source_cursors.failing_since`, `source_cursors.outage_noticed`: when a poll started failing and when the user was told, so a dead source is not mistaken for a quiet one (spec §10.6). A notice about a source fills `inbox.entity_key` with its poll key |
 
 ## Known gaps
 

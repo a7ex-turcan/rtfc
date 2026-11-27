@@ -264,12 +264,16 @@ public sealed partial class Node
         _logger.LogInformation("Outbox {Kind} {Id} to {Handle} expired: {Reason}", entry.Kind, entry.Id, handle, reason);
     }
 
-    /// <summary>A parked note from rtfc itself, shown like a message and dismissed like one.</summary>
-    private void Notice(string text, DateTimeOffset now)
+    /// <summary>
+    /// A parked note from rtfc itself, shown like a message and dismissed like one. One about a source (spec §10.6) is in that
+    /// subscription's project and names the poll it is <paramref name="about"/>, so it can be cleared when the source works again.
+    /// </summary>
+    private void Notice(string text, DateTimeOffset now, string? projectId = null, string? subscriptionId = null, string? about = null)
     {
         _db.InsertMessage(new InboxMessage(
             Ulid.NewUlid(now), Self.DeviceId, Self.PersonId, Self.DeviceId, Seq: 0, ReplyTo: null, MessageOrigin.Human, Hop: 0, Thread: null,
-            text, SentAt: now, ReceivedAt: now, UpdatedAt: now, InboxState.Parked, HandledBy: null, HandledAt: null, Kind: InboxKind.Notice));
+            text, SentAt: now, ReceivedAt: now, UpdatedAt: now, InboxState.Parked, HandledBy: null, HandledAt: null, Kind: InboxKind.Notice,
+            ProjectId: projectId, SubscriptionId: subscriptionId, EntityKey: about));
         WriteStatus();
         InboxChanged?.Invoke();
     }

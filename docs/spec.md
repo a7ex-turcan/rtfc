@@ -571,13 +571,23 @@ Source content (ticket descriptions, comments, page text, PR descriptions) is un
 - **Scopes:** use the narrowest the service offers, read-only where possible. Some Atlassian tokens carry the user's full permissions. That's another reason rtfc never writes to sources: a token that's only ever used for reading limits the damage if it leaks.
 - **Multiple devices:** each device polls its own projects. Handled state syncs between your devices by `(source, entity_key)` so the same PR doesn't nag you twice (§6.3).
 
+### 10.6 A failing source says so
+
+A source that fails looks exactly like a quiet one unless something says otherwise: two streaming feeds once reported their own errors every 30 s for more than a day while the inbox and status line stayed empty, and only the `sources` view knew. So an outage is news:
+
+- **When it counts.** A poll's cursor records when its current run of errors began (`source_cursors.failing_since`): the first failed poll, failed stream line, stream that ended or stalled, or error document. Any later error keeps that time; a poll or a line that reads cleanly clears it. A poll that has been failing for **10 minutes** is an outage, long enough to ride out a restart of a stream, a blip, and the retries a refused token gets (§10.1).
+- **One notice per project per outage.** Each project with an active subscription on that poll gets one parked notice from rtfc (an inbox row of kind `notice` in that project, naming the poll in `entity_key`), saying which account, since when, and its last error, cut to one line without control characters, as the `sources` view shows it. `source_cursors.outage_noticed` records that it was said, so a restart of the daemon does not say it again. While the outage lasts, the project's status line shows `⚠ rtfc: outlook failing`, even once the notice is read or dismissed.
+- **It clears itself.** When the poll works again, its notices that are still parked or only read are dismissed with the note "It works again as of …", and the warning goes. A notice whose project no longer polls that source (the subscription was removed or edited back to `pending_approval`) is dismissed the same way, saying so; forgetting the project removes it. The next outage is a new notice.
+- **Checked on the source loop's tick**, after the polls, so a stream's trouble, recorded on its own thread, is seen within a tick.
+- Notices are rtfc's own words and carry no untrusted wrapper, so they hold nothing of the source's but that one short error line, and the account's name, which is checked against the account alphabet wherever it comes from.
+
 ---
 
 ## 11. Status bar
 
 - The daemon writes `~/.claude/rtfc/status.json` atomically (write temp file, then rename) whenever the inbox changes. Counts are split into global (the shared inbox) and per project (messages addressed to a project, §7.6, and source items), keyed by the project's normalized root path:
   `{ "global": { "parked": 1, "from": ["Sasha"], "pending": 2 }, "projects": { "/src/payments-api": { "name": "payments-api", "parked": 1, "from": ["Alex"], "reviews": 2, "tickets": 3, "pages": 1, "pendingSubscriptions": 0 } }, "away": false }` (`pending` counts the outbox; the status line shows it as `📤 2`, and `away` as `💤 away`; `reviews` are pull requests, `tickets` Jira issues, `pages` Confluence pages, each counting parked source items)
-- Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 2 · Sasha, Alex  🔀 2  🎫 3  📄 1  💬 1` (`💬` counts feed items), and `⚠ rtfc: 1 pending` while a subscription waits for approval, `⚠ rtfc: pushes not showing` while a session open there does not show rtfc's pushes (§7.3; `pushesNotShown` in `status.json`), or nothing when there's nothing to show. The current project's messages count with the shared inbox; another project's appear as a pointer, `📨 1 · Alex → payments-api`. Reading a file keeps it fast, since status lines run often.
+- Claude Code passes session information, including the current working directory, to the status line command on stdin. `rtfc statusline` uses it to pick the right project and prints e.g. `📨 2 · Sasha, Alex  🔀 2  🎫 3  📄 1  💬 1` (`💬` counts feed items), and `⚠ rtfc: 1 pending` while a subscription waits for approval, `⚠ rtfc: pushes not showing` while a session open there does not show rtfc's pushes (§7.3; `pushesNotShown` in `status.json`), `⚠ rtfc: outlook failing` while a source there is in an outage (§10.6; `failing`, the accounts, in `status.json`), or nothing when there's nothing to show. The current project's messages count with the shared inbox; another project's appear as a pointer, `📨 1 · Alex → payments-api`. Reading a file keeps it fast, since status lines run often.
 - Configure it once in `~/.claude/settings.json`:
   `{ "statusLine": { "type": "command", "command": "rtfc statusline", "refreshInterval": 5 } }`
   `rtfc statusline install` (or `/rtfc:statusline`) writes exactly that into Claude Code's user settings (`$CLAUDE_CONFIG_DIR/settings.json` when set, `--settings <file>` for another file), keeps the rest of the file, and saves the previous copy as `settings.json.rtfc-backup`. It is the only place rtfc writes Claude Code's settings, and only when the user runs it. `rtfc statusline uninstall` removes the entry when it is rtfc's.
@@ -712,7 +722,9 @@ CREATE TABLE source_cursors (                     -- one per (account, selector)
   cursor      TEXT NOT NULL,
   boundary_ids TEXT NOT NULL DEFAULT '[]',
   next_poll_at TEXT,
-  last_error  TEXT
+  last_error  TEXT,
+  failing_since TEXT,                             -- when the current run of errors began; NULL while it works (§10.6)
+  outage_noticed TEXT                             -- when the user was told it is failing, once per outage (§10.6)
 );
 
 CREATE TABLE outbox (

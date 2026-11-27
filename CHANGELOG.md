@@ -20,7 +20,16 @@ below as its notes. GitHub Releases only: rtfc is not on NuGet, by decision.
 
 ## [Unreleased]
 
-Nothing yet. Next is Phase 5, one person on several devices.
+### Added
+
+- A source that keeps failing now tells you. Once a poll or a streaming feed has been failing
+  for ten minutes, each project subscribed to it gets one notice from rtfc in its inbox, saying
+  which source, since when and its last error, and the status line shows
+  `⚠ rtfc: outlook failing` for as long as it lasts. When the source works again the notice
+  is dismissed with a note saying so and the warning goes; the next outage is a new notice.
+  Before, an error showed only in `/rtfc:sources`, so a feed that was down for a day looked
+  like a quiet day.
+- `/rtfc:sources` and `rtfc sources` say since when a failing subscription has been failing.
 
 ## [0.15.1] - 2026-11-24
 

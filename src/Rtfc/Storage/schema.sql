@@ -116,7 +116,9 @@ CREATE TABLE IF NOT EXISTS source_cursors (      -- one per (account, selector);
   cursor      TEXT NOT NULL,
   boundary_ids TEXT NOT NULL DEFAULT '[]',
   next_poll_at TEXT,
-  last_error  TEXT
+  last_error  TEXT,
+  failing_since TEXT,                             -- when the current run of errors began; NULL while it works (v10)
+  outage_noticed TEXT                             -- when the user was told it is failing, so they are told once per outage (v10)
 );
 
 CREATE TABLE IF NOT EXISTS outbox (

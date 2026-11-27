@@ -242,8 +242,9 @@ public static class Tools
     {
         if (message.Kind == "notice")
         {
-            // rtfc's own words, not a contact's: no untrusted wrapper.
-            return $"Notice from rtfc, {Timestamps.Format(message.ReceivedAt)} ({message.State}):\n{message.Body}";
+            // rtfc's own words, not a contact's: no untrusted wrapper. The note says what became of it, e.g. a source that works again.
+            return $"Notice from rtfc, {Timestamps.Format(message.ReceivedAt)} ({message.State}):\n{message.Body}"
+                + (message.Note is { Length: > 0 } note ? $"\nNote: {note}" : "");
         }
 
         if (message.Kind == "source")

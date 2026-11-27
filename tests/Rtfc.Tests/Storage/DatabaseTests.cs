@@ -44,6 +44,64 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void A_version_9_file_is_migrated_on_open()
+    {
+        using var temp = new TempHome();
+
+        using (var db = Database.Open(temp.Home.DatabasePath))
+        {
+            // Shape the file the way 0.15.1 left it: cursors that know their last error but not since when.
+            db.Execute("INSERT INTO source_cursors (poll_key, cursor, boundary_ids, last_error) VALUES ('teams:0123456789abcdef', '', '[]', 'down')");
+            db.Execute("ALTER TABLE source_cursors DROP COLUMN failing_since");
+            db.Execute("ALTER TABLE source_cursors DROP COLUMN outage_noticed");
+            db.Execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
+        }
+
+        using var migrated = Database.Open(temp.Home.DatabasePath);
+        Assert.Equal(Database.CurrentSchemaVersion, migrated.SchemaVersion);
+        var cursor = migrated.GetCursor("teams:0123456789abcdef")!;
+        Assert.Equal("down", cursor.LastError);
+        Assert.Null(cursor.FailingSince);
+
+        // An outage already running when the file was migrated starts counting at the next error.
+        migrated.UpsertCursor(cursor, Now);
+        Assert.Equal(Now, migrated.GetCursor("teams:0123456789abcdef")!.FailingSince);
+    }
+
+    [Fact]
+    public void A_cursor_keeps_when_its_errors_began_until_a_write_without_one_ends_the_outage()
+    {
+        using var temp = new TempHome();
+        using var db = Database.Open(temp.Home.DatabasePath);
+        const string key = "teams:0123456789abcdef";
+        var fine = new SourceCursorRow(key, "2026-09-27T12:00:00.000Z", "[]", NextPollAt: null, LastError: null);
+
+        db.UpsertCursor(fine, Now);
+        Assert.Null(db.GetCursor(key)!.FailingSince);
+        db.SetOutageNoticed(key, Now);
+        Assert.Null(db.GetCursor(key)!.OutageNoticed);
+
+        db.UpsertCursor(fine with { LastError = "first" }, Now.AddMinutes(1));
+        db.UpsertCursor(fine with { LastError = "second", FailingSince = null }, Now.AddMinutes(5));
+        db.SetOutageNoticed(key, Now.AddMinutes(11));
+        db.UpsertCursor(fine with { LastError = "third" }, Now.AddMinutes(12));
+        var failing = db.GetCursor(key)!;
+        Assert.Equal("third", failing.LastError);
+        Assert.Equal(Now.AddMinutes(1), failing.FailingSince);
+        Assert.Equal(Now.AddMinutes(11), failing.OutageNoticed);
+
+        db.UpsertCursor(fine, Now.AddMinutes(13));
+        var back = db.GetCursor(key)!;
+        Assert.Null(back.LastError);
+        Assert.Null(back.FailingSince);
+        Assert.Null(back.OutageNoticed);
+
+        db.UpsertCursor(fine with { LastError = "again" }, Now.AddMinutes(20));
+        Assert.Equal(Now.AddMinutes(20), db.GetCursor(key)!.FailingSince);
+        Assert.Null(db.GetCursor(key)!.OutageNoticed);
+    }
+
+    [Fact]
     public void A_version_8_file_is_migrated_on_open()
     {
         using var temp = new TempHome();

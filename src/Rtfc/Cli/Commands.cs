@@ -695,6 +695,11 @@ public static class Commands
             {
                 segments.Add("⚠ rtfc: pushes not showing");
             }
+
+            if (projects[here].Failing is { Length: > 0 } failing)
+            {
+                segments.Add($"⚠ rtfc: {string.Join(", ", failing)} failing");
+            }
         }
 
         if (status.Global.Pending > 0)
@@ -1541,7 +1546,8 @@ public static class Commands
                 continue;
             }
 
-            var health = v.LastError is not null ? $"  error: {v.LastError}" : v.SeenUpTo is { } seen ? $"  seen up to {Timestamps.Format(seen)}" : "";
+            var health = v.LastError is not null ? $"  error{(v.FailingSince is { } since ? $" since {Timestamps.Format(since)}" : "")}: {v.LastError}"
+                : v.SeenUpTo is { } seen ? $"  seen up to {Timestamps.Format(seen)}" : "";
             ctx.Out.WriteLine($"{v.Project}  {v.Account} ({v.Type}{(v.Stream ? ", stream" : "")})  {v.Mode}  {v.Status}  {v.Selector}  events: {string.Join(",", v.Events)}  parked: {v.Parked}{health}");
             if (v.FileError is not null)
             {

@@ -231,14 +231,14 @@ public class SourcesTests : IAsyncLifetime
         await _alex.Node.PollDueAsync(Ct);
         Assert.Equal(1, _jira.Polls);
 
-        _alex.Database.UpsertCursor(_alex.Database.GetCursor(SubscriptionsFile.PollKey("jira-work", new JsonObject { ["jql"] = "project = PAY" }))! with { NextPollAt = null });
+        _alex.Database.UpsertCursor(_alex.Database.GetCursor(SubscriptionsFile.PollKey("jira-work", new JsonObject { ["jql"] = "project = PAY" }))! with { NextPollAt = null }, DateTimeOffset.UtcNow);
         _jira.Fail = new SourceException("Jira refused the token", permanent: true);
         await _alex.Node.PollDueAsync(Ct);
         var refused = Assert.Single(_alex.Node.SourceViews(_project));
         Assert.Equal(SubscriptionStatus.Error, refused.Status);
         Assert.Equal("Jira refused the token", refused.LastError);
 
-        _alex.Database.UpsertCursor(_alex.Database.GetCursor(SubscriptionsFile.PollKey("jira-work", new JsonObject { ["jql"] = "project = PAY" }))! with { NextPollAt = null });
+        _alex.Database.UpsertCursor(_alex.Database.GetCursor(SubscriptionsFile.PollKey("jira-work", new JsonObject { ["jql"] = "project = PAY" }))! with { NextPollAt = null }, DateTimeOffset.UtcNow);
         _jira.Fail = null;
         await _alex.Node.PollDueAsync(Ct);
         var recovered = Assert.Single(_alex.Node.SourceViews(_project));
@@ -252,7 +252,7 @@ public class SourcesTests : IAsyncLifetime
         WriteSubscriptions("""{"sources":[{"account":"jira-work","jql":"project = PAY"}]}""");
         _alex.Node.ApproveSources(_project);
         var key = SubscriptionsFile.PollKey("jira-work", new JsonObject { ["jql"] = "project = PAY" });
-        void Due() => _alex.Database.UpsertCursor(_alex.Database.GetCursor(key)! with { NextPollAt = null });
+        void Due() => _alex.Database.UpsertCursor(_alex.Database.GetCursor(key)! with { NextPollAt = null }, DateTimeOffset.UtcNow);
 
         // One refusal: still active, the reason shown, the next poll in about a minute rather than half an hour.
         _jira.Fail = new SourceException("Jira refused the token (401).", permanent: true, tokenRefused: true);

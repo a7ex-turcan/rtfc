@@ -193,7 +193,7 @@ public sealed partial class Node
                     }
                 }
 
-                _db.UpsertCursor(new SourceCursorRow(key, FormatCursor(result.Next), BoundaryJson(result.Next), NextPollAt: null, LastError: null));
+                _db.UpsertCursor(new SourceCursorRow(key, FormatCursor(result.Next), BoundaryJson(result.Next), NextPollAt: null, LastError: null), now);
                 if (delivered > 0)
                 {
                     _logger.LogInformation("{Account}: {Count} feed event(s) landed from the stream", account, delivered);
@@ -219,7 +219,7 @@ public sealed partial class Node
         lock (_deliverLock)
         {
             var cursor = _db.GetCursor(key);
-            _db.UpsertCursor(new SourceCursorRow(key, cursor?.Cursor ?? "", cursor?.BoundaryIds ?? "[]", NextPollAt: null, reason));
+            _db.UpsertCursor(new SourceCursorRow(key, cursor?.Cursor ?? "", cursor?.BoundaryIds ?? "[]", NextPollAt: null, reason), _clock.GetUtcNow());
         }
     }
 

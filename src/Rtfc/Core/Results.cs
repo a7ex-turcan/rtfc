@@ -125,7 +125,10 @@ public sealed record InboxOpened(
 /// <summary>One line of a source item's history (spec §10.3), as <c>inbox_open</c> shows it. Everything but the time and type came from the source.</summary>
 public sealed record SourceEventView(DateTimeOffset At, string Type, string Actor, string Summary);
 
-/// <summary>One subscription with its health (the <c>sources</c> tool, spec §9.2). It never carries a token.</summary>
+/// <summary>
+/// One subscription with its health (the <c>sources</c> tool, spec §9.2). It never carries a token. <c>FailingSince</c> is when
+/// the errors that are still going on began (spec §10.6).
+/// </summary>
 public sealed record SourceView(
     string Project,
     string Account,
@@ -139,7 +142,8 @@ public sealed record SourceView(
     DateTimeOffset? NextPollAt,
     string? LastError,
     string? FileError,
-    bool Stream = false);
+    bool Stream = false,
+    DateTimeOffset? FailingSince = null);
 
 /// <summary>
 /// What dismissing a message did (spec §9.2). A source item with <c>Unseen</c> events, ones that came in after the newest it
@@ -185,9 +189,12 @@ public sealed record StatusGlobal(int Parked, string[] From, int Pending = 0);
 /// <summary>
 /// One project's line in <c>status.json</c>: messages addressed to it (spec §7.6) and, from Phase 8, its source items.
 /// <c>PushesNotShown</c> is true while a session open there does not show rtfc's pushes (spec §7.3). <c>Feeds</c> counts
-/// items from feed sources (spec §10.1).
+/// items from feed sources (spec §10.1). <c>Failing</c> names the accounts of its sources that have failed long enough for
+/// the user to be told (spec §10.6).
 /// </summary>
-public sealed record ProjectStatus(string Name, int Parked, string[] From, int Reviews = 0, int Tickets = 0, int PendingSubscriptions = 0, int Pages = 0, bool? PushesNotShown = null, int Feeds = 0);
+public sealed record ProjectStatus(
+    string Name, int Parked, string[] From, int Reviews = 0, int Tickets = 0, int PendingSubscriptions = 0, int Pages = 0, bool? PushesNotShown = null, int Feeds = 0,
+    string[]? Failing = null);
 
 /// <summary>The contents of <c>status.json</c> (spec §11). <c>Projects</c> is keyed by the project's normalized root (<see cref="ProjectPaths.Key"/>).</summary>
 public sealed record StatusSnapshot(StatusGlobal Global, Dictionary<string, ProjectStatus> Projects, bool Away);

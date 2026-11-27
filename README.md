@@ -166,7 +166,8 @@ You'll see `📨 1 · sasha` when something is waiting, `📨 1 · sasha → pay
 waits in another of your projects, `📤 2` when replies wait in your outbox, `💤 away` when
 you are away, `🎫 3` when tickets, `📄 2` when pages, `🔀 1` when pull requests and `💬 1`
 when feed items from a source wait in the project you are in, `⚠ rtfc: 1 pending` when a subscription there waits
-for your approval, and nothing otherwise. `refreshInterval` (seconds) keeps the counter
+for your approval, `⚠ rtfc: outlook failing` when one of its sources has been failing for ten minutes, and nothing
+otherwise. `refreshInterval` (seconds) keeps the counter
 current while you're idle.
 
 ### 5. Become contacts
@@ -629,6 +630,7 @@ project's `.claude/rtfc.local.json` (step 9).
 | Session mode: Claude says rtfc blocked a tool | You have not accepted the contact's message yet, or you declined it. Answer the Accept/Decline question; the gate lifts for the rest of that turn and closes when the turn ends. |
 | The status line says `⚠ rtfc: 1 pending` | A subscription in `.claude/rtfc.local.json` waits for you. `/rtfc:sources-approve` in a session in that project; an entry you edit goes back to pending. |
 | Nothing arrives from a source | `/rtfc:sources` (or `rtfc sources`) shows each subscription's status, how far it has read and its last error. A new subscription starts from the moment you approved it; your own actions never notify you; polling happens only while a session is open; and the JQL, space or repository must match what you expect. `rtfcd.log` logs each subscription's first poll. |
+| The status line says `⚠ rtfc: outlook failing` | That source has been failing for over ten minutes, so nothing new comes in from it; the notice from rtfc in the inbox says since when and why. `/rtfc:sources` shows its error now. A feed's error comes from its command; a service's, from the service. The warning and the notice clear themselves once it works again. |
 | A subscription shows `error` and the token was refused | The token expired (Atlassian tokens last at most a year), or it is an unscoped token on Bitbucket, which needs one created with scopes. `rtfc account add <name> …` again, in a terminal, stores a new one. |
 | Session mode: a source item never shows up in the session | Was the session started with `--dangerously-load-development-channels plugin:rtfc@rtfc`, and is it open in the item's project (the git root of the folder with `.claude/rtfc.local.json`)? The item's note in `rtfc inbox` says where it went, or that no session was open, or that the subscription used its twenty pushes for the hour. |
 | Session mode: an item or message says it is waiting for the session to finish | The session is in the middle of a turn; it goes in when the turn ends. If the session sits idle and it still waits, the hook missed the end of a turn, for instance after an interrupt: send any prompt and let the turn finish, or restart the session. |

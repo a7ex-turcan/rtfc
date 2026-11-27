@@ -1036,6 +1036,7 @@ public sealed partial class Node : IAsyncDisposable
         var shared = parked.Where(m => ProjectIdOf(m, projects) is null).ToList();
         var pending = _db.ListSubscriptions().Where(s => s.Status == SubscriptionStatus.PendingApproval).GroupBy(s => s.ProjectId).ToDictionary(g => g.Key, g => g.Count());
         var notShowing = ProjectsNotShowingPushes();
+        var failingSources = FailingSources();
         var perProject = new Dictionary<string, ProjectStatus>();
         foreach (var project in projects.Values)
         {
@@ -1046,10 +1047,12 @@ public sealed partial class Node : IAsyncDisposable
             var feeds = _db.CountSourceItems(project.Id, Sources.FeedAdapter.TypeName + ":");
             var waiting = pending.GetValueOrDefault(project.Id);
             var deaf = notShowing.Contains(project.Id);
-            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || feeds > 0 || waiting > 0 || deaf)
+            var failing = failingSources.GetValueOrDefault(project.Id);
+            if (messages.Count > 0 || tickets > 0 || reviews > 0 || pages > 0 || feeds > 0 || waiting > 0 || deaf || failing is not null)
             {
                 perProject[project.RootPath] = new ProjectStatus(
-                    project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages, deaf ? true : null, feeds);
+                    project.Name, messages.Count, [.. messages.Select(m => FromLabel(m, handles)).Distinct()], reviews, tickets, waiting, pages, deaf ? true : null, feeds,
+                    failing);
             }
         }
 

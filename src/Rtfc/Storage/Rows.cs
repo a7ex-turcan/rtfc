@@ -184,8 +184,13 @@ public sealed record AccountRow(string Name, string Type, string? BaseUrl, strin
 /// <summary>One entry of a project's <c>.claude/rtfc.local.json</c>, as approved or waiting (spec §10.2). <c>Selector</c> and <c>Events</c> are JSON.</summary>
 public sealed record SubscriptionRow(string Id, string ProjectId, string Account, string Selector, string Events, string Mode, string Status, string ConfigHash);
 
-/// <summary>Where one poll left off (spec §10.1): shared by every subscription with the same account and selector.</summary>
-public sealed record SourceCursorRow(string PollKey, string Cursor, string BoundaryIds, DateTimeOffset? NextPollAt, string? LastError);
+/// <summary>
+/// Where one poll left off (spec §10.1): shared by every subscription with the same account and selector. <c>FailingSince</c>
+/// is when the current run of errors began and <c>OutageNoticed</c> when the user was told about it (spec §10.6). The database
+/// keeps both, whatever a write passes: an error keeps the first, and a write without an error clears them.
+/// </summary>
+public sealed record SourceCursorRow(
+    string PollKey, string Cursor, string BoundaryIds, DateTimeOffset? NextPollAt, string? LastError, DateTimeOffset? FailingSince = null, DateTimeOffset? OutageNoticed = null);
 
 /// <summary>Something that must reach a peer later (spec §7.2). The envelope is the frame as it will be sent, minus the sequence number and device, which are filled at delivery.</summary>
 public sealed record OutboxRow(

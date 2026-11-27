@@ -11,9 +11,11 @@ namespace Rtfc.Core;
 
 /// <summary>
 /// How often the source loop wakes, and how long a subscription waits between polls (spec §10.1). For a streaming feed, how
-/// long without a line counts as stalled, and how long to wait before each restart in a row. Tests shorten them.
+/// long without a line counts as stalled, and how long to wait before each restart in a row. How long a source fails before
+/// the user is told (spec §10.6). Tests shorten them.
 /// </summary>
-public sealed record SourceSettings(TimeSpan Tick, TimeSpan Interval, TimeSpan? StreamStall = null, TimeSpan[]? StreamBackoff = null)
+public sealed record SourceSettings(
+    TimeSpan Tick, TimeSpan Interval, TimeSpan? StreamStall = null, TimeSpan[]? StreamBackoff = null, TimeSpan? OutageAfter = null)
 {
     public static readonly SourceSettings Default = new(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90));
 
@@ -21,6 +23,9 @@ public sealed record SourceSettings(TimeSpan Tick, TimeSpan Interval, TimeSpan? 
     public TimeSpan Stall => StreamStall ?? TimeSpan.FromMinutes(3);
 
     public TimeSpan[] Backoff => StreamBackoff ?? [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2)];
+
+    /// <summary>Long enough to ride out a restart, a blip or a refused token's retries; short enough that a dead source is not mistaken for a quiet day.</summary>
+    public TimeSpan Outage => OutageAfter ?? TimeSpan.FromMinutes(10);
 }
 
 /// <summary>
@@ -189,7 +194,7 @@ public sealed partial class Node
                         }
                     }
 
-                    _db.UpsertCursor(new SourceCursorRow(group.Key, FormatCursor(result.Next), BoundaryJson(result.Next), now + NextInterval(result.RetryAfter), LastError: null));
+                    _db.UpsertCursor(new SourceCursorRow(group.Key, FormatCursor(result.Next), BoundaryJson(result.Next), now + NextInterval(result.RetryAfter), LastError: null), now);
                 }
 
                 _refusals.TryRemove(group.Key, out _);
@@ -215,13 +220,16 @@ public sealed partial class Node
                 _logger.LogWarning("Polling {Account} failed: {Reason}", account.Name, ex.Message);
             }
         }
+
+        // Streams report on their own threads; this sees what they recorded too.
+        ReportOutages(groups, accounts);
     }
 
     private void Fail(IEnumerable<SubscriptionRow> group, SourceCursorRow? cursor, string reason, bool permanent, DateTimeOffset now, TimeSpan? retryAfter = null)
     {
         var key = PollKeyOf(group.First());
         _db.UpsertCursor(new SourceCursorRow(key, cursor?.Cursor ?? "", cursor?.BoundaryIds ?? "[]",
-            now + (retryAfter ?? (permanent ? PermanentErrorRetry : TransientErrorRetry)), reason));
+            now + (retryAfter ?? (permanent ? PermanentErrorRetry : TransientErrorRetry)), reason), now);
         if (permanent)
         {
             foreach (var subscription in group)
@@ -500,7 +508,8 @@ public sealed partial class Node
                 subscription.Selector, events, subscription.Mode, subscription.Status,
                 _db.ListMessages(null).Count(m => m.Kind == InboxKind.Source && m.SubscriptionId == subscription.Id && NeedsAttention(m)),
                 Timestamps.ParseOrNull(cursor?.Cursor is { Length: > 0 } c ? c : null), cursor?.NextPollAt, cursor?.LastError,
-                here is not null && _subscriptionFileErrors.TryGetValue(here, out var fileError) ? fileError : null, account is { } a && IsStream(a)));
+                here is not null && _subscriptionFileErrors.TryGetValue(here, out var fileError) ? fileError : null, account is { } a && IsStream(a),
+                cursor?.FailingSince));
         }
 
         if (here is not null && views.Count == 0 && _subscriptionFileErrors.TryGetValue(here, out var onlyError))
